@@ -16,11 +16,15 @@ android {
 
 dependencies {
     api(project(":core:model"))
-    // The Wallhaven repository interface surfaces NetworkResult, so consuming
-    // modules need the network types on their compile classpath.
+    // The sources facade surfaces NetworkResult, so consuming modules need
+    // the network types on their compile classpath.
     api(project(":core:network"))
     implementation(project(":core:database"))
+    implementation(project(":core:datastore"))
+    implementation(project(":extensions:core"))
+    implementation(project(":provider:api"))
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

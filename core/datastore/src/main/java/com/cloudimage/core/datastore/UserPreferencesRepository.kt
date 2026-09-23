@@ -8,6 +8,8 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
 import com.cloudimage.core.model.UserPreferences
 import dagger.Module
@@ -26,9 +28,11 @@ private object PreferencesKeys {
     val SFW_ONLY = booleanPreferencesKey("sfw_only")
     val DYNAMIC_COLORS = booleanPreferencesKey("dynamic_colors_enabled")
     val GRID_COLUMNS = intPreferencesKey("grid_columns")
+    val PROVIDER_KEY_IDS = stringSetPreferencesKey("provider_key_ids")
 }
 
 private const val PREFERENCES_FILE = "user_preferences"
+private const val PROVIDER_KEY_PREFIX = "provider_key."
 
 /**
  * Reads and writes user settings via Preferences DataStore.
@@ -71,6 +75,40 @@ class UserPreferencesRepository
 
         suspend fun setGridColumns(columns: Int) {
             dataStore.edit { it[PreferencesKeys.GRID_COLUMNS] = columns.coerceIn(minimumValue = 1, maximumValue = 4) }
+        }
+
+        /** The stored API key of every provider, keyed by provider id. */
+        val providerApiKeys: Flow<Map<String, String>> =
+            dataStore.data
+                .catch { exception ->
+                    if (exception is IOException) {
+                        emit(emptyPreferences())
+                    } else {
+                        throw exception
+                    }
+                }
+                .map { prefs ->
+                    val ids = prefs[PreferencesKeys.PROVIDER_KEY_IDS].orEmpty()
+                    ids.mapNotNull { id ->
+                        prefs[stringPreferencesKey(PROVIDER_KEY_PREFIX + id)]?.let { id to it }
+                    }.toMap()
+                }
+
+        /** Stores (or replaces, with a blank key clears) the key of one provider. */
+        suspend fun setProviderApiKey(
+            providerId: String,
+            apiKey: String,
+        ) {
+            dataStore.edit { prefs ->
+                val ids = prefs[PreferencesKeys.PROVIDER_KEY_IDS].orEmpty()
+                if (apiKey.isBlank()) {
+                    prefs.remove(stringPreferencesKey(PROVIDER_KEY_PREFIX + providerId))
+                    prefs[PreferencesKeys.PROVIDER_KEY_IDS] = ids - providerId
+                } else {
+                    prefs[stringPreferencesKey(PROVIDER_KEY_PREFIX + providerId)] = apiKey
+                    prefs[PreferencesKeys.PROVIDER_KEY_IDS] = ids + providerId
+                }
+            }
         }
     }
 

@@ -8,7 +8,7 @@ import com.cloudimage.core.model.WallpaperQuery
 import com.cloudimage.core.model.WallpaperSorting
 import com.cloudimage.core.network.NetworkError
 import com.cloudimage.core.network.NetworkResult
-import com.cloudimage.core.testing.FakeWallhavenRepository
+import com.cloudimage.core.testing.FakeWallpaperSources
 import com.cloudimage.core.testing.MainDispatcherRule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
@@ -33,7 +33,7 @@ class BrowseViewModelTest {
     @Test
     fun initialLoadShowsFirstPage() =
         runTest {
-            val fake = FakeWallhavenRepository()
+            val fake = FakeWallpaperSources()
             fake.enqueueSearch(page(ids = listOf("a1", "a2"), nextPage = 2))
 
             val viewModel = newViewModel(fake, backgroundScope)
@@ -47,7 +47,7 @@ class BrowseViewModelTest {
     @Test
     fun loadMoreAppendsPagesAndStopsAtTheEnd() =
         runTest {
-            val fake = FakeWallhavenRepository()
+            val fake = FakeWallpaperSources()
             fake.enqueueSearch(page(ids = listOf("p1"), nextPage = 2))
             fake.enqueueSearch(page(ids = listOf("p2"), nextPage = 3))
             fake.enqueueSearch(page(ids = listOf("p3"), nextPage = null))
@@ -69,7 +69,7 @@ class BrowseViewModelTest {
     @Test
     fun searchSubmitRestartsFromPageOne() =
         runTest {
-            val fake = FakeWallhavenRepository()
+            val fake = FakeWallpaperSources()
             fake.enqueueSearch(page(ids = listOf("old"), nextPage = null))
             val viewModel = newViewModel(fake, backgroundScope)
             viewModel.state.first { !it.isFirstLoading }
@@ -87,7 +87,7 @@ class BrowseViewModelTest {
     @Test
     fun sfwOnlyClampsRatingsWhileOn() =
         runTest {
-            val fake = FakeWallhavenRepository()
+            val fake = FakeWallpaperSources()
             fake.enqueueSearch(page(ids = listOf("initial"), nextPage = null))
             val viewModel = newViewModel(fake, backgroundScope)
             viewModel.state.first { !it.isFirstLoading }
@@ -107,12 +107,12 @@ class BrowseViewModelTest {
     @Test
     fun turningSfwOffUnlocksSketchyAndRestarts() =
         runTest {
-            val fake = FakeWallhavenRepository()
+            val fake = FakeWallpaperSources()
             fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
             val preferences = newPreferences()
             val viewModel =
                 BrowseViewModel(
-                    wallhavenRepository = fake,
+                    sources = fake,
                     userPreferencesRepository = preferences,
                 )
             viewModel.state.first { !it.isFirstLoading }
@@ -134,12 +134,12 @@ class BrowseViewModelTest {
     @Test
     fun nsfwIsNeverSentEvenWhenSfwOnlyIsOff() =
         runTest {
-            val fake = FakeWallhavenRepository()
+            val fake = FakeWallpaperSources()
             fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
             val preferences = newPreferences()
             val viewModel =
                 BrowseViewModel(
-                    wallhavenRepository = fake,
+                    sources = fake,
                     userPreferencesRepository = preferences,
                 )
             viewModel.state.first { !it.isFirstLoading }
@@ -156,7 +156,7 @@ class BrowseViewModelTest {
     @Test
     fun randomSortingKeepsOneSeedAcrossPages() =
         runTest {
-            val fake = FakeWallhavenRepository()
+            val fake = FakeWallpaperSources()
             fake.enqueueSearch(page(ids = listOf("initial"), nextPage = null))
             fake.enqueueSearch(page(ids = listOf("r1"), nextPage = 2))
             fake.enqueueSearch(page(ids = listOf("r2"), nextPage = null))
@@ -177,7 +177,7 @@ class BrowseViewModelTest {
     @Test
     fun errorSurfacesAndRetryRecovers() =
         runTest {
-            val fake = FakeWallhavenRepository()
+            val fake = FakeWallpaperSources()
             fake.enqueueSearch(NetworkResult.Failure(NetworkError.Timeout))
             val viewModel = newViewModel(fake, backgroundScope)
             val failed = viewModel.state.first { !it.isFirstLoading }
@@ -196,7 +196,7 @@ class BrowseViewModelTest {
     @Test
     fun loadMoreFailureKeepsListAndRetryAppends() =
         runTest {
-            val fake = FakeWallhavenRepository()
+            val fake = FakeWallpaperSources()
             fake.enqueueSearch(page(ids = listOf("p1"), nextPage = 2))
             val viewModel = newViewModel(fake, backgroundScope)
             viewModel.state.first { !it.isFirstLoading }
@@ -217,8 +217,39 @@ class BrowseViewModelTest {
             assertTrue(recovered.endReached)
         }
 
+    @Test
+    fun noSourcesEmptyStateSurfacesWhenSourcesDiscoveredEmpty() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.enqueueSearch(page(ids = emptyList(), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { !it.isFirstLoading }
+
+            fake.setSources()
+
+            val state = viewModel.state.first { it.sources != null }
+            assertTrue(state.showNoSources)
+        }
+
+    @Test
+    fun sourceArrivalRescuesAFailedFeed() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.enqueueSearch(NetworkResult.Failure(NetworkError.Io(java.io.IOException())))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { it.error != null && !it.isFirstLoading }
+
+            fake.enqueueSearch(page(ids = listOf("s1"), nextPage = null))
+            fake.setSources(com.cloudimage.core.data.repository.SourceInfo("cloudimage.test", "Test", false))
+
+            val recovered = viewModel.state.first { it.wallpapers.isNotEmpty() }
+
+            assertEquals(listOf("s1"), recovered.wallpapers.map { it.id })
+            assertNull(recovered.error)
+        }
+
     private fun newViewModel(
-        fake: FakeWallhavenRepository,
+        fake: FakeWallpaperSources,
         scope: CoroutineScope,
     ): BrowseViewModel {
         val preferences =
@@ -227,7 +258,7 @@ class BrowseViewModelTest {
                     tmpFolder.newFile("preferences_${System.nanoTime()}.preferences_pb")
                 },
             )
-        return BrowseViewModel(wallhavenRepository = fake, userPreferencesRepository = preferences)
+        return BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
     }
 
     private fun TestScope.newPreferences(): UserPreferencesRepository =
@@ -237,6 +268,19 @@ class BrowseViewModelTest {
             },
         )
 
+    private fun fakeWallpaper(
+        id: String,
+        width: Int = 1920,
+        height: Int = 1080,
+    ) = com.cloudimage.core.model.Wallpaper(
+        id = id,
+        providerId = "test",
+        thumbUrl = "https://example.test/thumbs/$id.jpg",
+        fullUrl = "https://example.test/full/$id.jpg",
+        width = width,
+        height = height,
+    )
+
     private fun page(
         ids: List<String>,
         nextPage: Int?,
@@ -245,7 +289,7 @@ class BrowseViewModelTest {
             Page(
                 wallpapers =
                     ids.map {
-                        FakeWallhavenRepository.fakeWallpaper(it)
+                        fakeWallpaper(it)
                     },
                 nextPage = nextPage,
             ),

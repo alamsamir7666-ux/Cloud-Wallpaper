@@ -30,12 +30,14 @@
     <string name="browse_loading_more">Loading more wallpapers</string>
     <string name="browse_end_reached">You have reached the end</string>
     <string name="browse_error_title">Something went wrong</string>
-    <string name="browse_error_http">Wallhaven could not handle the request.</string>
+    <string name="browse_error_http">The source could not handle the request.</string>
     <string name="browse_error_timeout">The request timed out.</string>
     <string name="browse_error_offline">Check your connection and try again.</string>
     <string name="browse_error_bad_data">The response could not be read.</string>
     <string name="browse_retry">Retry</string>
     <string name="browse_empty_results_title">Nothing found</string>
     <string name="browse_empty_results_body">Try a different search or loosen the filters.</string>
+    <string name="browse_no_sources_title">No wallpaper sources</string>
+    <string name="browse_no_sources_body">Install a provider from the Extensions tab to start browsing.</string>
     <string name="browse_wallpaper_card">Wallpaper %1$s</string>
 </resources>

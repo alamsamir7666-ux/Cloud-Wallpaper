@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Badge
@@ -85,6 +86,8 @@ fun BrowseScreen(
             state.isFirstLoading -> FullScreenLoading()
             state.showFullscreenError ->
                 FullScreenError(error = state.error!!, onRetry = viewModel::onRetry)
+
+            state.showNoSources -> NoSources()
 
             state.wallpapers.isEmpty() -> EmptyResults()
 
@@ -310,6 +313,32 @@ private fun EmptyResults(modifier: Modifier = Modifier) {
         )
         Text(
             text = stringResource(R.string.browse_empty_results_body),
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun NoSources(modifier: Modifier = Modifier) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier.fillMaxSize().padding(32.dp).testTag("browse:no-sources"),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Extension,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(56.dp),
+        )
+        Text(
+            text = stringResource(R.string.browse_no_sources_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            text = stringResource(R.string.browse_no_sources_body),
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

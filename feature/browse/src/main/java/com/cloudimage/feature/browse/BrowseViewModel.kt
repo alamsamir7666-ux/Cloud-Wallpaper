@@ -2,7 +2,8 @@ package com.cloudimage.feature.browse
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.cloudimage.core.data.repository.WallhavenRepository
+import com.cloudimage.core.data.repository.SourceInfo
+import com.cloudimage.core.data.repository.WallpaperSources
 import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.ContentRating
 import com.cloudimage.core.model.Page
@@ -45,6 +46,8 @@ data class BrowseUiState(
     val isLoadingMore: Boolean = false,
     val endReached: Boolean = false,
     val error: BrowseError? = null,
+    /** The usable sources, or null while they are being discovered. */
+    val sources: List<SourceInfo>? = null,
 ) {
     /** True when the filter sheet holds non-default choices. */
     val filtersActive: Boolean get() = !query.isDefault
@@ -52,18 +55,24 @@ data class BrowseUiState(
     /** Zero items + error -> full-screen error; otherwise a footer retry. */
     val showFullscreenError: Boolean
         get() = error != null && wallpapers.isEmpty() && !isFirstLoading
+
+    /** Sources discovered, none usable -> install-a-source guidance. */
+    val showNoSources: Boolean
+        get() = sources != null && sources.isEmpty() && wallpapers.isEmpty() && !isFirstLoading
 }
 
 /**
  * Drives the browse grid: owns search text, the committed query, and the
  * paging cursor. Preference changes (SFW-only, grid columns) flow in from
- * DataStore and re-shape the feed live.
+ * DataStore and re-shape the feed live; source installs flow in from the
+ * extension engine and restart the feed only when they rescue it from
+ * empty.
  */
 @HiltViewModel
 class BrowseViewModel
     @Inject
     constructor(
-        private val wallhavenRepository: WallhavenRepository,
+        private val sources: WallpaperSources,
         userPreferencesRepository: UserPreferencesRepository,
     ) : ViewModel() {
         private val _state = MutableStateFlow(BrowseUiState())
@@ -90,6 +99,20 @@ class BrowseViewModel
                     // restart the feed because the purity parameter changes.
                     if (!preferencesSeen || sfwChanged) restartSearch()
                     preferencesSeen = true
+                }
+                .launchIn(viewModelScope)
+
+            var sourcesSeen: List<SourceInfo>? = null
+            sources.sources
+                .onEach { available ->
+                    _state.update { it.copy(sources = available) }
+                    // A feed that is empty or failed while sources were
+                    // still being discovered gets a second chance once the
+                    // engine finishes loading — the classic cold-start race.
+                    val feedNeedsRetry = _state.value.wallpapers.isEmpty()
+                    val nowUsable = !available.orEmpty().isEmpty()
+                    if (feedNeedsRetry && nowUsable && sourcesSeen.orEmpty().isEmpty()) restartSearch()
+                    sourcesSeen = available
                 }
                 .launchIn(viewModelScope)
         }
@@ -119,7 +142,7 @@ class BrowseViewModel
             searchJob =
                 viewModelScope.launch {
                     _state.update { it.copy(isLoadingMore = true) }
-                    wallhavenRepository.search(effectiveQuery(), page)
+                    sources.search(effectiveQuery(), page)
                         .onSuccess { result ->
                             currentPage = page
                             _state.update { state ->
@@ -154,7 +177,7 @@ class BrowseViewModel
             randomSeed = query.seed
             searchJob =
                 viewModelScope.launch {
-                    wallhavenRepository.search(query, page = 1)
+                    sources.search(query, page = 1)
                         .onSuccess { result ->
                             _state.update { state ->
                                 state.copy(

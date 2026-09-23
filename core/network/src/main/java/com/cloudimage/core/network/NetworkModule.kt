@@ -1,6 +1,5 @@
 package com.cloudimage.core.network
 
-import com.cloudimage.core.network.wallhaven.WallhavenApi
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -59,9 +58,4 @@ internal object NetworkModule {
         okHttpClient: OkHttpClient,
         json: Json,
     ): CloudimageHttpClient = CloudimageHttpClient(okHttpClient = okHttpClient, json = json)
-
-    @Provides
-    @Singleton
-    fun provideWallhavenApi(client: CloudimageHttpClient): WallhavenApi =
-        WallhavenApi(client = client, baseUrl = WallhavenApi.DEFAULT_BASE_URL)
 }
