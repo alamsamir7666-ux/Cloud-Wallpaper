@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      compose:
+        patterns:
+          - androidx.compose.*
+          - androidx.activity:*
+          - androidx.lifecycle:*
+          - androidx.navigation:*
+      kotlin:
+        patterns:
+          - org.jetbrains.kotlin.*
+          - org.jetbrains.kotlinx.*
+          - com.google.devtools.ksp
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
