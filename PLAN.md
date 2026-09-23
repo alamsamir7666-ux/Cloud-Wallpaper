@@ -28,10 +28,11 @@ Every part ends green: app builds, tests pass, CI clean.
 - [x] **Part 2 — Core Data & Network** · models, OkHttp + serialization client,
       Room (favorites/history), DataStore (SFW toggle, API keys, enabled
       providers), repository interfaces with fakes.
-- [ ] **Part 3 — Wallhaven Provider (built-in)** · Wallhaven client, staggered
-      masonry grid (Coil), search + filters, pagination. **← current**
+- [x] **Part 3 — Wallhaven Provider (built-in)** · Wallhaven client on the shared
+      HTTP pipeline, staggered masonry grid (Coil), search + filters,
+      prefetch pagination.
 - [ ] **Part 4 — Preview & Apply** · fullscreen zoomable preview, info sheet,
-      set wallpaper home/lock/both, WorkManager downloads, share.
+      set wallpaper home/lock/both, WorkManager downloads, share. **← current**
 - [ ] **Part 5 — Extension Engine** · final provider API + version gating,
       DexClassLoader loading, install/uninstall, sha256 verify, shared client
       injection.
@@ -55,3 +56,9 @@ Every part ends green: app builds, tests pass, CI clean.
   HTTP client (OkHttp + kotlinx.serialization), Room favorites/history DAOs,
   DataStore user preferences, `:core:data` repositories + `:core:testing` fakes.
   Unit tests on every layer (MockWebServer, Robolectric, Turbine).
+- **2026-09-23 — Part 3 done (local).** Wallhaven provider: DTOs + API client with
+  flag-packed params, repository with content clamp (NSFW never sent, SFW-only
+  enforced), staggered masonry grid with real aspect ratios, search, filter
+  sheet, pagination with footer retry. Dependabot PR #2 (navigation-compose
+  2.10.1) verified incompatible (needs compileSdk 37 > AGP 8.7.3's 35) — to be
+  closed, not merged. Commits pending push (token needed).
