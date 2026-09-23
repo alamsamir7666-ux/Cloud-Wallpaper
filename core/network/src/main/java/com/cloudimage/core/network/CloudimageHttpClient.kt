@@ -21,8 +21,25 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /**
+ * A completed HTTP exchange: status code, response headers and raw body
+ * bytes. Carried by [CloudimageHttpClient.getRaw] — the seam the extension
+ * engine adapts into the plugin-facing HTTP facade.
+ */
+class HttpPayload(
+    val statusCode: Int,
+    val headers: Map<String, List<String>>,
+    val body: ByteArray,
+) {
+    /** The body decoded as UTF-8 text; empty for empty bodies. */
+    val bodyText: String get() = String(body, Charsets.UTF_8)
+
+    /** HTTP-level success: any 2xx status. */
+    val isSuccessful: Boolean get() = statusCode in 200..299
+}
+
+/**
  * The single HTTP entry point every provider goes through — built-in providers
- * in-process, and (from Part 5) loaded extensions via injected client sharing.
+ * in-process, and loaded extensions through the injected client facade.
  *
  * Responsibilities:
  * - identify the app to servers with a stable [User-Agent][USER_AGENT],
@@ -36,21 +53,36 @@ class CloudimageHttpClient
         private val okHttpClient: OkHttpClient,
         private val json: Json,
     ) {
-        /** Performs a GET and returns the raw body. */
-        suspend fun get(url: String): NetworkResult<String> =
+        /**
+         * Performs a GET and returns the full raw exchange — status, headers
+         * and body — whatever the status code is. This is the seam behind the
+         * provider facade; transport failures surface as
+         * [NetworkResult.Failure] like everywhere else.
+         */
+        suspend fun getRaw(
+            url: String,
+            extraHeaders: Map<String, String> = emptyMap(),
+        ): NetworkResult<HttpPayload> =
             withContext(Dispatchers.IO) {
                 val request =
                     Request.Builder()
                         .url(url)
                         .header(HEADER_USER_AGENT, USER_AGENT)
+                        .apply {
+                            for ((name, value) in extraHeaders) {
+                                header(name, value)
+                            }
+                        }
                         .build()
                 try {
                     okHttpClient.newCall(request).await().use { response ->
-                        if (response.isSuccessful) {
-                            Success(response.body?.string().orEmpty())
-                        } else {
-                            Failure(NetworkError.Http(response.code, url))
-                        }
+                        Success(
+                            HttpPayload(
+                                statusCode = response.code,
+                                headers = response.headers.toMultimap(),
+                                body = response.body?.bytes() ?: ByteArray(0),
+                            ),
+                        )
                     }
                 } catch (e: SocketTimeoutException) {
                     Failure(NetworkError.Timeout)
@@ -60,33 +92,45 @@ class CloudimageHttpClient
             }
 
         /**
+         * Performs a GET and returns the body, failing on non-2xx statuses.
+         * Implemented on [getRaw]; [extraHeaders] are appended to the
+         * User-Agent the client always sends.
+         */
+        suspend fun get(
+            url: String,
+            extraHeaders: Map<String, String> = emptyMap(),
+        ): NetworkResult<String> {
+            val raw = getRaw(url, extraHeaders)
+            return when (raw) {
+                is Failure -> raw
+                is Success ->
+                    if (raw.value.isSuccessful) {
+                        Success(raw.value.bodyText)
+                    } else {
+                        Failure(NetworkError.Http(raw.value.statusCode, url))
+                    }
+            }
+        }
+
+        /**
          * Performs a GET and returns the raw body bytes — for downloads of
          * full-resolution images (apply-as-wallpaper, save-to-gallery, share).
          *
          * Same failure taxonomy as [get]; the body is buffered in memory, which
          * is fine for wallpaper-sized files (single-digit megabytes).
          */
-        suspend fun download(url: String): NetworkResult<ByteArray> =
-            withContext(Dispatchers.IO) {
-                val request =
-                    Request.Builder()
-                        .url(url)
-                        .header(HEADER_USER_AGENT, USER_AGENT)
-                        .build()
-                try {
-                    okHttpClient.newCall(request).await().use { response ->
-                        if (response.isSuccessful) {
-                            Success(response.body?.bytes() ?: ByteArray(0))
-                        } else {
-                            Failure(NetworkError.Http(response.code, url))
-                        }
+        suspend fun download(url: String): NetworkResult<ByteArray> {
+            val raw = getRaw(url)
+            return when (raw) {
+                is Failure -> raw
+                is Success ->
+                    if (raw.value.isSuccessful) {
+                        Success(raw.value.body)
+                    } else {
+                        Failure(NetworkError.Http(raw.value.statusCode, url))
                     }
-                } catch (e: SocketTimeoutException) {
-                    Failure(NetworkError.Timeout)
-                } catch (e: IOException) {
-                    Failure(NetworkError.Io(e))
-                }
             }
+        }
 
         /** Performs a GET and decodes the JSON body into [T]. */
         suspend fun <T> getJson(

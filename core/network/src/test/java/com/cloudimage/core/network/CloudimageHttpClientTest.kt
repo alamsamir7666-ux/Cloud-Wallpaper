@@ -136,4 +136,55 @@ class CloudimageHttpClientTest {
 
             assertEquals(NetworkResult.Failure(NetworkError.Http(code = 404, url = url)), result)
         }
+
+    @Test
+    fun getRawSendsExtraHeaders() =
+        runTest {
+            server.enqueue(MockResponse().setBody("{}"))
+
+            client.getRaw(
+                server.url("/provider").toString(),
+                extraHeaders = mapOf("X-Provider-Key" to "token-42"),
+            )
+
+            val recorded = server.takeRequest()
+            assertEquals("token-42", recorded.getHeader("X-Provider-Key"))
+            assertEquals(CloudimageHttpClient.USER_AGENT, recorded.getHeader("User-Agent"))
+        }
+
+    @Test
+    fun getRawReturnsStatusHeadersAndBody() =
+        runTest {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setBody("payload")
+                    .addHeader("X-Request-Id", "abc-123"),
+            )
+
+            val result = client.getRaw(server.url("/raw").toString())
+
+            assertTrue(result is NetworkResult.Success)
+            val payload = (result as NetworkResult.Success).value
+            assertEquals(200, payload.statusCode)
+            assertEquals("payload", payload.bodyText)
+            assertEquals("abc-123", payload.headers["X-Request-Id"]?.single())
+        }
+
+    @Test
+    fun getRawPassesNonSuccessfulStatusesThrough() =
+        runTest {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(404)
+                    .setBody("not here"),
+            )
+
+            val result = client.getRaw(server.url("/gone").toString())
+
+            assertTrue(result is NetworkResult.Success)
+            val payload = (result as NetworkResult.Success).value
+            assertEquals(404, payload.statusCode)
+            assertEquals("not here", payload.bodyText)
+        }
 }
