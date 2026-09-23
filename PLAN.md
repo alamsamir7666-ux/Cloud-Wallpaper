@@ -35,13 +35,16 @@ Every part ends green: app builds, tests pass, CI clean.
       set wallpaper home/lock/both, downloads, share. (Delivered as scoped
       ViewModel operations behind the `WallpaperApplier`/`WallpaperSaver`
       ports; WorkManager re-evaluated in the Part 8 polish pass.)
-- [ ] **Part 5 — Extension Engine** · final provider API + version gating,
+- [x] **Part 5 — Extension Engine** · final provider API + version gating,
       DexClassLoader loading, install/uninstall, sha256 verify, shared client
-      injection. **← current**
+      injection. (Packages are zip-based jars; the engine lives in
+      `:extensions:core` with `:fixture:demo-provider` compiling a real plugin
+      for the test suite. The Wallhaven built-in stays in-process until the
+      Part 6 repo manager can distribute it as a real plugin.)
 - [ ] **Part 6 — Repo Manager + Official Plugins** · add-repo-by-URL,
       index.json parser, Wallhaven extracted to a real plugin, Unsplash /
       Pexels / Pixabay plugins (user keys), Python index builder + GitHub
-      Action for the official repo.
+      Action for the official repo. **← current**
 - [ ] **Part 7 — User Data & Settings** · favorites, history, full settings,
       first-run onboarding.
 - [ ] **Part 8 — Polish & Release** · in-app updater (GitHub Releases),
