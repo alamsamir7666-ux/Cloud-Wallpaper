@@ -1,5 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="extensions_title">Extensions</string>
+    <string name="extensions_builtin_section">Built-in sources</string>
+    <string name="extensions_builtin_wallhaven_support">wallhaven.cc · built into the app</string>
+    <string name="extensions_installed_section">Installed extensions</string>
+    <string name="extensions_status_ready">Ready</string>
+    <string name="extensions_status_corrupted">Corrupted</string>
+    <string name="extensions_status_untrusted">Untrusted</string>
+    <string name="extensions_api_version">API v%1$d</string>
+    <string name="extensions_uninstall">Uninstall</string>
+    <string name="extensions_uninstall_title">Uninstall extension?</string>
+    <string name="extensions_uninstall_body">%1$s will be removed from this device. You can install it again from its repository.</string>
+    <string name="extensions_uninstall_confirm">Uninstall</string>
+    <string name="extensions_uninstall_cancel">Cancel</string>
     <string name="extensions_empty_title">No extensions installed</string>
-    <string name="extensions_empty_body">The extension engine (Part 5) and the repository manager (Part 6) will let you add wallpaper sources from any GitHub repo.</string>
+    <string name="extensions_empty_body">Cloudimage ships with Wallhaven built in. More sources arrive when extension repositories are added.</string>
 </resources>
