@@ -35,6 +35,7 @@ dependencies {
     implementation(project(":core:datastore"))
     implementation(project(":core:network"))
     implementation(project(":core:data"))
+    implementation(project(":extensions:core"))
     implementation(project(":feature:browse"))
     implementation(project(":feature:detail"))
     implementation(project(":feature:extensions"))
