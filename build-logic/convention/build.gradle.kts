@@ -29,5 +29,9 @@ gradlePlugin {
             id = "cloudimage.hilt"
             implementationClass = "com.cloudimage.buildlogic.HiltConventionPlugin"
         }
+        register("cloudProvider") {
+            id = "cloudimage.provider"
+            implementationClass = "com.cloudimage.buildlogic.CloudProviderConventionPlugin"
+        }
     }
 }

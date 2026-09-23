@@ -1,0 +1,10 @@
+{
+  "id": "cloudimage.unsplash",
+  "name": "Unsplash",
+  "versionName": "1.0.0",
+  "versionCode": 1,
+  "author": "Cloudimage",
+  "description": "Free high-resolution photography from unsplash.com. Requires a free API key.",
+  "apiVersion": 1,
+  "entryClass": "com.cloudimage.unsplash.UnsplashWallpaperProvider"
+}

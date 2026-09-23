@@ -22,6 +22,7 @@ androidxTestCore = "1.6.1"
 androidxTestExtJunit = "1.2.1"
 junit = "4.13.2"
 ktlint = "12.1.1"
+r8 = "8.5.35"
 
 [libraries]
 # AndroidX core
@@ -77,6 +78,7 @@ compose-gradlePlugin = { module = "org.jetbrains.kotlin:compose-compiler-gradle-
 ksp-gradlePlugin = { module = "com.google.devtools.ksp:com.google.devtools.ksp.gradle.plugin", version.ref = "ksp" }
 hilt-gradlePlugin = { module = "com.google.dagger:hilt-android-gradle-plugin", version.ref = "hilt" }
 ktlint-gradlePlugin = { module = "org.jlleitschuh.gradle:ktlint-gradle", version.ref = "ktlint" }
+r8 = { module = "com.android.tools:r8", version.ref = "r8" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
