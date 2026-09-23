@@ -98,4 +98,42 @@ class CloudimageHttpClientTest {
 
             assertTrue(result is NetworkResult.Failure && result.error is NetworkError.Io)
         }
+
+    @Test
+    fun downloadReturnsRawBytesOnSuccess() =
+        runTest {
+            // Binary body: a mix that would break naive String decoding.
+            val bytes =
+                byteArrayOf(
+                    0x89.toByte(),
+                    0x50,
+                    0x4E,
+                    0x47,
+                    0x0D,
+                    0x0A,
+                    0x1A,
+                    0x0A,
+                    0x00,
+                    0xFF.toByte(),
+                )
+            server.enqueue(MockResponse().setBody(okio.Buffer().write(bytes)))
+
+            val result = client.download(server.url("/full/xy.jpg").toString())
+
+            assertTrue(result is NetworkResult.Success)
+            assertTrue((result as NetworkResult.Success).value.contentEquals(bytes))
+            val recorded = server.takeRequest()
+            assertEquals(CloudimageHttpClient.USER_AGENT, recorded.getHeader("User-Agent"))
+        }
+
+    @Test
+    fun downloadMapsHttpErrorToFailure() =
+        runTest {
+            val url = server.url("/full/missing.jpg").toString()
+            server.enqueue(MockResponse().setResponseCode(404))
+
+            val result = client.download(url)
+
+            assertEquals(NetworkResult.Failure(NetworkError.Http(code = 404, url = url)), result)
+        }
 }

@@ -59,6 +59,35 @@ class CloudimageHttpClient
                 }
             }
 
+        /**
+         * Performs a GET and returns the raw body bytes — for downloads of
+         * full-resolution images (apply-as-wallpaper, save-to-gallery, share).
+         *
+         * Same failure taxonomy as [get]; the body is buffered in memory, which
+         * is fine for wallpaper-sized files (single-digit megabytes).
+         */
+        suspend fun download(url: String): NetworkResult<ByteArray> =
+            withContext(Dispatchers.IO) {
+                val request =
+                    Request.Builder()
+                        .url(url)
+                        .header(HEADER_USER_AGENT, USER_AGENT)
+                        .build()
+                try {
+                    okHttpClient.newCall(request).await().use { response ->
+                        if (response.isSuccessful) {
+                            Success(response.body?.bytes() ?: ByteArray(0))
+                        } else {
+                            Failure(NetworkError.Http(response.code, url))
+                        }
+                    }
+                } catch (e: SocketTimeoutException) {
+                    Failure(NetworkError.Timeout)
+                } catch (e: IOException) {
+                    Failure(NetworkError.Io(e))
+                }
+            }
+
         /** Performs a GET and decodes the JSON body into [T]. */
         suspend fun <T> getJson(
             url: String,
