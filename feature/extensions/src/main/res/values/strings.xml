@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="extensions_empty_title">No extensions installed</string>
+    <string name="extensions_empty_body">The extension engine (Part 5) and the repository manager (Part 6) will let you add wallpaper sources from any GitHub repo.</string>
+</resources>

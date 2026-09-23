@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="detail_empty_title">Preview &amp; apply</string>
+    <string name="detail_empty_body">The zoomable preview and set-as-wallpaper actions arrive in Part 4.</string>
+</resources>

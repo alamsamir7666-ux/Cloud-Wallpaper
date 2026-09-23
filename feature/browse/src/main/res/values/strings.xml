@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="browse_empty_title">No providers yet</string>
+    <string name="browse_empty_body">The Wallhaven feed and the extension engine arrive in Parts 3 and 5. The grid you see now is a placeholder.</string>
+</resources>
