@@ -1,0 +1,203 @@
+package com.cloudimage.feature.detail
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.cloudimage.core.data.repository.ApplyError
+import com.cloudimage.core.data.repository.ApplyResult
+import com.cloudimage.core.data.repository.ApplyTarget
+import com.cloudimage.core.data.repository.FavoritesRepository
+import com.cloudimage.core.data.repository.HistoryRepository
+import com.cloudimage.core.data.repository.SaveError
+import com.cloudimage.core.data.repository.SaveResult
+import com.cloudimage.core.data.repository.WallpaperApplier
+import com.cloudimage.core.data.repository.WallpaperSaver
+import com.cloudimage.core.model.HistoryAction
+import com.cloudimage.core.model.Wallpaper
+import com.cloudimage.core.model.savedMimeType
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+/** User-facing error taxonomy for the preview screen. */
+enum class DetailError {
+    OFFLINE,
+    TIMEOUT,
+    HTTP,
+    BAD_IMAGE,
+    UNSUPPORTED,
+    STORAGE,
+}
+
+/** Which action a failure message refers to. */
+enum class DetailAction {
+    APPLY,
+    SAVE,
+    SHARE,
+}
+
+/** Lifecycle of one user-triggered operation (apply / save / share). */
+sealed interface OperationState {
+    data object Idle : OperationState
+
+    data object Running : OperationState
+
+    data object Succeeded : OperationState
+
+    data class Failed(val error: DetailError) : OperationState
+}
+
+/** One-shot events the screen consumes (snackbars, share intents). */
+sealed interface DetailEvent {
+    data object WallpaperApplied : DetailEvent
+
+    data object WallpaperSaved : DetailEvent
+
+    data class ShareReady(
+        val filePath: String,
+        val mimeType: String,
+    ) : DetailEvent
+
+    data class ActionFailed(
+        val action: DetailAction,
+        val error: DetailError,
+    ) : DetailEvent
+}
+
+/** Immutable snapshot of everything the preview screen renders. */
+data class DetailUiState(
+    val wallpaper: Wallpaper? = null,
+    val isFavorite: Boolean = false,
+    val applyOp: OperationState = OperationState.Idle,
+    val saveOp: OperationState = OperationState.Idle,
+    val shareOp: OperationState = OperationState.Idle,
+)
+
+/**
+ * Drives the fullscreen preview: favorite toggle, set-as-wallpaper
+ * (home/lock/both), save-to-gallery and share. Opening the screen records a
+ * VIEWED history entry; successful applies and saves are recorded as well.
+ */
+@HiltViewModel
+class DetailViewModel
+    @Inject
+    constructor(
+        savedStateHandle: SavedStateHandle,
+        private val applier: WallpaperApplier,
+        private val saver: WallpaperSaver,
+        private val favoritesRepository: FavoritesRepository,
+        private val historyRepository: HistoryRepository,
+    ) : ViewModel() {
+        private val initialWallpaper = DetailDestination.decode(savedStateHandle[DetailDestination.arg])
+
+        private val _state = MutableStateFlow(DetailUiState(wallpaper = initialWallpaper))
+        val state: StateFlow<DetailUiState> = _state.asStateFlow()
+
+        private val _events = MutableSharedFlow<DetailEvent>(extraBufferCapacity = 8)
+        val events: SharedFlow<DetailEvent> = _events.asSharedFlow()
+
+        init {
+            initialWallpaper?.let { wallpaper ->
+                viewModelScope.launch { historyRepository.record(wallpaper, HistoryAction.VIEWED) }
+                favoritesRepository
+                    .observeIsFavorite(wallpaper.providerId, wallpaper.id)
+                    .onEach { isFavorite -> _state.update { it.copy(isFavorite = isFavorite) } }
+                    .launchIn(viewModelScope)
+            }
+        }
+
+        /** Saves or removes the wallpaper from favorites. */
+        fun onToggleFavorite() {
+            val wallpaper = _state.value.wallpaper ?: return
+            viewModelScope.launch { favoritesRepository.toggleFavorite(wallpaper) }
+        }
+
+        /** Applies the wallpaper to the chosen target screen(s). */
+        fun onApply(target: ApplyTarget) {
+            val wallpaper = _state.value.wallpaper ?: return
+            if (_state.value.applyOp is OperationState.Running) return
+            viewModelScope.launch {
+                _state.update { it.copy(applyOp = OperationState.Running) }
+                when (val result = applier.apply(wallpaper, target)) {
+                    is ApplyResult.Success -> {
+                        _state.update { it.copy(applyOp = OperationState.Succeeded) }
+                        historyRepository.record(wallpaper, HistoryAction.APPLIED)
+                        _events.tryEmit(DetailEvent.WallpaperApplied)
+                    }
+                    is ApplyResult.Failure -> {
+                        val error = result.error.toDetailError()
+                        _state.update { it.copy(applyOp = OperationState.Failed(error)) }
+                        _events.tryEmit(DetailEvent.ActionFailed(DetailAction.APPLY, error))
+                    }
+                }
+            }
+        }
+
+        /** Saves the full-resolution image into the system gallery. */
+        fun onSave() {
+            val wallpaper = _state.value.wallpaper ?: return
+            if (_state.value.saveOp is OperationState.Running) return
+            viewModelScope.launch {
+                _state.update { it.copy(saveOp = OperationState.Running) }
+                when (val result = saver.saveToGallery(wallpaper)) {
+                    is SaveResult.Success -> {
+                        _state.update { it.copy(saveOp = OperationState.Succeeded) }
+                        historyRepository.record(wallpaper, HistoryAction.DOWNLOADED)
+                        _events.tryEmit(DetailEvent.WallpaperSaved)
+                    }
+                    is SaveResult.Failure -> {
+                        val error = result.error.toDetailError()
+                        _state.update { it.copy(saveOp = OperationState.Failed(error)) }
+                        _events.tryEmit(DetailEvent.ActionFailed(DetailAction.SAVE, error))
+                    }
+                }
+            }
+        }
+
+        /** Stages a cache file for sharing; the screen fires the intent. */
+        fun onShare() {
+            val wallpaper = _state.value.wallpaper ?: return
+            if (_state.value.shareOp is OperationState.Running) return
+            viewModelScope.launch {
+                _state.update { it.copy(shareOp = OperationState.Running) }
+                when (val result = saver.prepareShareFile(wallpaper)) {
+                    is SaveResult.Success -> {
+                        _state.update { it.copy(shareOp = OperationState.Succeeded) }
+                        _events.tryEmit(DetailEvent.ShareReady(result.uri, wallpaper.savedMimeType()))
+                    }
+                    is SaveResult.Failure -> {
+                        val error = result.error.toDetailError()
+                        _state.update { it.copy(shareOp = OperationState.Failed(error)) }
+                        _events.tryEmit(DetailEvent.ActionFailed(DetailAction.SHARE, error))
+                    }
+                }
+            }
+        }
+
+        private fun ApplyError.toDetailError(): DetailError =
+            when (this) {
+                ApplyError.OFFLINE -> DetailError.OFFLINE
+                ApplyError.TIMEOUT -> DetailError.TIMEOUT
+                ApplyError.HTTP -> DetailError.HTTP
+                ApplyError.DECODE -> DetailError.BAD_IMAGE
+                ApplyError.UNSUPPORTED -> DetailError.UNSUPPORTED
+                ApplyError.IO -> DetailError.STORAGE
+            }
+
+        private fun SaveError.toDetailError(): DetailError =
+            when (this) {
+                SaveError.OFFLINE -> DetailError.OFFLINE
+                SaveError.TIMEOUT -> DetailError.TIMEOUT
+                SaveError.HTTP -> DetailError.HTTP
+                SaveError.IO -> DetailError.STORAGE
+            }
+    }

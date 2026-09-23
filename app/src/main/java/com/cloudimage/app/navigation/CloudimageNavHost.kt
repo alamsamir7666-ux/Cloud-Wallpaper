@@ -26,7 +26,7 @@ fun CloudimageNavHost(
         composable(TopLevelDestination.BROWSE.route) {
             BrowseScreen(
                 onWallpaperClick = { wallpaper: Wallpaper ->
-                    navController.navigate(DetailDestination.createRoute(wallpaper.id))
+                    navController.navigate(DetailDestination.createRoute(wallpaper))
                 },
             )
         }
@@ -41,7 +41,7 @@ fun CloudimageNavHost(
                 ),
         ) { backStackEntry ->
             DetailScreen(
-                wallpaperId = backStackEntry.arguments?.getString(DetailDestination.arg),
+                onBack = { navController.popBackStack() },
             )
         }
     }

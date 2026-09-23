@@ -1,5 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="detail_empty_title">Preview &amp; apply</string>
-    <string name="detail_empty_body">The zoomable preview and set-as-wallpaper actions arrive in Part 4.</string>
+    <string name="detail_preview">Fullscreen wallpaper preview</string>
+    <string name="detail_back">Back</string>
+    <string name="detail_add_favorite">Add to favorites</string>
+    <string name="detail_remove_favorite">Remove from favorites</string>
+    <string name="detail_info">Wallpaper info</string>
+    <string name="detail_set_wallpaper">Set wallpaper</string>
+    <string name="detail_save">Save to gallery</string>
+    <string name="detail_share">Share</string>
+    <string name="detail_share_title">Share wallpaper</string>
+    <string name="detail_applied">Wallpaper set</string>
+    <string name="detail_saved">Saved to gallery</string>
+    <string name="detail_invalid_title">Wallpaper unavailable</string>
+    <string name="detail_invalid_body">This wallpaper could not be opened. Go back and pick another one.</string>
+    <string name="detail_back_to_browse">Back to browse</string>
+
+    <string name="detail_apply_target_title">Set wallpaper on</string>
+    <string name="detail_target_home">Home screen</string>
+    <string name="detail_target_home_hint">Your default launcher background</string>
+    <string name="detail_target_lock">Lock screen</string>
+    <string name="detail_target_lock_hint">What you see when the screen is locked</string>
+    <string name="detail_target_both">Both screens</string>
+    <string name="detail_target_both_hint">Home and lock screen together</string>
+
+    <string name="detail_info_title">Wallpaper info</string>
+    <string name="detail_info_resolution">Resolution</string>
+    <string name="detail_info_provider">Provider</string>
+    <string name="detail_info_rating">Content rating</string>
+    <string name="detail_info_id">Wallpaper ID</string>
+    <string name="detail_info_source">Open on provider site</string>
+
+    <string name="detail_error_snackbar">%1$s failed: %2$s</string>
+    <string name="detail_error_action_apply">Setting wallpaper</string>
+    <string name="detail_error_action_save">Saving wallpaper</string>
+    <string name="detail_error_action_share">Preparing share</string>
+    <string name="detail_error_offline">no connection</string>
+    <string name="detail_error_timeout">connection timed out</string>
+    <string name="detail_error_http">server error</string>
+    <string name="detail_error_bad_image">the image could not be decoded</string>
+    <string name="detail_error_unsupported">not supported on this device</string>
+    <string name="detail_error_storage">storage error</string>
 </resources>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Files served to share intents: staged wallpaper copies in cache. -->
+<paths>
+    <cache-path
+        name="shared"
+        path="shared/" />
+</paths>
