@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="extensions_title">Extensions</string>
-    <string name="extensions_builtin_section">Built-in sources</string>
-    <string name="extensions_builtin_wallhaven_support">wallhaven.cc · built into the app</string>
     <string name="extensions_installed_section">Installed extensions</string>
     <string name="extensions_status_ready">Ready</string>
     <string name="extensions_status_corrupted">Corrupted</string>
@@ -14,5 +12,34 @@
     <string name="extensions_uninstall_confirm">Uninstall</string>
     <string name="extensions_uninstall_cancel">Cancel</string>
     <string name="extensions_empty_title">No extensions installed</string>
-    <string name="extensions_empty_body">Cloudimage ships with Wallhaven built in. More sources arrive when extension repositories are added.</string>
+    <string name="extensions_empty_body">Add a repository below to browse and install wallpaper sources.</string>
+
+    <string name="extensions_add_repo">Add repository</string>
+    <string name="extensions_add_repo_title">Add repository</string>
+    <string name="extensions_add_repo_body">Paste the URL of an extension repository (its location or its index.json).</string>
+    <string name="extensions_add_repo_label">Repository URL</string>
+    <string name="extensions_add_repo_confirm">Add</string>
+    <string name="extensions_add_repo_cancel">Cancel</string>
+    <string name="extensions_add_repo_error">That did not look like a repository. Check the URL and try again.</string>
+    <string name="extensions_repo_added">Repository added</string>
+    <string name="extensions_repos_section">Repositories</string>
+    <string name="extensions_repos_empty">No repositories yet. Add one to install more wallpaper sources.</string>
+    <string name="extensions_remove_repo">Remove repository</string>
+    <string name="extensions_remove_repo_title">Remove repository?</string>
+    <string name="extensions_remove_repo_body">%1$s will be removed. Extensions you installed from it stay installed.</string>
+    <string name="extensions_remove_repo_confirm">Remove</string>
+    <string name="extensions_remove_repo_cancel">Cancel</string>
+    <string name="extensions_install_package">Install</string>
+    <string name="extensions_catalog_entry_details">v%1$s · %2$s · %3$s</string>
+    <string name="extensions_catalog_installed">Installed</string>
+    <string name="extensions_installed_snackbar">%1$s installed</string>
+    <string name="extensions_install_failed_snackbar">Install failed: %1$s</string>
+    <string name="extensions_key_needed">API key needed</string>
+    <string name="extensions_set_key">Set API key</string>
+    <string name="extensions_key_title">API key for %1$s</string>
+    <string name="extensions_key_body">This source only serves content with a personal API key. Paste yours — it stays on this device.</string>
+    <string name="extensions_key_label">API key</string>
+    <string name="extensions_key_confirm">Save</string>
+    <string name="extensions_key_cancel">Cancel</string>
+    <string name="extensions_key_saved">API key saved</string>
 </resources>

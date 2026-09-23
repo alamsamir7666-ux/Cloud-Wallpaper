@@ -14,6 +14,8 @@ android {
 
 dependencies {
     implementation(project(":extensions:core"))
+    implementation(project(":core:data"))
+    implementation(project(":core:datastore"))
 
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
@@ -22,4 +24,5 @@ dependencies {
 
     testImplementation(project(":core:testing"))
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.turbine)
 }
