@@ -1,9 +1,10 @@
 plugins {
-    id("cloudimage.android.library")
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.ktlint)
 }
 
-android {
-    namespace = "com.cloudimage.provider.api"
+kotlin {
+    jvmToolchain(17)
 }
 
 dependencies {

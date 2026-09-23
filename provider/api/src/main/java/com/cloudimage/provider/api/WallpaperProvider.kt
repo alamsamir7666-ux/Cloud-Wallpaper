@@ -3,16 +3,25 @@ package com.cloudimage.provider.api
 /**
  * Version of the provider extension contract.
  *
- * The app and every extension APK are built against this number:
- * - MAJOR mismatch (e.g. app 2.x, plugin 1.x) → the app skips the plugin
- *   with an explanatory message instead of crashing at load time.
- * - Equal MAJOR → plugin loads even if MINOR differs.
+ * The app and every extension package are built against this number:
+ * - a package declaring a different version is rejected at install time
+ *   (and, defensively, again at load time) with an explanatory error
+ *   instead of crashing the app;
+ * - bump this when the API below changes in a breaking way, and ship the
+ *   matching engine update alongside it.
  *
- * Bump this when the API below changes in a breaking way.
  * Finalized in Part 5 (extension engine).
  */
 object ProviderApi {
     const val VERSION = 1
+
+    /**
+     * Gate used by the extension engine: a manifest declaring
+     * [declaredApiVersion] loads on this host only when the versions match
+     * exactly. Older and newer declarations are both refused — a plugin
+     * compiled against a different contract cannot be trusted to behave.
+     */
+    fun isSupported(declaredApiVersion: Int): Boolean = declaredApiVersion == VERSION
 }
 
 /** Optional operations a provider can support. Drives UI affordances. */
@@ -37,6 +46,7 @@ data class ProviderMeta(
     val id: String,
     val name: String,
     val versionName: String,
+    val author: String = "",
     val contentRating: ContentRating = ContentRating.SFW,
     val language: String = "en",
     val description: String = "",
@@ -44,7 +54,10 @@ data class ProviderMeta(
 
 /**
  * A single wallpaper as it appears in grids and lists.
- * Thumbs should be small (grid-sized); [fullUrl] points at the original file.
+ *
+ * [thumbUrl] should be small (grid-sized); [fullUrl] points at the original
+ * file the app downloads for apply/save/share. [contentRating] lets the host
+ * enforce the SFW-only switch per item, whatever the source claims.
  */
 data class Wallpaper(
     val id: String,
@@ -56,6 +69,7 @@ data class Wallpaper(
     val height: Int? = null,
     val tags: List<String> = emptyList(),
     val colors: List<String> = emptyList(),
+    val contentRating: ContentRating = ContentRating.SFW,
 ) {
     /** width / height, or null when dimensions are unknown. */
     val aspectRatio: Float?
@@ -80,21 +94,13 @@ data class Page(
 }
 
 /**
- * Marker for provider-specific filter payloads (categories, sorting, ratio...).
- * The app treats unknown implementations as opaque and passes them back
- * untouched; Part 5 turns this into the full filter DSL.
- */
-interface Filters {
-    data object None : Filters
-}
-
-/**
- * The extension contract — a Cloudimage plugin is an APK containing exactly
- * one implementation of this interface.
+ * The extension contract — a Cloudimage plugin is a package containing exactly
+ * one implementation of this interface, named in the package manifest.
  *
  * Implementations must:
  * - be stateless across calls (the app may cache or pool instances),
- * - use the injected HTTP client they receive in Part 5 (never create their own),
+ * - route ALL network traffic through the client received in
+ *   [configure][WallpaperProvider.configure] — never create their own,
  * - never touch Android UI classes; the app renders everything.
  *
  * All methods return [Result] so a failing source degrades to an empty
@@ -103,6 +109,15 @@ interface Filters {
 interface WallpaperProvider {
     val meta: ProviderMeta
     val capabilities: Set<Capability>
+
+    /**
+     * Called once by the host after instantiation, before any other method.
+     *
+     * Implementations must store [client] and use it for every request. The
+     * host's User-Agent, timeouts, connection pool and debug logging apply
+     * uniformly to built-in and third-party sources this way.
+     */
+    fun configure(client: ProviderHttpClient) {}
 
     suspend fun popular(page: Int = 1): Result<Page>
 
