@@ -31,11 +31,13 @@ Every part ends green: app builds, tests pass, CI clean.
 - [x] **Part 3 — Wallhaven Provider (built-in)** · Wallhaven client on the shared
       HTTP pipeline, staggered masonry grid (Coil), search + filters,
       prefetch pagination.
-- [ ] **Part 4 — Preview & Apply** · fullscreen zoomable preview, info sheet,
-      set wallpaper home/lock/both, WorkManager downloads, share. **← current**
+- [x] **Part 4 — Preview & Apply** · fullscreen zoomable preview, info sheet,
+      set wallpaper home/lock/both, downloads, share. (Delivered as scoped
+      ViewModel operations behind the `WallpaperApplier`/`WallpaperSaver`
+      ports; WorkManager re-evaluated in the Part 8 polish pass.)
 - [ ] **Part 5 — Extension Engine** · final provider API + version gating,
       DexClassLoader loading, install/uninstall, sha256 verify, shared client
-      injection.
+      injection. **← current**
 - [ ] **Part 6 — Repo Manager + Official Plugins** · add-repo-by-URL,
       index.json parser, Wallhaven extracted to a real plugin, Unsplash /
       Pexels / Pixabay plugins (user keys), Python index builder + GitHub
@@ -62,3 +64,15 @@ Every part ends green: app builds, tests pass, CI clean.
   sheet, pagination with footer retry. Dependabot PR #2 (navigation-compose
   2.10.1) verified incompatible (needs compileSdk 37 > AGP 8.7.3's 35) — to be
   closed, not merged. Commits pending push (token needed).
+- **2026-09-23 — Part 3 pushed, PR #2 closed, CI green.** Wallhaven provider on
+  main (b1d97a6); all CI steps green on run #16. Dependabot PR #2 closed with
+  the compileSdk-37 rationale.
+- **2026-09-23 — Part 4 done.** Preview & apply: zoomable fullscreen preview
+  (pinch/double-tap), info sheet, set wallpaper (home/lock/both via
+  WallpaperManager through a testable seam), save-to-gallery (MediaStore on
+  API 29+, app-external dir on 26–28), share via FileProvider cache staging,
+  favorites toggle, VIEWED/APPLIED/DOWNLOADED history records. The wallpaper
+  travels through navigation as a Base64url JSON argument. Download note:
+  delivered as scoped ViewModel operations behind the WallpaperSaver port
+  instead of WorkManager — a 2–5s save does not justify the machinery in V1;
+  revisit in the Part 8 polish pass if background guarantees become needed.
