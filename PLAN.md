@@ -41,12 +41,15 @@ Every part ends green: app builds, tests pass, CI clean.
       `:extensions:core` with `:fixture:demo-provider` compiling a real plugin
       for the test suite. The Wallhaven built-in stays in-process until the
       Part 6 repo manager can distribute it as a real plugin.)
-- [ ] **Part 6 — Repo Manager + Official Plugins** · add-repo-by-URL,
+- [x] **Part 6 — Repo Manager + Official Plugins** · add-repo-by-URL,
       index.json parser, Wallhaven extracted to a real plugin, Unsplash /
       Pexels / Pixabay plugins (user keys), Python index builder + GitHub
-      Action for the official repo. **← current**
+      Action for the official repo. (The wallhaven package is also bundled
+      in the app's assets and reconciled at every start, so fresh installs
+      have content; key-based plugins are installed from the repo. Providers
+      are dexed with d8 via the `cloudimage.provider` convention plugin.)
 - [ ] **Part 7 — User Data & Settings** · favorites, history, full settings,
-      first-run onboarding.
+      first-run onboarding. **← current**
 - [ ] **Part 8 — Polish & Release** · in-app updater (GitHub Releases),
       empty/error states, offline handling, R8 + signing, performance pass,
       tag `v1.0.0` + signed APK.
