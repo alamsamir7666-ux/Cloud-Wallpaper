@@ -7,6 +7,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.feature.browse.BrowseScreen
 import com.cloudimage.feature.detail.DetailDestination
 import com.cloudimage.feature.detail.DetailScreen
@@ -23,7 +24,11 @@ fun CloudimageNavHost(
         modifier = modifier,
     ) {
         composable(TopLevelDestination.BROWSE.route) {
-            BrowseScreen()
+            BrowseScreen(
+                onWallpaperClick = { wallpaper: Wallpaper ->
+                    navController.navigate(DetailDestination.createRoute(wallpaper.id))
+                },
+            )
         }
         composable(TopLevelDestination.EXTENSIONS.route) {
             ExtensionsScreen()

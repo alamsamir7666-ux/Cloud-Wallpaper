@@ -1,5 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="browse_empty_title">No providers yet</string>
-    <string name="browse_empty_body">The Wallhaven feed and the extension engine arrive in Parts 3 and 5. The grid you see now is a placeholder.</string>
+    <string name="browse_search_hint">Search Wallhaven</string>
+    <string name="browse_search_action">Search</string>
+    <string name="browse_clear_search">Clear search</string>
+    <string name="browse_open_filters">Filters</string>
+    <string name="browse_filters_active">Filters active</string>
+
+    <string name="browse_filter_categories">Categories</string>
+    <string name="browse_filter_content">Content</string>
+    <string name="browse_filter_sorting">Sort by</string>
+    <string name="browse_filter_order">Order</string>
+    <string name="browse_filter_apply">Apply</string>
+    <string name="browse_filter_reset">Reset</string>
+
+    <string name="browse_category_general">General</string>
+    <string name="browse_category_anime">Anime</string>
+    <string name="browse_category_people">People</string>
+    <string name="browse_rating_sfw">SFW</string>
+    <string name="browse_rating_sketchy">Sketchy</string>
+    <string name="browse_rating_sketchy_locked">Sketchy stays hidden while the SFW-only setting is on.</string>
+    <string name="browse_sorting_toplist">Top</string>
+    <string name="browse_sorting_date">Newest</string>
+    <string name="browse_sorting_random">Random</string>
+    <string name="browse_sorting_relevance">Relevance</string>
+    <string name="browse_order_descending">Descending</string>
+    <string name="browse_order_ascending">Ascending</string>
+
+    <string name="browse_loading">Loading wallpapers</string>
+    <string name="browse_loading_more">Loading more wallpapers</string>
+    <string name="browse_end_reached">You have reached the end</string>
+    <string name="browse_error_title">Something went wrong</string>
+    <string name="browse_error_http">Wallhaven could not handle the request.</string>
+    <string name="browse_error_timeout">The request timed out.</string>
+    <string name="browse_error_offline">Check your connection and try again.</string>
+    <string name="browse_error_bad_data">The response could not be read.</string>
+    <string name="browse_retry">Retry</string>
+    <string name="browse_empty_results_title">Nothing found</string>
+    <string name="browse_empty_results_body">Try a different search or loosen the filters.</string>
+    <string name="browse_wallpaper_card">Wallpaper %1$s</string>
 </resources>
