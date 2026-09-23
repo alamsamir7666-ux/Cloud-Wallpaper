@@ -1,5 +1,7 @@
 package com.cloudimage.core.model
 
+import kotlinx.serialization.Serializable
+
 /**
  * App-internal content classification, mirrored from the provider contract
  * (:provider:api) so the core layers never depend on plugin classes.
@@ -16,6 +18,7 @@ enum class ContentRating {
  * The same wallpaper can come from different providers, so identity is the
  * pair ([providerId], [id]) — never [id] alone.
  */
+@Serializable
 data class Wallpaper(
     val id: String,
     val providerId: String,
