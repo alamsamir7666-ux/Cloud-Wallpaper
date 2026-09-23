@@ -1,0 +1,55 @@
+name: publish extension repo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "providers/**"
+      - "tools/build_repo_index.py"
+      - ".github/workflows/publish-repo.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Build packages and publish to gh-pages
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Package providers
+        run: |
+          ./gradlew \
+            :providers:wallhaven:packageExtension \
+            :providers:unsplash:packageExtension \
+            :providers:pexels:packageExtension \
+            :providers:pixabay:packageExtension \
+            --no-daemon
+
+      - name: Assemble repository
+        run: |
+          mkdir -p repo
+          cp providers/*/build/outputs/extension/*.zip repo/
+          python3 tools/build_repo_index.py repo --name "Cloudimage official repository"
+
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: repo
+          force_orphan: true
+          commit_message: "publish extension repository"
