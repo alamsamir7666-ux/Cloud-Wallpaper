@@ -2,6 +2,7 @@ package com.cloudimage.extensions.core
 
 import com.cloudimage.provider.api.ProviderApi
 import com.cloudimage.provider.api.ProviderHttpClient
+import com.cloudimage.provider.api.ProviderSettings
 import com.cloudimage.provider.api.WallpaperProvider
 
 /**
@@ -10,7 +11,7 @@ import com.cloudimage.provider.api.WallpaperProvider
  * 1. re-gate the API version (cheap defense against a drifted index),
  * 2. load the entry class through the classloader seam,
  * 3. require a public no-arg constructor and cast to the contract,
- * 4. hand over the shared HTTP client via
+ * 4. hand over the shared HTTP client and host settings via
  *    [WallpaperProvider.configure].
  *
  * Every failure mode maps to a typed [ExtensionError] — a broken plugin
@@ -20,6 +21,7 @@ class ExtensionLoader(
     private val dirs: ExtensionDirs,
     private val classLoaderFactory: ExtensionClassLoaderFactory,
     private val httpClient: ProviderHttpClient,
+    private val settings: ProviderSettings,
 ) {
     fun load(extension: InstalledExtension): LoadResult {
         val manifest = extension.manifest
@@ -38,7 +40,7 @@ class ExtensionLoader(
             val provider =
                 instance as? WallpaperProvider
                     ?: return LoadResult.Failed(ExtensionError.NotAProvider(manifest.entryClass))
-            provider.configure(httpClient)
+            provider.configure(httpClient, settings)
             LoadResult.Loaded(provider)
         } catch (e: ClassNotFoundException) {
             LoadResult.Failed(ExtensionError.EntryClassMissing(manifest.entryClass))

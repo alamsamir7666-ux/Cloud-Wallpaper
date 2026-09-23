@@ -1,6 +1,7 @@
 package com.cloudimage.extensions.core
 
 import com.cloudimage.provider.api.ProviderHttpResponse
+import com.cloudimage.provider.api.ProviderSettings
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -36,7 +37,7 @@ class ExtensionRepositoryTest {
             DefaultExtensionRepository(
                 installer = ExtensionInstaller(dirs, index),
                 scanner = ExtensionScanner(dirs, index),
-                loader = ExtensionLoader(dirs, UrlClassLoaderFactory(), httpClient),
+                loader = ExtensionLoader(dirs, UrlClassLoaderFactory(), httpClient, ProviderSettings { null }),
                 ioDispatcher = UnconfinedTestDispatcher(),
             )
     }

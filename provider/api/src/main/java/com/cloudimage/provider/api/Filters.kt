@@ -9,6 +9,26 @@ package com.cloudimage.provider.api
  * keys — unknown keys are ignored by that provider, and the host treats
  * the whole object as opaque. Example:
  * `Filters.of("categories" to "anime", "purity" to "110")`.
+ *
+ * ## Host vocabulary
+ *
+ * The app's browse UI speaks a fixed vocabulary of keys and values. A
+ * provider that understands them slots into the shared filter sheet
+ * without any bespoke UI; anything else it declares would need its own
+ * rendering (V2 territory):
+ *
+ * - `"query"` — free text; also mirrored into the [WallpaperProvider.search]
+ *   `query` parameter, so this key is rarely needed inside filters,
+ * - `"category"` — `"general"` / `"anime"` / `"people"` (multi-select),
+ * - `"purity"` — `"sfw"` / `"sketchy"` (multi-select; the host never
+ *   requests `"nsfw"` in V1 — it drops that value before calling),
+ * - `"sorting"` — `"toplist"` / `"date"` / `"random"` / `"relevance"`,
+ * - `"order"` — `"desc"` / `"asc"`,
+ * - `"seed"` — a random-sort stabilizer (single value; the host generates
+ *   one per feed session).
+ *
+ * Providers ignore whatever they cannot express; e.g. an API without
+ * category buckets simply never reads `"category"`.
  */
 class Filters private constructor(
     internal val selections: Map<String, Set<String>>,

@@ -1,6 +1,7 @@
 package com.cloudimage.extensions.core
 
 import android.content.Context
+import com.cloudimage.provider.api.ProviderSettings
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -47,7 +48,8 @@ internal object ExtensionsModule {
         dirs: ExtensionDirs,
         classLoaderFactory: ExtensionClassLoaderFactory,
         httpClient: CloudimageProviderHttpClient,
-    ): ExtensionLoader = ExtensionLoader(dirs, classLoaderFactory, httpClient)
+        settings: ProviderSettings,
+    ): ExtensionLoader = ExtensionLoader(dirs, classLoaderFactory, httpClient, settings)
 
     @Provides
     @Singleton
@@ -62,4 +64,19 @@ internal object ExtensionsModule {
             loader = loader,
             ioDispatcher = Dispatchers.IO,
         )
+
+    @Provides
+    @Singleton
+    fun provideRepoStore(
+        @ApplicationContext context: Context,
+    ): RepoStore = RepoStore(File(context.filesDir, "repos/repos.json"))
+
+    @Provides
+    @Singleton
+    fun provideExtensionDownloadsDir(
+        @ApplicationContext context: Context,
+    ): File = File(context.cacheDir, "extension-downloads")
+
+    @Provides
+    fun provideNowMillis(): () -> Long = System::currentTimeMillis
 }

@@ -2,6 +2,7 @@ package com.cloudimage.extensions.core
 
 import com.cloudimage.provider.api.ProviderHttpClient
 import com.cloudimage.provider.api.ProviderHttpResponse
+import com.cloudimage.provider.api.ProviderSettings
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -29,7 +30,7 @@ class ExtensionLoaderTest {
                     "demo://catalog/1" to response(200, "demo-ok"),
                 ),
             )
-        loader = ExtensionLoader(dirs, UrlClassLoaderFactory(), httpClient)
+        loader = ExtensionLoader(dirs, UrlClassLoaderFactory(), httpClient, ProviderSettings { null })
     }
 
     @Test
@@ -53,7 +54,7 @@ class ExtensionLoaderTest {
     fun providerHttpFailureSurfacesAsFailedResult() =
         runTest {
             val extension = readyRow(TestPackages.manifestJson())
-            val failingLoader = ExtensionLoader(dirs, UrlClassLoaderFactory(), errorHttpClient)
+            val failingLoader = ExtensionLoader(dirs, UrlClassLoaderFactory(), errorHttpClient, ProviderSettings { null })
 
             val page = (failingLoader.load(extension) as LoadResult.Loaded).provider.popular(page = 1)
 

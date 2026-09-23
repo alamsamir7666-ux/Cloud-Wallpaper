@@ -50,6 +50,8 @@ data class ProviderMeta(
     val contentRating: ContentRating = ContentRating.SFW,
     val language: String = "en",
     val description: String = "",
+    /** True when the provider only serves useful content with a user API key. */
+    val requiresApiKey: Boolean = false,
 )
 
 /**
@@ -115,11 +117,27 @@ interface WallpaperProvider {
      *
      * Implementations must store [client] and use it for every request. The
      * host's User-Agent, timeouts, connection pool and debug logging apply
-     * uniformly to built-in and third-party sources this way.
+     * uniformly to built-in and third-party sources this way. [settings]
+     * carries per-provider configuration — in V1, the user's optional API
+     * key, looked up by provider id on every call.
      */
-    fun configure(client: ProviderHttpClient) {}
+    fun configure(
+        client: ProviderHttpClient,
+        settings: ProviderSettings,
+    ) {
+    }
 
-    suspend fun popular(page: Int = 1): Result<Page>
+    /**
+     * The default feed — what the browse tab shows before any search text.
+     *
+     * [filters] carries the same host vocabulary as [search]; providers
+     * apply what they can express and ignore the rest, so the popular feed
+     * stays filtered (categories, purity) on sources that support it.
+     */
+    suspend fun popular(
+        page: Int = 1,
+        filters: Filters = Filters.None,
+    ): Result<Page>
 
     suspend fun search(
         query: String,

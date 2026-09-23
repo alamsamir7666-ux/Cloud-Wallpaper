@@ -4,6 +4,7 @@ import com.cloudimage.provider.api.Capability
 import com.cloudimage.provider.api.Page
 import com.cloudimage.provider.api.ProviderHttpClient
 import com.cloudimage.provider.api.ProviderMeta
+import com.cloudimage.provider.api.ProviderSettings
 import com.cloudimage.provider.api.Wallpaper
 import com.cloudimage.provider.api.WallpaperDetails
 import com.cloudimage.provider.api.WallpaperProvider
@@ -30,11 +31,17 @@ class DemoWallpaperProvider : WallpaperProvider {
 
     override val capabilities: Set<Capability> = setOf(Capability.POPULAR, Capability.SEARCH)
 
-    override fun configure(client: ProviderHttpClient) {
+    override fun configure(
+        client: ProviderHttpClient,
+        settings: ProviderSettings,
+    ) {
         httpClient = client
     }
 
-    override suspend fun popular(page: Int): Result<Page> = catalog(page)
+    override suspend fun popular(
+        page: Int,
+        filters: com.cloudimage.provider.api.Filters,
+    ): Result<Page> = catalog(page)
 
     override suspend fun search(
         query: String,
