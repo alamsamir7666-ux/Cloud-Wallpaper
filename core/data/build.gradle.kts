@@ -5,6 +5,13 @@ plugins {
 
 android {
     namespace = "com.cloudimage.core.data"
+
+    testOptions {
+        unitTests {
+            // Robolectric decodes real bitmaps in the wallpaper action tests.
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -19,4 +26,7 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core.ktx)
+    testImplementation(libs.androidx.test.ext.junit)
 }
