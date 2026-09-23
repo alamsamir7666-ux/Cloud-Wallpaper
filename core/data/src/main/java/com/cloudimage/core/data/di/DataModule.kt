@@ -4,6 +4,8 @@ import com.cloudimage.core.data.repository.FavoritesRepository
 import com.cloudimage.core.data.repository.HistoryRepository
 import com.cloudimage.core.data.repository.RoomFavoritesRepository
 import com.cloudimage.core.data.repository.RoomHistoryRepository
+import com.cloudimage.core.data.repository.WallhavenRepository
+import com.cloudimage.core.data.repository.WallhavenRepositoryImpl
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -21,4 +23,7 @@ internal abstract class DataModule {
 
     @Binds
     abstract fun bindHistoryRepository(impl: RoomHistoryRepository): HistoryRepository
+
+    @Binds
+    abstract fun bindWallhavenRepository(impl: WallhavenRepositoryImpl): WallhavenRepository
 }
