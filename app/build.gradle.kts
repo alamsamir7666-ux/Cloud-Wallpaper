@@ -15,6 +15,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     buildTypes {
@@ -33,6 +34,7 @@ dependencies {
     implementation(project(":core:database"))
     implementation(project(":core:datastore"))
     implementation(project(":core:network"))
+    implementation(project(":core:data"))
     implementation(project(":feature:browse"))
     implementation(project(":feature:detail"))
     implementation(project(":feature:extensions"))

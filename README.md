@@ -29,9 +29,11 @@ Single-activity Jetpack Compose app, unidirectional data flow, feature modules.
 |---|---|
 | `:app` | Shell, navigation, theme, DI wiring |
 | `:core:model` | App-internal domain models |
+| `:core:data` | Repositories — favorites, history (fakes in `:core:testing`) |
 | `:core:database` | Room — favorites, history, downloads |
 | `:core:datastore` | Preferences DataStore — settings |
 | `:core:network` | Shared OkHttp client handed to every provider |
+| `:core:testing` | Test doubles (fake repositories, dispatcher rule) |
 | `:feature:browse` | Home grid, search |
 | `:feature:detail` | Preview & apply |
 | `:feature:extensions` | Plugin/repo manager |

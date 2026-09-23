@@ -22,14 +22,14 @@ Every part ends green: app builds, tests pass, CI clean.
 
 ## The 8 parts
 
-- [ ] **Part 1 — Foundation & CI** · Gradle multi-module + convention plugins,
+- [x] **Part 1 — Foundation & CI** · Gradle multi-module + convention plugins,
       Compose M3 shell (dynamic color, bottom nav, splash), Hilt, provider API
-      draft, ktlint, GitHub Actions, docs. **← current**
-- [ ] **Part 2 — Core Data & Network** · models, OkHttp + serialization client,
+      draft, ktlint, GitHub Actions, docs.
+- [x] **Part 2 — Core Data & Network** · models, OkHttp + serialization client,
       Room (favorites/history), DataStore (SFW toggle, API keys, enabled
       providers), repository interfaces with fakes.
 - [ ] **Part 3 — Wallhaven Provider (built-in)** · Wallhaven client, staggered
-      masonry grid (Coil), search + filters, pagination.
+      masonry grid (Coil), search + filters, pagination. **← current**
 - [ ] **Part 4 — Preview & Apply** · fullscreen zoomable preview, info sheet,
       set wallpaper home/lock/both, WorkManager downloads, share.
 - [ ] **Part 5 — Extension Engine** · final provider API + version gating,
@@ -49,5 +49,9 @@ Every part ends green: app builds, tests pass, CI clean.
 
 ## Status log
 
-- **2026-09-23 — Part 1 in progress.** Repo cloned, 10-module Gradle structure,
-  convention plugins, provider API draft, Compose M3 shell, CI pipeline.
+- **2026-09-23 — Part 1 done.** 10-module Gradle structure, Compose M3 shell,
+  CI green on GitHub Actions, 4 Dependabot CI-tooling bumps merged.
+- **2026-09-23 — Part 2 done.** Core data & network: domain models, typed-error
+  HTTP client (OkHttp + kotlinx.serialization), Room favorites/history DAOs,
+  DataStore user preferences, `:core:data` repositories + `:core:testing` fakes.
+  Unit tests on every layer (MockWebServer, Robolectric, Turbine).
