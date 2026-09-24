@@ -5,8 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import com.cloudimage.app.ui.CloudimageApp
-import com.cloudimage.app.ui.theme.CloudimageTheme
+import com.cloudimage.app.ui.CloudimageAppRoot
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -16,9 +15,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {
-            CloudimageTheme {
-                CloudimageApp()
-            }
+            CloudimageAppRoot()
         }
     }
 }

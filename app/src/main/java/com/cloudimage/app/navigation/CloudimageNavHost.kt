@@ -1,7 +1,10 @@
 package com.cloudimage.app.navigation
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -12,12 +15,16 @@ import com.cloudimage.feature.browse.BrowseScreen
 import com.cloudimage.feature.detail.DetailDestination
 import com.cloudimage.feature.detail.DetailScreen
 import com.cloudimage.feature.extensions.ExtensionsScreen
+import com.cloudimage.feature.library.LibraryScreen
+import com.cloudimage.feature.settings.SettingsScreen
 
 @Composable
 fun CloudimageNavHost(
     navController: NavHostController,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+
     NavHost(
         navController = navController,
         startDestination = TopLevelDestination.BROWSE.route,
@@ -30,8 +37,24 @@ fun CloudimageNavHost(
                 },
             )
         }
+        composable(TopLevelDestination.LIBRARY.route) {
+            LibraryScreen(
+                onWallpaperClick = { wallpaper: Wallpaper ->
+                    navController.navigate(DetailDestination.createRoute(wallpaper))
+                },
+            )
+        }
         composable(TopLevelDestination.EXTENSIONS.route) {
             ExtensionsScreen()
+        }
+        composable(TopLevelDestination.SETTINGS.route) {
+            SettingsScreen(
+                onOpenUrl = { url ->
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    }
+                },
+            )
         }
         composable(
             route = DetailDestination.route,

@@ -80,6 +80,8 @@ dependencies {
     implementation(project(":feature:browse"))
     implementation(project(":feature:detail"))
     implementation(project(":feature:extensions"))
+    implementation(project(":feature:library"))
+    implementation(project(":feature:settings"))
     implementation(project(":provider:api"))
 
     bundledExtensions(project(mapOf("path" to ":providers:wallhaven", "configuration" to "extensionPackage")))
@@ -88,7 +90,13 @@ dependencies {
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.hilt.navigation.compose)
 
+    testImplementation(project(":core:testing"))
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.androidx.datastore.preferences)
     testImplementation(libs.junit)
 }
 
