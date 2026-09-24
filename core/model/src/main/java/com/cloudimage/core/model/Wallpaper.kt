@@ -82,4 +82,6 @@ data class UserPreferences(
     val sfwOnly: Boolean = true,
     val dynamicColorsEnabled: Boolean = true,
     val gridColumns: Int = 2,
+    /** False until the user finishes the first-run welcome flow. */
+    val onboardingCompleted: Boolean = false,
 )

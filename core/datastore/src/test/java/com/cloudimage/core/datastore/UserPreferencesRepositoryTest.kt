@@ -7,6 +7,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -48,6 +50,27 @@ class UserPreferencesRepositoryTest {
             repository.setGridColumns(columns = 99)
 
             assertEquals(4, repository.preferences.first().gridColumns)
+        }
+
+    @Test
+    fun onboardingIsIncompleteByDefault() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            assertFalse(repository.preferences.first().onboardingCompleted)
+        }
+
+    @Test
+    fun completingOnboardingFlipsOnlyTheFlag() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+            repository.setSfwOnly(false)
+
+            repository.setOnboardingCompleted()
+
+            val preferences = repository.preferences.first()
+            assertTrue(preferences.onboardingCompleted)
+            assertFalse(preferences.sfwOnly)
         }
 
     private fun newDataStore(scope: CoroutineScope) =

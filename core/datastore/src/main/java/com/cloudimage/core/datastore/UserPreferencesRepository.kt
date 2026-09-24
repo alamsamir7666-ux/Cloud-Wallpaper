@@ -28,6 +28,7 @@ private object PreferencesKeys {
     val SFW_ONLY = booleanPreferencesKey("sfw_only")
     val DYNAMIC_COLORS = booleanPreferencesKey("dynamic_colors_enabled")
     val GRID_COLUMNS = intPreferencesKey("grid_columns")
+    val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
     val PROVIDER_KEY_IDS = stringSetPreferencesKey("provider_key_ids")
 }
 
@@ -62,6 +63,7 @@ class UserPreferencesRepository
                         sfwOnly = prefs[PreferencesKeys.SFW_ONLY] ?: true,
                         dynamicColorsEnabled = prefs[PreferencesKeys.DYNAMIC_COLORS] ?: true,
                         gridColumns = prefs[PreferencesKeys.GRID_COLUMNS] ?: 2,
+                        onboardingCompleted = prefs[PreferencesKeys.ONBOARDING_COMPLETED] ?: false,
                     )
                 }
 
@@ -75,6 +77,11 @@ class UserPreferencesRepository
 
         suspend fun setGridColumns(columns: Int) {
             dataStore.edit { it[PreferencesKeys.GRID_COLUMNS] = columns.coerceIn(minimumValue = 1, maximumValue = 4) }
+        }
+
+        /** Marks the first-run welcome flow as finished. Never un-finished. */
+        suspend fun setOnboardingCompleted() {
+            dataStore.edit { it[PreferencesKeys.ONBOARDING_COMPLETED] = true }
         }
 
         /** The stored API key of every provider, keyed by provider id. */
