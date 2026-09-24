@@ -1,6 +1,7 @@
 plugins {
     id("cloudimage.android.library")
     id("cloudimage.hilt")
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -23,6 +24,7 @@ dependencies {
     implementation(project(":core:datastore"))
     implementation(project(":extensions:core"))
     implementation(project(":provider:api"))
+    implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
 

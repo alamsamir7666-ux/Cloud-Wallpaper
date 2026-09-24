@@ -1,16 +1,20 @@
 package com.cloudimage.core.data.di
 
+import com.cloudimage.core.data.platform.AndroidUpdateInstaller
 import com.cloudimage.core.data.platform.AndroidWallpaperApplier
 import com.cloudimage.core.data.platform.BitmapDecoder
 import com.cloudimage.core.data.platform.BitmapFactoryDecoder
 import com.cloudimage.core.data.platform.MediaStoreWallpaperSaver
 import com.cloudimage.core.data.platform.SystemWallpaperSetter
 import com.cloudimage.core.data.platform.WallpaperManagerSetter
+import com.cloudimage.core.data.repository.AppUpdateRepository
 import com.cloudimage.core.data.repository.ExtensionWallpaperSources
 import com.cloudimage.core.data.repository.FavoritesRepository
+import com.cloudimage.core.data.repository.GitHubAppUpdateRepository
 import com.cloudimage.core.data.repository.HistoryRepository
 import com.cloudimage.core.data.repository.RoomFavoritesRepository
 import com.cloudimage.core.data.repository.RoomHistoryRepository
+import com.cloudimage.core.data.repository.UpdateInstaller
 import com.cloudimage.core.data.repository.WallpaperApplier
 import com.cloudimage.core.data.repository.WallpaperSaver
 import com.cloudimage.core.data.repository.WallpaperSources
@@ -55,6 +59,12 @@ internal abstract class DataModule {
 
     @Binds
     abstract fun bindWallpaperSaver(impl: MediaStoreWallpaperSaver): WallpaperSaver
+
+    @Binds
+    abstract fun bindAppUpdateRepository(impl: GitHubAppUpdateRepository): AppUpdateRepository
+
+    @Binds
+    abstract fun bindUpdateInstaller(impl: AndroidUpdateInstaller): UpdateInstaller
 }
 
 /**
