@@ -48,8 +48,12 @@ Every part ends green: app builds, tests pass, CI clean.
       in the app's assets and reconciled at every start, so fresh installs
       have content; key-based plugins are installed from the repo. Providers
       are dexed with d8 via the `cloudimage.provider` convention plugin.)
-- [ ] **Part 7 — User Data & Settings** · favorites, history, full settings,
-      first-run onboarding. **← current**
+- [x] **Part 7 — User Data & Settings** · favorites, history, full settings,
+      first-run onboarding. (Library tab streams Room favorites/history with
+      in-place unfavorite and clear-all; Settings covers SFW-only, dynamic
+      colors, grid columns, data counts, and about/version; the welcome flow
+      gates on a persisted onboardingCompleted flag. `:core:designsystem`
+      now hosts the shared wallpaper card.)
 - [ ] **Part 8 — Polish & Release** · in-app updater (GitHub Releases),
       empty/error states, offline handling, R8 + signing, performance pass,
       tag `v1.0.0` + signed APK.
@@ -82,3 +86,13 @@ Every part ends green: app builds, tests pass, CI clean.
   delivered as scoped ViewModel operations behind the WallpaperSaver port
   instead of WorkManager — a 2–5s save does not justify the machinery in V1;
   revisit in the Part 8 polish pass if background guarantees become needed.
+- **2026-09-24 — Part 7 done.** User data & settings: `:feature:library`
+  (favorites masonry grid with in-place heart removal + history feed with
+  action icons, relative timestamps, clear-all confirm), `:feature:settings`
+  (SFW-only, dynamic colors, grid columns, data counts, about/version via a
+  PackageManager-backed `VersionName` seam), and a first-run onboarding flow
+  (brand header, feature rows, SFW switch, persisted `onboardingCompleted`).
+  The app root now owns the theme — dynamic colors follow preferences — and
+  the bottom bar grew to Browse / Library / Extensions / Settings.
+  `WallpaperCard` moved to a new `:core:designsystem` module shared by
+  browse and library. 172 debug unit tests, 0 failures.
