@@ -154,7 +154,7 @@ class CloudimageHttpClient
 
             /** Sent with every request; some public APIs require identification. */
             internal const val USER_AGENT =
-                "Cloudimage/0.1 (Android; +https://github.com/alamsamir7666-ux/Cloud-Wallpaper)"
+                "Cloudimage/1.0 (Android; +https://github.com/alamsamir7666-ux/Cloud-Wallpaper)"
         }
     }
 

@@ -1,0 +1,52 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish signed release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Decode signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.CLOUDIMAGE_KEYSTORE }}
+        run: printf '%s' "$KEYSTORE_BASE64" | base64 -d > "${RUNNER_TEMP}/release.keystore"
+
+      - name: Build signed release APK
+        env:
+          CLOUDIMAGE_STORE_FILE: ${{ runner.temp }}/release.keystore
+          CLOUDIMAGE_STORE_PASSWORD: ${{ secrets.CLOUDIMAGE_STORE_PASSWORD }}
+          CLOUDIMAGE_KEY_ALIAS: ${{ secrets.CLOUDIMAGE_KEY_ALIAS }}
+          CLOUDIMAGE_KEY_PASSWORD: ${{ secrets.CLOUDIMAGE_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Stage APK with a versioned name
+        run: cp app/build/outputs/apk/release/app-release.apk "Cloudimage-${GITHUB_REF_NAME}.apk"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Cloudimage-${{ github.ref_name }}.apk
+          generate_release_notes: true

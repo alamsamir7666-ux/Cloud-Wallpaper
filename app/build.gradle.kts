@@ -1,6 +1,15 @@
 import java.security.MessageDigest
 import java.util.zip.ZipFile
 
+// Release signing material arrives via environment variables (CI secrets or
+// a local shell); nothing key-shaped is ever committed.
+val releaseStoreFile = providers.environmentVariable("CLOUDIMAGE_STORE_FILE")
+val releaseStorePassword = providers.environmentVariable("CLOUDIMAGE_STORE_PASSWORD")
+val releaseKeyAlias = providers.environmentVariable("CLOUDIMAGE_KEY_ALIAS")
+val releaseKeyPassword = providers.environmentVariable("CLOUDIMAGE_KEY_PASSWORD")
+val hasReleaseSigning =
+    listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { it.isPresent }
+
 plugins {
     id("cloudimage.android.application")
     id("cloudimage.android.compose")
@@ -14,7 +23,7 @@ android {
     defaultConfig {
         applicationId = "com.cloudimage.app"
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "1.0.0"
     }
 
     buildFeatures {
@@ -22,13 +31,32 @@ android {
         buildConfig = true
     }
 
+    // Must be declared before buildTypes: the release type below looks the
+    // config up by name while the DSL executes top to bottom.
+    signingConfigs {
+        // Signing material arrives via environment variables (CI secrets or
+        // a local shell); nothing key-shaped is ever committed.
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStoreFile.get())
+                storePassword = releaseStorePassword.get()
+                keyAlias = releaseKeyAlias.get()
+                keyPassword = releaseKeyPassword.get()
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
@@ -66,7 +94,11 @@ val syncBundledExtensions by tasks.registering(Sync::class) {
     }
 }
 
-tasks.matching { it.name.contains("merge", ignoreCase = true) && it.name.endsWith("Assets") }.configureEach {
+tasks.matching {
+    (it.name.contains("merge", ignoreCase = true) && it.name.endsWith("Assets")) ||
+        it.name.startsWith("lintVitalAnalyze") ||
+        it.name.startsWith("generateReleaseLintVitalReportModel")
+}.configureEach {
     dependsOn(syncBundledExtensions)
 }
 
