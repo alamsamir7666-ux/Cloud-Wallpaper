@@ -54,9 +54,16 @@ Every part ends green: app builds, tests pass, CI clean.
       colors, grid columns, data counts, and about/version; the welcome flow
       gates on a persisted onboardingCompleted flag. `:core:designsystem`
       now hosts the shared wallpaper card.)
-- [ ] **Part 8 — Polish & Release** · in-app updater (GitHub Releases),
+- [x] **Part 8 — Polish & Release** · in-app updater (GitHub Releases),
       empty/error states, offline handling, R8 + signing, performance pass,
-      tag `v1.0.0` + signed APK.
+      tag `v1.0.0` + signed APK. (Updater reads releases/latest, downloads
+      through the shared HTTP pipeline and hands the APK to the system
+      installer via a dedicated FileProvider; R8 minify + resource shrink
+      with a hard keep on `:provider:api` so plugins keep binding by
+      original names; signing material arrives via `CLOUDIMAGE_*` env
+      vars backed by Actions secrets, and `release.yml` publishes the
+      signed APK on `v*` tags. Release APK: 2.0 MB, down from 19.2 MB
+      debug.)
 
 **Out of scope for V1** (v1.1+): auto-rotate, Muzei source, TV UI, cloud sync.
 
@@ -96,3 +103,17 @@ Every part ends green: app builds, tests pass, CI clean.
   the bottom bar grew to Browse / Library / Extensions / Settings.
   `WallpaperCard` moved to a new `:core:designsystem` module shared by
   browse and library. 172 debug unit tests, 0 failures.
+- **2026-09-24 — Part 8 done.** Polish & release: in-app updater (Settings
+  → Updates card; GitHub releases/latest check, version-compare tolerant of
+  v-prefixes and prerelease suffixes, APK download through the shared
+  OkHttp pipeline staged in cache and handed to the system installer via a
+  dedicated FileProvider + REQUEST_INSTALL_PACKAGES); preview-image retry
+  chip on failed loads; R8 minification + resource shrinking with a hard
+  keep on the whole `:provider:api` package (plugins bind host classes by
+  original name — verified surviving in the shipped dex) and the standard
+  kotlinx.serialization rules; release signing from `CLOUDIMAGE_*`
+  environment variables (Actions secrets, keystore never committed); new
+  `release.yml` publishes the signed APK on `v*` tags with generated
+  notes. Toolchain debt explicitly deferred to V1.1 (AGP 9, compileSdk 37,
+  Kotlin 2.4, hilt 2.60) — V1 ships on the proven 8.7.3 stack. Release
+  APK 2.0 MB (debug was 19.2 MB); 186 debug unit tests, 0 failures.

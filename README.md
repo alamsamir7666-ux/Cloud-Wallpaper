@@ -8,18 +8,30 @@ gets its wallpaper sources from user-added extension repositories — with
 official providers (Wallhaven, Unsplash, Pexels, Pixabay) published in the
 official repo from day one.
 
-> **Status:** `v0.1.0` — Part 1 of 8 (foundation). See [PLAN.md](PLAN.md).
+> **Status:** `v1.0.0` — feature complete (8/8 parts). See [PLAN.md](PLAN.md).
 
-## What it will look like
+## Downloads
+
+Grab the latest signed APK from
+[Releases](https://github.com/alamsamir7666-ux/Cloud-Wallpaper/releases/latest) —
+or update straight from the app's Settings → Updates card. The official
+extension repository ships with the app, so Wallhaven works out of the box;
+Unsplash, Pexels and Pixabay install from the same place with your own API
+keys.
+
+## What you get
 
 - **Browse** — staggered masonry grids, search with filters (category, purity,
-  sorting, aspect ratio), infinite scroll (Part 3)
+  sorting, aspect ratio), infinite scroll, SFW-only mode enforced at the
+  provider layer
 - **Preview & apply** — fullscreen zoomable preview, set as home / lock /
-  both via `WallpaperManager`, download manager (Part 4)
-- **Extensions** — CloudStream-style runtime plugins loaded from APKs,
-  distributed through GitHub-hosted JSON repos (Parts 5–6)
-- **Your data** — favorites, history, per-provider API keys, SFW toggle
-  default-on (Part 7)
+  both, download to gallery, share
+- **Extensions** — CloudStream-style runtime plugins (dexed zips,
+  sha256-verified, API-version gated) from GitHub-hosted JSON repos
+- **Your data** — favorites, history, per-provider API keys, full settings,
+  first-run onboarding
+- **Updates** — in-app updater against GitHub Releases with a signed APK
+  handoff to the system installer
 
 ## Architecture
 
@@ -29,14 +41,19 @@ Single-activity Jetpack Compose app, unidirectional data flow, feature modules.
 |---|---|
 | `:app` | Shell, navigation, theme, DI wiring |
 | `:core:model` | App-internal domain models |
-| `:core:data` | Repositories — favorites, history (fakes in `:core:testing`) |
+| `:core:data` | Repositories — favorites, history, updates (fakes in `:core:testing`) |
 | `:core:database` | Room — favorites, history, downloads |
-| `:core:datastore` | Preferences DataStore — settings |
+| `:core:datastore` | Preferences DataStore — settings, API keys |
 | `:core:network` | Shared OkHttp client handed to every provider |
+| `:core:designsystem` | Shared composables (wallpaper card) |
 | `:core:testing` | Test doubles (fake repositories, dispatcher rule) |
+| `:extensions:core` | Plugin engine — install, verify, load, repos |
+| `:providers:*` | Official plugins — wallhaven (bundled), unsplash, pexels, pixabay |
 | `:feature:browse` | Home grid, search |
 | `:feature:detail` | Preview & apply |
 | `:feature:extensions` | Plugin/repo manager |
+| `:feature:library` | Favorites & history |
+| `:feature:settings` | Settings & in-app updater |
 | `:provider:api` | **The extension contract** — plugins implement this |
 
 Build logic lives in `build-logic/` (convention plugins over a version
@@ -45,8 +62,8 @@ catalog), so every module's build file stays a few lines long.
 ### Tech stack
 
 Kotlin 2.0 · Jetpack Compose (BOM) · Material 3 with dynamic color ·
-Navigation Compose · Hilt · Room · DataStore · WorkManager · Coil · OkHttp ·
-kotlinx.serialization · ktlint · GitHub Actions CI
+Navigation Compose · Hilt · Room · DataStore · Coil · OkHttp ·
+kotlinx.serialization · R8 · ktlint · GitHub Actions CI
 
 ## Build from source
 
@@ -56,6 +73,10 @@ Requirements: JDK 17+, Android SDK 35 (or let Android Studio handle it).
 ./gradlew assembleDebug
 # APK: app/build/outputs/apk/debug/app-debug.apk
 ```
+
+Release builds are minified (R8) and resource-shrunk, and pick up signing
+from the `CLOUDIMAGE_*` environment variables — see the release workflow
+for the full set. Without them, `assembleRelease` produces an unsigned APK.
 
 Lint and tests:
 
