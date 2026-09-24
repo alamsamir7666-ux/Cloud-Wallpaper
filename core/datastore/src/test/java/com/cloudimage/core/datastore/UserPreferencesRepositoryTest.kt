@@ -146,6 +146,32 @@ class UserPreferencesRepositoryTest {
             assertEquals("wallhaven/e1abc2", repository.lastRotationKey.first())
         }
 
+    // ---- Muzei source (v1.0.4) ----
+
+    @Test
+    fun muzeiCursorStartsAtZeroAndPersists() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            assertEquals(0, repository.muzeiCursor.first())
+
+            repository.setMuzeiCursor(41)
+
+            assertEquals(41, repository.muzeiCursor.first())
+        }
+
+    @Test
+    fun muzeiFeedPageStartsAtOneAndNeverStoresBelowIt() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            assertEquals(1, repository.muzeiFeedPage.first())
+
+            repository.setMuzeiFeedPage(0)
+
+            assertEquals(1, repository.muzeiFeedPage.first())
+        }
+
     private fun newDataStore(scope: CoroutineScope) =
         PreferenceDataStoreFactory.create(
             // Caller-provided scope: cancelled automatically when the test ends.

@@ -39,6 +39,10 @@ private object PreferencesKeys {
     val ROTATION_WIFI_ONLY = booleanPreferencesKey("rotation_wifi_only")
     val ROTATION_TARGET = stringPreferencesKey("rotation_target")
     val LAST_ROTATION_KEY = stringPreferencesKey("last_rotation_key")
+
+    // Muzei source state (v1.0.4).
+    val MUZEI_CURSOR = intPreferencesKey("muzei_cursor")
+    val MUZEI_FEED_PAGE = intPreferencesKey("muzei_feed_page")
 }
 
 private const val PREFERENCES_FILE = "user_preferences"
@@ -153,6 +157,47 @@ class UserPreferencesRepository
 
         suspend fun setLastRotationKey(key: String) {
             dataStore.edit { it[PreferencesKeys.LAST_ROTATION_KEY] = key }
+        }
+
+        // ---- Muzei source (v1.0.4) ----
+
+        /**
+         * Where the Muzei carousel left off: index of the favorite the next
+         * batch starts from (taken modulo the favorites count on read, so
+         * un-favoriting can never leave a dangling cursor).
+         */
+        val muzeiCursor: Flow<Int> =
+            dataStore.data
+                .catch { exception ->
+                    if (exception is IOException) {
+                        emit(emptyPreferences())
+                    } else {
+                        throw exception
+                    }
+                }
+                .map { it[PreferencesKeys.MUZEI_CURSOR] ?: 0 }
+
+        suspend fun setMuzeiCursor(cursor: Int) {
+            dataStore.edit { it[PreferencesKeys.MUZEI_CURSOR] = cursor }
+        }
+
+        /**
+         * The feed page the Muzei source serves next, for installs with no
+         * saved wallpapers yet. Wraps back to 1 when a source runs dry.
+         */
+        val muzeiFeedPage: Flow<Int> =
+            dataStore.data
+                .catch { exception ->
+                    if (exception is IOException) {
+                        emit(emptyPreferences())
+                    } else {
+                        throw exception
+                    }
+                }
+                .map { it[PreferencesKeys.MUZEI_FEED_PAGE] ?: 1 }
+
+        suspend fun setMuzeiFeedPage(page: Int) {
+            dataStore.edit { it[PreferencesKeys.MUZEI_FEED_PAGE] = page.coerceAtLeast(1) }
         }
 
         /** The stored API key of every provider, keyed by provider id. */

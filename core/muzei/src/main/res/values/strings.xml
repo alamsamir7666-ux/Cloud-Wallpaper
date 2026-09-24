@@ -1,0 +1,5 @@
+<resources>
+    <string name="muzei_source_name">Cloudimage</string>
+    <string name="muzei_source_description">Your saved wallpapers, plus the current feed when nothing is saved.</string>
+    <string name="muzei_command_open">Open Cloudimage</string>
+</resources>

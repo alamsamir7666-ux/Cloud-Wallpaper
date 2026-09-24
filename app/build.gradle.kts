@@ -22,8 +22,8 @@ android {
 
     defaultConfig {
         applicationId = "com.cloudimage.app"
-        versionCode = 4
-        versionName = "1.0.3"
+        versionCode = 5
+        versionName = "1.0.4"
     }
 
     buildFeatures {
@@ -108,6 +108,7 @@ dependencies {
     implementation(project(":core:datastore"))
     implementation(project(":core:network"))
     implementation(project(":core:data"))
+    implementation(project(":core:muzei"))
     implementation(project(":extensions:core"))
     implementation(project(":feature:browse"))
     implementation(project(":feature:detail"))

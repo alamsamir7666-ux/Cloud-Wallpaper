@@ -30,6 +30,10 @@ keys.
   sha256-verified, API-version gated) from GitHub-hosted JSON repos
 - **Your data** — favorites, history, per-provider API keys, full settings,
   first-run onboarding
+- **Muzei** — Cloudimage is a Muzei source: pick it inside
+  [Muzei](https://play.google.com/store/apps/details?id=net.nurik.roman.muzei)
+  and it serves your saved wallpapers (or the feed, on fresh installs)
+  with SFW filtering intact
 - **Updates** — in-app updater against GitHub Releases with a signed APK
   handoff to the system installer
 
@@ -46,6 +50,7 @@ Single-activity Jetpack Compose app, unidirectional data flow, feature modules.
 | `:core:datastore` | Preferences DataStore — settings, API keys |
 | `:core:network` | Shared OkHttp client handed to every provider |
 | `:core:designsystem` | Shared composables (wallpaper card) |
+| `:core:muzei` | Muzei source provider — the app as a Muzei artwork source |
 | `:core:testing` | Test doubles (fake repositories, dispatcher rule) |
 | `:extensions:core` | Plugin engine — install, verify, load, repos |
 | `:providers:*` | Official plugins — wallhaven (bundled), unsplash, pexels, pixabay |
