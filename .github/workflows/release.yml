@@ -42,6 +42,9 @@ jobs:
           CLOUDIMAGE_KEY_PASSWORD: ${{ secrets.CLOUDIMAGE_KEY_PASSWORD }}
         run: ./gradlew assembleRelease --stacktrace
 
+      - name: Audit release dex for the plugin ABI
+        run: python3 tools/audit_release_dex.py app/build/outputs/apk/release/app-release.apk
+
       - name: Stage APK with a versioned name
         run: cp app/build/outputs/apk/release/app-release.apk "Cloudimage-${GITHUB_REF_NAME}.apk"
 
