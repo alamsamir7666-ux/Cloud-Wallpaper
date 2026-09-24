@@ -117,3 +117,23 @@ Every part ends green: app builds, tests pass, CI clean.
   notes. Toolchain debt explicitly deferred to V1.1 (AGP 9, compileSdk 37,
   Kotlin 2.4, hilt 2.60) — V1 ships on the proven 8.7.3 stack. Release
   APK 2.0 MB (debug was 19.2 MB); 186 debug unit tests, 0 failures.
+- **2026-09-24 — v1.0.2 shipped.** Honest failure taxonomy: plugin failures
+  stop masquerading as connectivity loss. `NetworkError.Source` in
+  :core:network; `WallpaperSources.loadFailures` feeds per-source
+  diagnostics; browse has a distinct "a source failed" state; extensions
+  rows explain why a source failed to load. 191 tests.
+- **2026-09-24 — v1.0.3 shipped.** Auto-rotate wallpaper changer: the
+  first v1.1 backlog item pulled forward per user call. Settings →
+  Wallpaper rotation (switch, cadence 30 min–24 h, home/lock/both
+  target, Wi-Fi-only, Rotate now with inline feedback). Round-robin
+  cursor over the favorites (save-date order) persisted in DataStore,
+  advanced before each apply so a broken download can't stall the
+  carousel. WorkManager periodic work via @HiltWorker + Hilt-aware
+  Configuration (default initializer removed); UPDATE policy so process
+  restarts never reset the cycle; battery-not-low always, network
+  constraint by the Wi-Fi-only setting. Successful rotations record
+  APPLIED history like manual applies. 205 debug unit tests, 0 failures;
+  dex audit clean (5,575 host classes). Release APK 2.68 MB.
+  Remaining v1.1 backlog: toolchain debt batch (AGP 9, compileSdk 37,
+  Kotlin 2.4, hilt 2.60 — never mixed into patches), Muzei source,
+  TV UI, cloud sync.
