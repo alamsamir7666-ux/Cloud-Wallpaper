@@ -1,4 +1,4 @@
-package com.cloudimage.feature.browse
+package com.cloudimage.core.designsystem
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
@@ -21,10 +21,13 @@ import coil.request.ImageRequest
 import com.cloudimage.core.model.Wallpaper
 
 /**
- * One cell of the staggered grid: a Coil image that reserves space from the
+ * One cell of a staggered grid: a Coil image that reserves space from the
  * wallpaper's real aspect ratio, so the grid never jumps when pixels land.
  *
- * Ratios are clamped to a sane band — Wallhaven hosts 21:9 panoramas and
+ * Shared by the browse feed and the favorites grid so both masonry views
+ * look and behave identically.
+ *
+ * Ratios are clamped to a sane band — providers host 21:9 panoramas and
  * 9:16 phone shots alike, and an unclamped cell would dwarf the others.
  */
 @Composable
@@ -33,7 +36,7 @@ fun WallpaperCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val description = stringResource(R.string.browse_wallpaper_card, wallpaper.id)
+    val description = stringResource(R.string.wallpaper_card, wallpaper.id)
     Card(
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),

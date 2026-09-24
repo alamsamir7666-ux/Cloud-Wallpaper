@@ -39,5 +39,4 @@
     <string name="browse_empty_results_body">Try a different search or loosen the filters.</string>
     <string name="browse_no_sources_title">No wallpaper sources</string>
     <string name="browse_no_sources_body">Install a provider from the Extensions tab to start browsing.</string>
-    <string name="browse_wallpaper_card">Wallpaper %1$s</string>
 </resources>
