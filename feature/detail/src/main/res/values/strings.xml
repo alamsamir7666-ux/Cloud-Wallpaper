@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="detail_preview">Fullscreen wallpaper preview</string>
+    <string name="detail_image_retry">Tap to retry</string>
     <string name="detail_back">Back</string>
     <string name="detail_add_favorite">Add to favorites</string>
     <string name="detail_remove_favorite">Remove from favorites</string>
