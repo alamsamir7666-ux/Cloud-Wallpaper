@@ -7,6 +7,9 @@ on:
       - "providers/**"
       - "tools/build_repo_index.py"
       - ".github/workflows/publish-repo.yml"
+      - "gradle/**"
+      - "build.gradle.kts"
+      - "build-logic/**"
   workflow_dispatch:
 
 permissions:
