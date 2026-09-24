@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        The updater's own FileProvider: serves the downloaded update APK to
+        the system package installer. A dedicated authority (instead of the
+        app's shared .fileprovider) keeps this module self-contained and
+        testable with Robolectric, which runs against the library manifest.
+    -->
+    <application>
+        <provider
+            android:name="com.cloudimage.core.data.platform.UpdateFileProvider"
+            android:authorities="${applicationId}.updateprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_file_paths" />
+        </provider>
+    </application>
+
+</manifest>

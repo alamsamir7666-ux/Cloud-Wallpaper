@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Setting the home/lock wallpaper via WallpaperManager (Part 4). -->
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
+    <!-- Handing downloaded update APKs to the system installer (Part 8). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".CloudimageApplication"

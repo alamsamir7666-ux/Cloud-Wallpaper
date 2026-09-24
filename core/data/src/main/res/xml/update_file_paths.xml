@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Downloaded update APKs staged in cache before installing. -->
+<paths>
+    <cache-path
+        name="updates"
+        path="updates/" />
+</paths>
