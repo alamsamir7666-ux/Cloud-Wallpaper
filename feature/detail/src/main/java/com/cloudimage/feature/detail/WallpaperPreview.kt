@@ -66,8 +66,7 @@ fun ZoomableWallpaperPreview(
                         offset = if (newScale > 1f) offset + pan else Offset.Zero
                         scale = newScale
                     }
-                }
-                .pointerInput(Unit) {
+                }.pointerInput(Unit) {
                     detectTapGestures(
                         onDoubleTap = {
                             if (scale > 1f + DOUBLE_TAP_EPSILON) {
@@ -82,7 +81,8 @@ fun ZoomableWallpaperPreview(
     ) {
         AsyncImage(
             model =
-                ImageRequest.Builder(LocalContext.current)
+                ImageRequest
+                    .Builder(LocalContext.current)
                     .data(wallpaper.fullUrl)
                     .crossfade(durationMillis = 250)
                     // Bumping the attempt re-executes the request; the

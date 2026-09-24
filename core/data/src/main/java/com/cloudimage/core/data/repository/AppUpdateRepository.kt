@@ -26,7 +26,9 @@ sealed interface UpdateInstallResult {
     /** The system package installer UI was started successfully. */
     data object Started : UpdateInstallResult
 
-    data class Failure(val error: UpdateInstallError) : UpdateInstallResult
+    data class Failure(
+        val error: UpdateInstallError,
+    ) : UpdateInstallResult
 }
 
 /**
@@ -127,7 +129,13 @@ fun isVersionNewer(
             .removePrefix("V")
             .substringBefore('-')
             .split('.')
-            .map { part -> part.filter(Char::isDigit).ifEmpty { "0" }.take(NUMERIC_PART_LIMIT).toInt() }
+            .map { part ->
+                part
+                    .filter(Char::isDigit)
+                    .ifEmpty { "0" }
+                    .take(NUMERIC_PART_LIMIT)
+                    .toInt()
+            }
 
     val remoteParts = numericParts(remote)
     val currentParts = numericParts(current)
@@ -141,7 +149,12 @@ fun isVersionNewer(
 }
 
 /** "v1.2.0" -> "1.2.0"; anything without the prefix passes through. */
-private fun cleanVersion(tag: String): String = tag.trim().removePrefix("v").removePrefix("V").ifEmpty { tag }
+private fun cleanVersion(tag: String): String =
+    tag
+        .trim()
+        .removePrefix("v")
+        .removePrefix("V")
+        .ifEmpty { tag }
 
 internal const val APK_MIME = "application/vnd.android.package-archive"
 

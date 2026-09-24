@@ -28,7 +28,8 @@ class FavoriteDaoTest {
     fun createDatabase() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         database =
-            Room.inMemoryDatabaseBuilder(context, CloudimageDatabase::class.java)
+            Room
+                .inMemoryDatabaseBuilder(context, CloudimageDatabase::class.java)
                 .allowMainThreadQueries()
                 .build()
     }

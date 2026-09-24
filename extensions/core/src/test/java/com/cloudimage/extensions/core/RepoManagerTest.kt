@@ -150,7 +150,12 @@ class RepoManagerTest {
             val catalog = manager.catalog(repo) as RepoIndexResult.Ok
 
             assertEquals(1, catalog.index.packages.size)
-            assertEquals("cloudimage.demo", catalog.index.packages.single().id)
+            assertEquals(
+                "cloudimage.demo",
+                catalog.index.packages
+                    .single()
+                    .id,
+            )
         }
 
     // --- install -----------------------------------------------------------
@@ -181,7 +186,11 @@ class RepoManagerTest {
 
             val error = (result as InstallResult.Failed).error
             assertTrue(error is ExtensionError.ChecksumMismatch)
-            assertTrue(engine.installed.value.orEmpty().isEmpty())
+            assertTrue(
+                engine.installed.value
+                    .orEmpty()
+                    .isEmpty(),
+            )
         }
 
     // --- remove ------------------------------------------------------------

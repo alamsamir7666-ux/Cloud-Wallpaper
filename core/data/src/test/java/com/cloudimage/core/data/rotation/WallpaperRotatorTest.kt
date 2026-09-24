@@ -135,7 +135,12 @@ class WallpaperRotatorTest {
 
             rotator.rotateOnce(RotationTarget.HOME)
 
-            assertEquals("a", applier.calls.last().first.id)
+            assertEquals(
+                "a",
+                applier.calls
+                    .last()
+                    .first.id,
+            )
         }
 
     @Test

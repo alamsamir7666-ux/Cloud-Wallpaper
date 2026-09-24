@@ -14,7 +14,10 @@ import org.junit.Test
 
 class CloudimageHttpClientTest {
     @Serializable
-    private data class Payload(val id: Int, val name: String)
+    private data class Payload(
+        val id: Int,
+        val name: String,
+    )
 
     private lateinit var server: MockWebServer
     private lateinit var client: CloudimageHttpClient

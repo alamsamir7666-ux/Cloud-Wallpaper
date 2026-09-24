@@ -63,7 +63,11 @@ class BrowseViewModelTest {
             viewModel.loadMore()
             assertEquals(3, fake.searchCalls.size)
             assertEquals(listOf(1, 2, 3), fake.searchCalls.map { it.second })
-            assertEquals(listOf("p1", "p2", "p3"), viewModel.state.value.wallpapers.map { it.id })
+            assertEquals(
+                listOf("p1", "p2", "p3"),
+                viewModel.state.value.wallpapers
+                    .map { it.id },
+            )
         }
 
     @Test
@@ -79,7 +83,12 @@ class BrowseViewModelTest {
             viewModel.onSearchSubmit()
             viewModel.state.first { it.wallpapers.isNotEmpty() && it.wallpapers.first().id == "new1" }
 
-            assertEquals("nature", fake.searchCalls.last().first.text)
+            assertEquals(
+                "nature",
+                fake.searchCalls
+                    .last()
+                    .first.text,
+            )
             assertEquals(1, fake.searchCalls.last().second)
             assertEquals(2, fake.searchCalls.size)
         }
@@ -101,7 +110,12 @@ class BrowseViewModelTest {
             )
             viewModel.state.first { it.wallpapers.map { it.id } == listOf("clamped") }
 
-            assertEquals(setOf(ContentRating.SFW), fake.searchCalls.last().first.contentRatings)
+            assertEquals(
+                setOf(ContentRating.SFW),
+                fake.searchCalls
+                    .last()
+                    .first.contentRatings,
+            )
         }
 
     @Test
@@ -121,13 +135,21 @@ class BrowseViewModelTest {
             preferences.setSfwOnly(false)
             viewModel.state.first { !it.sfwOnly }
 
-            assertEquals(setOf(ContentRating.SFW), fake.searchCalls.last().first.contentRatings)
+            assertEquals(
+                setOf(ContentRating.SFW),
+                fake.searchCalls
+                    .last()
+                    .first.contentRatings,
+            )
 
             fake.enqueueSearch(page(ids = listOf("c"), nextPage = null))
             viewModel.onQueryChange(WallpaperQuery(contentRatings = setOf(ContentRating.SFW, ContentRating.SKETCHY)))
             viewModel.state.first { it.wallpapers.map { it.id } == listOf("c") }
 
-            val ratings = fake.searchCalls.last().first.contentRatings
+            val ratings =
+                fake.searchCalls
+                    .last()
+                    .first.contentRatings
             assertEquals(setOf(ContentRating.SFW, ContentRating.SKETCHY), ratings)
         }
 
@@ -150,7 +172,12 @@ class BrowseViewModelTest {
             viewModel.onQueryChange(WallpaperQuery(contentRatings = setOf(ContentRating.NSFW)))
             viewModel.state.first { it.wallpapers.map { it.id } == listOf("b") }
 
-            assertEquals(setOf(ContentRating.SFW), fake.searchCalls.last().first.contentRatings)
+            assertEquals(
+                setOf(ContentRating.SFW),
+                fake.searchCalls
+                    .last()
+                    .first.contentRatings,
+            )
         }
 
     @Test
@@ -165,13 +192,21 @@ class BrowseViewModelTest {
 
             viewModel.onQueryChange(WallpaperQuery(sorting = WallpaperSorting.RANDOM))
             viewModel.state.first { it.wallpapers.map { it.id } == listOf("r1") }
-            val firstSeed = fake.searchCalls.last().first.seed
+            val firstSeed =
+                fake.searchCalls
+                    .last()
+                    .first.seed
             assertNotNull(firstSeed)
 
             viewModel.loadMore()
             viewModel.state.first { it.wallpapers.size == 2 }
 
-            assertEquals(firstSeed, fake.searchCalls.last().first.seed)
+            assertEquals(
+                firstSeed,
+                fake.searchCalls
+                    .last()
+                    .first.seed,
+            )
         }
 
     @Test
@@ -260,7 +295,10 @@ class BrowseViewModelTest {
             viewModel.state.first { it.error != null && !it.isFirstLoading }
 
             fake.enqueueSearch(page(ids = listOf("s1"), nextPage = null))
-            fake.setSources(com.cloudimage.core.data.repository.SourceInfo("cloudimage.test", "Test", false))
+            fake.setSources(
+                com.cloudimage.core.data.repository
+                    .SourceInfo("cloudimage.test", "Test", false),
+            )
 
             val recovered = viewModel.state.first { it.wallpapers.isNotEmpty() }
 

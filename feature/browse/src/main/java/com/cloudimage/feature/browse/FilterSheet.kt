@@ -54,7 +54,8 @@ fun FilterSheet(
         Column(
             verticalArrangement = Arrangement.spacedBy(4.dp),
             modifier =
-                Modifier.fillMaxWidth()
+                Modifier
+                    .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 24.dp)
                     .padding(bottom = 32.dp),

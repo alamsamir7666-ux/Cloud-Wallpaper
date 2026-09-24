@@ -57,7 +57,8 @@ class MuzeiArtworkWorker
 /** Builds the Muzei artwork record for one wallpaper — Android glue over the tested spec. */
 internal fun MuzeiArtworkSpec.toArtwork(): Artwork {
     val builder =
-        Artwork.Builder()
+        Artwork
+            .Builder()
             .token(token)
             .title(title)
             .byline(byline)

@@ -74,7 +74,9 @@ class ExtensionWallpaperSourcesTest {
         private fun describe(filters: Filters): String = filters.toString().substringAfter("Filters(").substringBefore(")")
     }
 
-    private class FakeEngine(vararg providers: WallpaperProvider) : ExtensionRepository {
+    private class FakeEngine(
+        vararg providers: WallpaperProvider,
+    ) : ExtensionRepository {
         private val installedState = MutableStateFlow<List<InstalledExtension>?>(null)
         override val installed: StateFlow<List<InstalledExtension>?> = installedState.asStateFlow()
 
@@ -91,7 +93,8 @@ class ExtensionWallpaperSourcesTest {
             expectedSha256: String?,
         ): InstallResult =
             InstallResult.Failed(
-                com.cloudimage.extensions.core.ExtensionError.NotLoadable(ExtensionStatus.CORRUPTED),
+                com.cloudimage.extensions.core.ExtensionError
+                    .NotLoadable(ExtensionStatus.CORRUPTED),
             )
 
         override suspend fun uninstall(extensionId: String): Boolean = false
@@ -236,7 +239,9 @@ class ExtensionWallpaperSourcesTest {
                 RecordingProvider(
                     meta = meta("cloudimage.a"),
                     capabilities = setOf(Capability.POPULAR),
-                    error = com.cloudimage.provider.api.ProviderHttpException("GET failed"),
+                    error =
+                        com.cloudimage.provider.api
+                            .ProviderHttpException("GET failed"),
                 )
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.a"))
@@ -359,7 +364,11 @@ class ExtensionWallpaperSourcesTest {
 
             val reason = sources.loadFailures.value["cloudimage.broken"]
             assertTrue(reason.orEmpty().contains("entry class com.example.cloudimage.broken is missing"))
-            assertTrue(sources.sources.value.orEmpty().isEmpty())
+            assertTrue(
+                sources.sources.value
+                    .orEmpty()
+                    .isEmpty(),
+            )
         }
 
     @Test

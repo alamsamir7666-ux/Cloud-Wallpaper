@@ -77,7 +77,8 @@ class AppBootstrapper
         private fun readBundled(): List<BundledPackage> =
             runCatching {
                 context.assets.open("bundled.json").bufferedReader().use { reader ->
-                    json.decodeFromString(ListSerializer(BundledEntry.serializer()), reader.readText())
+                    json
+                        .decodeFromString(ListSerializer(BundledEntry.serializer()), reader.readText())
                         .map { BundledPackage(id = it.id, fileName = it.fileName, sha256 = it.sha256) }
                 }
             }.getOrDefault(emptyList())

@@ -83,7 +83,12 @@ class BundledExtensionsInstallerTest {
             val written = installer.reconcile(engine)
 
             assertEquals(1, written)
-            assertEquals(listOf("cloudimage.demo"), engine.installed.value.orEmpty().map { it.id })
+            assertEquals(
+                listOf("cloudimage.demo"),
+                engine.installed.value
+                    .orEmpty()
+                    .map { it.id },
+            )
         }
 
     @Test
@@ -126,7 +131,14 @@ class BundledExtensionsInstallerTest {
             val written = secondPass.reconcile(engine)
 
             assertEquals(1, written)
-            assertEquals("1.1.0", engine.installed.value.orEmpty().single().manifest?.versionName)
+            assertEquals(
+                "1.1.0",
+                engine.installed.value
+                    .orEmpty()
+                    .single()
+                    .manifest
+                    ?.versionName,
+            )
         }
 
     @Test
@@ -141,7 +153,11 @@ class BundledExtensionsInstallerTest {
                 )
 
             assertEquals(0, installer.reconcile(engine))
-            assertTrue(engine.installed.value.orEmpty().isEmpty())
+            assertTrue(
+                engine.installed.value
+                    .orEmpty()
+                    .isEmpty(),
+            )
         }
 
     private fun engine(): ExtensionRepository {
@@ -160,7 +176,8 @@ class BundledExtensionsInstallerTest {
                             kotlinx.serialization.json.Json { ignoreUnknownKeys = true },
                         ),
                     ),
-                    com.cloudimage.provider.api.ProviderSettings { null },
+                    com.cloudimage.provider.api
+                        .ProviderSettings { null },
                 ),
             ioDispatcher = Dispatchers.Unconfined,
         )

@@ -250,7 +250,10 @@ class ExtensionsViewModelTest {
             assertEquals(listOf("Official"), state.repos.map { it.name })
             assertEquals(
                 listOf("cloudimage.unsplash"),
-                state.catalogs.values.filterNotNull().flatten().map { it.id },
+                state.catalogs.values
+                    .filterNotNull()
+                    .flatten()
+                    .map { it.id },
             )
             assertFalse(state.addingRepo)
         }
@@ -294,8 +297,14 @@ class ExtensionsViewModelTest {
             viewModel.installPackage(repo, entry)
 
             assertEquals(listOf(entry), repos.installedEntries)
-            assertTrue(viewModel.state.value.installing.isEmpty())
-            assertTrue(viewModel.state.value.failed.isEmpty())
+            assertTrue(
+                viewModel.state.value.installing
+                    .isEmpty(),
+            )
+            assertTrue(
+                viewModel.state.value.failed
+                    .isEmpty(),
+            )
         }
 
     @Test
@@ -308,7 +317,10 @@ class ExtensionsViewModelTest {
             viewModel.installPackage(repo, entry)
 
             assertEquals("cloudimage.unsplash" in viewModel.state.value.failed, true)
-            assertTrue(viewModel.state.value.installing.isEmpty())
+            assertTrue(
+                viewModel.state.value.installing
+                    .isEmpty(),
+            )
         }
 
     @Test

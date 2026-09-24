@@ -38,7 +38,9 @@ data class WallpaperQuery(
     /** True when the query differs from the defaults enough to badge the UI. */
     val isDefault: Boolean
         get() =
-            text.isBlank() && contentRatings == setOf(ContentRating.SFW) &&
-                sorting == WallpaperSorting.TOPLIST && descending &&
+            text.isBlank() &&
+                contentRatings == setOf(ContentRating.SFW) &&
+                sorting == WallpaperSorting.TOPLIST &&
+                descending &&
                 categories.size == WallpaperCategory.entries.size
 }

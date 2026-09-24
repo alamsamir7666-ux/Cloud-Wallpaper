@@ -50,8 +50,7 @@ class WorkManagerRotationScheduler
                         .coerceAtLeast(WORK_MANAGER_MIN_INTERVAL_MINUTES)
                         .toLong(),
                     TimeUnit.MINUTES,
-                )
-                    .setConstraints(rotationConstraints(settings.wifiOnly))
+                ).setConstraints(rotationConstraints(settings.wifiOnly))
                     .build()
             // UPDATE, not REPLACE: process restarts with unchanged settings
             // must not reset the running periodic cycle.
@@ -69,7 +68,8 @@ class WorkManagerRotationScheduler
  * otherwise — the apply pipeline downloads full-resolution images).
  */
 internal fun rotationConstraints(wifiOnly: Boolean): Constraints =
-    Constraints.Builder()
+    Constraints
+        .Builder()
         .setRequiresBatteryNotLow(true)
         .setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
         .build()

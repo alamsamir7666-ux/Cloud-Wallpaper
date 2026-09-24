@@ -92,8 +92,7 @@ class UserPreferencesRepository
                     } else {
                         throw exception
                     }
-                }
-                .map { prefs ->
+                }.map { prefs ->
                     UserPreferences(
                         sfwOnly = prefs[PreferencesKeys.SFW_ONLY] ?: true,
                         dynamicColorsEnabled = prefs[PreferencesKeys.DYNAMIC_COLORS] ?: true,
@@ -152,8 +151,7 @@ class UserPreferencesRepository
                     } else {
                         throw exception
                     }
-                }
-                .map { it[PreferencesKeys.LAST_ROTATION_KEY] }
+                }.map { it[PreferencesKeys.LAST_ROTATION_KEY] }
 
         suspend fun setLastRotationKey(key: String) {
             dataStore.edit { it[PreferencesKeys.LAST_ROTATION_KEY] = key }
@@ -174,8 +172,7 @@ class UserPreferencesRepository
                     } else {
                         throw exception
                     }
-                }
-                .map { it[PreferencesKeys.MUZEI_CURSOR] ?: 0 }
+                }.map { it[PreferencesKeys.MUZEI_CURSOR] ?: 0 }
 
         suspend fun setMuzeiCursor(cursor: Int) {
             dataStore.edit { it[PreferencesKeys.MUZEI_CURSOR] = cursor }
@@ -193,8 +190,7 @@ class UserPreferencesRepository
                     } else {
                         throw exception
                     }
-                }
-                .map { it[PreferencesKeys.MUZEI_FEED_PAGE] ?: 1 }
+                }.map { it[PreferencesKeys.MUZEI_FEED_PAGE] ?: 1 }
 
         suspend fun setMuzeiFeedPage(page: Int) {
             dataStore.edit { it[PreferencesKeys.MUZEI_FEED_PAGE] = page.coerceAtLeast(1) }
@@ -209,12 +205,12 @@ class UserPreferencesRepository
                     } else {
                         throw exception
                     }
-                }
-                .map { prefs ->
+                }.map { prefs ->
                     val ids = prefs[PreferencesKeys.PROVIDER_KEY_IDS].orEmpty()
-                    ids.mapNotNull { id ->
-                        prefs[stringPreferencesKey(PROVIDER_KEY_PREFIX + id)]?.let { id to it }
-                    }.toMap()
+                    ids
+                        .mapNotNull { id ->
+                            prefs[stringPreferencesKey(PROVIDER_KEY_PREFIX + id)]?.let { id to it }
+                        }.toMap()
                 }
 
         /** Stores (or replaces, with a blank key clears) the key of one provider. */

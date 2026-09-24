@@ -44,7 +44,10 @@ class BundledExtensionsInstaller(
      * the pass — one broken bundle must not block the others.
      */
     suspend fun reconcile(repository: ExtensionRepository): Int {
-        val installed = repository.installed.value.orEmpty().associateBy { it.id }
+        val installed =
+            repository.installed.value
+                .orEmpty()
+                .associateBy { it.id }
         var written = 0
         for (entry in bundled) {
             val current = installed[entry.id]

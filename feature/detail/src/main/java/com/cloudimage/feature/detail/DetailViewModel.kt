@@ -53,7 +53,9 @@ sealed interface OperationState {
 
     data object Succeeded : OperationState
 
-    data class Failed(val error: DetailError) : OperationState
+    data class Failed(
+        val error: DetailError,
+    ) : OperationState
 }
 
 /** One-shot events the screen consumes (snackbars, share intents). */

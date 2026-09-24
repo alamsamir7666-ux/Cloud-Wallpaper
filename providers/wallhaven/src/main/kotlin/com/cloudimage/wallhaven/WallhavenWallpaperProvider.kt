@@ -104,7 +104,11 @@ class WallhavenWallpaperProvider : WallpaperProvider {
         builder.param("sorting", sortingParam(filters))
         builder.param("order", if (filters.isSelected("order", "asc")) "asc" else "desc")
         builder.param("page", page.toString())
-        filters.valuesFor("seed").firstOrNull()?.takeIf { it.isNotBlank() }?.let { builder.param("seed", it) }
+        filters
+            .valuesFor("seed")
+            .firstOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { builder.param("seed", it) }
         return builder.build()
     }
 
@@ -201,7 +205,8 @@ internal class UrlBuilder(
         base +
             params.joinToString(prefix = "?", separator = "&") { (name, value) ->
                 val encoded =
-                    URLEncoder.encode(value, Charsets.UTF_8.name())
+                    URLEncoder
+                        .encode(value, Charsets.UTF_8.name())
                         .replace("+", "%20")
                         .replace("%2F", "/")
                         .replace("%3A", ":")

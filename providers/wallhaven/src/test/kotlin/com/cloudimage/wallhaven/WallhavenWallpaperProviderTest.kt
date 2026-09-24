@@ -34,7 +34,11 @@ class WallhavenWallpaperProviderTest {
     private fun clientWith(body: String): FakeClient =
         FakeClient().apply {
             responder = { ProviderHttpResponse(200, emptyMap(), body.toByteArray()) }
-            provider.configure(this, com.cloudimage.provider.api.ProviderSettings { null })
+            provider.configure(
+                this,
+                com.cloudimage.provider.api
+                    .ProviderSettings { null },
+            )
         }
 
     @Test
@@ -135,7 +139,8 @@ class WallhavenWallpaperProviderTest {
         runTest {
             provider.configure(
                 FakeClient().apply { responder = { ProviderHttpResponse(503, emptyMap(), ByteArray(0)) } },
-                com.cloudimage.provider.api.ProviderSettings { null },
+                com.cloudimage.provider.api
+                    .ProviderSettings { null },
             )
 
             val result = provider.popular(page = 1)

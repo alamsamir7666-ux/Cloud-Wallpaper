@@ -17,11 +17,12 @@ internal object DatabaseModule {
     fun provideDatabase(
         @ApplicationContext context: Context,
     ): CloudimageDatabase =
-        Room.databaseBuilder(
-            context = context,
-            klass = CloudimageDatabase::class.java,
-            name = "cloudimage.db",
-        )
+        Room
+            .databaseBuilder(
+                context = context,
+                klass = CloudimageDatabase::class.java,
+                name = "cloudimage.db",
+            )
             // Acceptable while pre-1.0: schema churn wipes local data.
             // Part 8 adds real migrations before release.
             .fallbackToDestructiveMigration()

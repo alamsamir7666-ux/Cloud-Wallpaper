@@ -53,6 +53,8 @@ class ExtensionIndex(
 }
 
 @Serializable
-private data class Index(val entries: Map<String, ExtensionIndexEntry>)
+private data class Index(
+    val entries: Map<String, ExtensionIndexEntry>,
+)
 
 private val json = Json { prettyPrint = true }

@@ -73,12 +73,16 @@ sealed interface RotateNowState {
     data object Running : RotateNowState
 
     /** A wallpaper was picked and applied. */
-    data class Done(val wallpaper: Wallpaper) : RotateNowState
+    data class Done(
+        val wallpaper: Wallpaper,
+    ) : RotateNowState
 
     /** Nothing is saved; the row explains how to fix that. */
     data object NoFavorites : RotateNowState
 
-    data class Failed(val error: ApplyError) : RotateNowState
+    data class Failed(
+        val error: ApplyError,
+    ) : RotateNowState
 }
 
 /** What the update section shows. */
@@ -92,13 +96,17 @@ sealed interface UpdateState {
     data object UpToDate : UpdateState
 
     /** A newer release APK is ready to download. */
-    data class Available(val update: AppUpdate) : UpdateState
+    data class Available(
+        val update: AppUpdate,
+    ) : UpdateState
 
     /** The APK is being downloaded; the installer opens when it lands. */
     data object Downloading : UpdateState
 
     /** Check or install failed; [error] drives the message. */
-    data class Failed(val error: UpdateError) : UpdateState
+    data class Failed(
+        val error: UpdateError,
+    ) : UpdateState
 }
 
 /** User-facing failure taxonomy for the update flow. */
@@ -194,7 +202,10 @@ class SettingsViewModel
             if (_state.value.rotateNow is RotateNowState.Running) return
             _state.update { it.copy(rotateNow = RotateNowState.Running) }
             rotationScope.launch {
-                val target = userPreferencesRepository.preferences.first().rotation.target
+                val target =
+                    userPreferencesRepository.preferences
+                        .first()
+                        .rotation.target
                 when (val result = rotator.rotateOnce(target)) {
                     is RotationResult.Success -> _state.update { it.copy(rotateNow = RotateNowState.Done(result.wallpaper)) }
 

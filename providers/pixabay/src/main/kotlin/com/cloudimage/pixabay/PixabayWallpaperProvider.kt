@@ -114,7 +114,12 @@ class PixabayWallpaperProvider : WallpaperProvider {
             providerId = ID,
             thumbUrl = webformatUrl.orEmpty(),
             fullUrl = fullHdUrl ?: largeImageUrl.orEmpty(),
-            title = tags.split(",").map(String::trim).filter(String::isNotEmpty).firstOrNull(),
+            title =
+                tags
+                    .split(",")
+                    .map(String::trim)
+                    .filter(String::isNotEmpty)
+                    .firstOrNull(),
             width = imageWidth,
             height = imageHeight,
             tags = tags.split(",").map(String::trim).filter(String::isNotEmpty),

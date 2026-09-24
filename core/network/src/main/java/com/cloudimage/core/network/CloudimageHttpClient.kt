@@ -65,15 +65,15 @@ class CloudimageHttpClient
         ): NetworkResult<HttpPayload> =
             withContext(Dispatchers.IO) {
                 val request =
-                    Request.Builder()
+                    Request
+                        .Builder()
                         .url(url)
                         .header(HEADER_USER_AGENT, USER_AGENT)
                         .apply {
                             for ((name, value) in extraHeaders) {
                                 header(name, value)
                             }
-                        }
-                        .build()
+                        }.build()
                 try {
                     okHttpClient.newCall(request).await().use { response ->
                         Success(

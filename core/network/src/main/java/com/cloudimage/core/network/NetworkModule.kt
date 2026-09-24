@@ -27,7 +27,8 @@ internal object NetworkModule {
     fun provideOkHttpClient(
         @NetworkDebugLogging debugLogging: Boolean,
     ): OkHttpClient =
-        OkHttpClient.Builder()
+        OkHttpClient
+            .Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
             .callTimeout(30, TimeUnit.SECONDS)
@@ -37,8 +38,7 @@ internal object NetworkModule {
                         HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC },
                     )
                 }
-            }
-            .build()
+            }.build()
 
     @Provides
     @Singleton

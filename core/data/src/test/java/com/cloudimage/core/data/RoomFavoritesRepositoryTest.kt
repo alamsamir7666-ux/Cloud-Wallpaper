@@ -110,16 +110,13 @@ private class FakeFavoriteDao : FavoriteDao {
     override fun observeIsFavorite(
         providerId: String,
         wallpaperId: String,
-    ): Flow<Boolean> {
-        return entities.map { list ->
+    ): Flow<Boolean> =
+        entities.map { list ->
             list.any { it.providerId == providerId && it.wallpaperId == wallpaperId }
         }
-    }
 
     override suspend fun isFavorite(
         providerId: String,
         wallpaperId: String,
-    ): Boolean {
-        return entities.value.any { it.providerId == providerId && it.wallpaperId == wallpaperId }
-    }
+    ): Boolean = entities.value.any { it.providerId == providerId && it.wallpaperId == wallpaperId }
 }

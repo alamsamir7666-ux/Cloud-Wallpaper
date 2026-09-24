@@ -22,8 +22,7 @@ internal class RoomFavoritesRepository
         private val favoriteDao: FavoriteDao,
     ) : FavoritesRepository {
         override fun observeFavorites(): Flow<List<Favorite>> =
-            favoriteDao.observeAll().map {
-                    entities ->
+            favoriteDao.observeAll().map { entities ->
                 entities.map { it.toFavorite() }
             }
 

@@ -174,16 +174,24 @@ class UnsplashWallpaperProvider : WallpaperProvider {
     )
 
     @Serializable
-    internal data class UserDto(val name: String? = null)
+    internal data class UserDto(
+        val name: String? = null,
+    )
 
     @Serializable
-    internal data class LinksDto(val html: String? = null)
+    internal data class LinksDto(
+        val html: String? = null,
+    )
 
     @Serializable
-    internal data class TagDto(val title: String? = null)
+    internal data class TagDto(
+        val title: String? = null,
+    )
 
     @Serializable
-    private data class SearchResponseDto(val results: List<PhotoDto> = emptyList())
+    private data class SearchResponseDto(
+        val results: List<PhotoDto> = emptyList(),
+    )
 
     private companion object {
         const val ID = "cloudimage.unsplash"

@@ -102,8 +102,7 @@ class BrowseViewModel
                     // restart the feed because the purity parameter changes.
                     if (!preferencesSeen || sfwChanged) restartSearch()
                     preferencesSeen = true
-                }
-                .launchIn(viewModelScope)
+                }.launchIn(viewModelScope)
 
             var sourcesSeen: List<SourceInfo>? = null
             sources.sources
@@ -116,8 +115,7 @@ class BrowseViewModel
                     val nowUsable = !available.orEmpty().isEmpty()
                     if (feedNeedsRetry && nowUsable && sourcesSeen.orEmpty().isEmpty()) restartSearch()
                     sourcesSeen = available
-                }
-                .launchIn(viewModelScope)
+                }.launchIn(viewModelScope)
         }
 
         /** Typing updates the field only — nothing loads until submit. */
@@ -145,14 +143,14 @@ class BrowseViewModel
             searchJob =
                 viewModelScope.launch {
                     _state.update { it.copy(isLoadingMore = true) }
-                    sources.search(effectiveQuery(), page)
+                    sources
+                        .search(effectiveQuery(), page)
                         .onSuccess { result ->
                             currentPage = page
                             _state.update { state ->
                                 state.appendPage(result)
                             }
-                        }
-                        .onFailure { error ->
+                        }.onFailure { error ->
                             _state.update { it.copy(isLoadingMore = false, error = error.toBrowseError()) }
                         }
                 }
@@ -180,7 +178,8 @@ class BrowseViewModel
             randomSeed = query.seed
             searchJob =
                 viewModelScope.launch {
-                    sources.search(query, page = 1)
+                    sources
+                        .search(query, page = 1)
                         .onSuccess { result ->
                             _state.update { state ->
                                 state.copy(
@@ -190,8 +189,7 @@ class BrowseViewModel
                                     error = null,
                                 )
                             }
-                        }
-                        .onFailure { error ->
+                        }.onFailure { error ->
                             _state.update { it.copy(isFirstLoading = false, error = error.toBrowseError()) }
                         }
                 }

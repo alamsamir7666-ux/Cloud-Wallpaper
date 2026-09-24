@@ -123,7 +123,12 @@ class UserPreferencesRepositoryTest {
 
             repository.setRotationInterval(7)
 
-            assertEquals(RotationSettings.DEFAULT_INTERVAL_MINUTES, repository.preferences.first().rotation.intervalMinutes)
+            assertEquals(
+                RotationSettings.DEFAULT_INTERVAL_MINUTES,
+                repository.preferences
+                    .first()
+                    .rotation.intervalMinutes,
+            )
         }
 
     @Test
@@ -133,7 +138,12 @@ class UserPreferencesRepositoryTest {
             val repository = UserPreferencesRepository(dataStore)
             dataStore.edit { it[stringPreferencesKey("rotation_target")] = "SIDEWAYS" }
 
-            assertEquals(RotationTarget.HOME, repository.preferences.first().rotation.target)
+            assertEquals(
+                RotationTarget.HOME,
+                repository.preferences
+                    .first()
+                    .rotation.target,
+            )
         }
 
     @Test

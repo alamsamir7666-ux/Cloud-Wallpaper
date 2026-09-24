@@ -18,13 +18,17 @@ import javax.inject.Singleton
 /** Outcome of one rotation attempt. */
 sealed interface RotationResult {
     /** A new wallpaper was applied to the target screen(s). */
-    data class Success(val wallpaper: Wallpaper) : RotationResult
+    data class Success(
+        val wallpaper: Wallpaper,
+    ) : RotationResult
 
     /** The user has no saved wallpapers; nothing was attempted. */
     data object NoWallpapers : RotationResult
 
     /** A wallpaper was picked but applying it failed. */
-    data class ApplyFailed(val error: ApplyError) : RotationResult
+    data class ApplyFailed(
+        val error: ApplyError,
+    ) : RotationResult
 }
 
 /**

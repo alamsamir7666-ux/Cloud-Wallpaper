@@ -15,13 +15,17 @@ import javax.inject.Singleton
 /** What one artwork batch request produced for Muzei. */
 sealed interface MuzeiBatch {
     /** Wallpapers to hand to Muzei, in play order. */
-    data class Artworks(val wallpapers: List<Wallpaper>) : MuzeiBatch
+    data class Artworks(
+        val wallpapers: List<Wallpaper>,
+    ) : MuzeiBatch
 
     /** Nothing to serve right now; Muzei keeps whatever it already shows. */
     data object Empty : MuzeiBatch
 
     /** A transient failure (offline, HTTP error) — worth retrying with backoff. */
-    data class Retryable(val reason: String) : MuzeiBatch
+    data class Retryable(
+        val reason: String,
+    ) : MuzeiBatch
 }
 
 /** Picks the next artwork batch for the Muzei source. */
@@ -55,7 +59,9 @@ class FavoriteMuzeiArtworkSelector
             val prefs = userPreferencesRepository.preferences.first()
             val allowed = allowedRatings(sfwOnly = prefs.sfwOnly)
             val favorites =
-                favoritesRepository.observeFavorites().first()
+                favoritesRepository
+                    .observeFavorites()
+                    .first()
                     .filter { it.wallpaper.contentRating in allowed }
                     .sortedBy { it.addedAtMillis }
 

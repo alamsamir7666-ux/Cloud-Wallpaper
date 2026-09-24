@@ -7,7 +7,9 @@ import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
 @HiltAndroidApp
-class CloudimageApplication : Application(), Configuration.Provider {
+class CloudimageApplication :
+    Application(),
+    Configuration.Provider {
     @Inject
     lateinit var bootstrapper: AppBootstrapper
 
@@ -27,7 +29,8 @@ class CloudimageApplication : Application(), Configuration.Provider {
 
     override val workManagerConfiguration: Configuration
         get() =
-            Configuration.Builder()
+            Configuration
+                .Builder()
                 .setWorkerFactory(workerFactory)
                 .build()
 }

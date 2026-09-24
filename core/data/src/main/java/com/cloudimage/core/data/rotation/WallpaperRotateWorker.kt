@@ -27,7 +27,10 @@ class WallpaperRotateWorker
             // Read the knobs at run time: the schedule (interval, constraints)
             // lives in the work spec, but the target screen may have changed
             // since the work was enqueued.
-            val target = userPreferencesRepository.preferences.first().rotation.target
+            val target =
+                userPreferencesRepository.preferences
+                    .first()
+                    .rotation.target
             return when (rotator.rotateOnce(target)) {
                 is RotationResult.Success -> Result.success()
 

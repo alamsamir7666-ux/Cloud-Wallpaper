@@ -9,16 +9,23 @@ package com.cloudimage.core.network
  */
 sealed interface NetworkError {
     /** The server answered, but with a non-2xx status code. */
-    data class Http(val code: Int, val url: String) : NetworkError
+    data class Http(
+        val code: Int,
+        val url: String,
+    ) : NetworkError
 
     /** The call exceeded its configured timeouts. */
     data object Timeout : NetworkError
 
     /** Connectivity problems: DNS, refused connections, SSL, IO... */
-    data class Io(val cause: java.io.IOException) : NetworkError
+    data class Io(
+        val cause: java.io.IOException,
+    ) : NetworkError
 
     /** The body arrived but is not the JSON shape we expected. */
-    data class Serialization(val cause: Exception) : NetworkError
+    data class Serialization(
+        val cause: Exception,
+    ) : NetworkError
 
     /**
      * The wallpaper source behind the call failed for its own reasons — it
@@ -28,7 +35,9 @@ sealed interface NetworkError {
      * Mapping source failures onto [Io] is what made the v1.0.0 release
      * tell users to "check your connection" while their internet was fine.
      */
-    data class Source(val reason: String) : NetworkError
+    data class Source(
+        val reason: String,
+    ) : NetworkError
 }
 
 /**
@@ -37,9 +46,13 @@ sealed interface NetworkError {
  * takes the feed down.
  */
 sealed interface NetworkResult<out T> {
-    data class Success<T>(val value: T) : NetworkResult<T>
+    data class Success<T>(
+        val value: T,
+    ) : NetworkResult<T>
 
-    data class Failure(val error: NetworkError) : NetworkResult<Nothing>
+    data class Failure(
+        val error: NetworkError,
+    ) : NetworkResult<Nothing>
 }
 
 /** Maps [NetworkResult.Success] while passing [NetworkResult.Failure] through. */

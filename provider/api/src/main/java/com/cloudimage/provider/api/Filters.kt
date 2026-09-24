@@ -58,10 +58,11 @@ class Filters private constructor(
         /** Builds from single-value pairs; later pairs under a key accumulate. */
         fun of(vararg selections: Pair<String, String>): Filters =
             of(
-                selections.groupBy(keySelector = {
-                        (key, _) ->
-                    key
-                }, valueTransform = { (_, value) -> value }).mapValues { (_, values) -> values.toSet() },
+                selections
+                    .groupBy(keySelector = { (key, _) ->
+                        key
+                    }, valueTransform = { (_, value) -> value })
+                    .mapValues { (_, values) -> values.toSet() },
             )
 
         /** Builds from explicit key-to-values mappings; empty sets are dropped. */

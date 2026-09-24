@@ -34,7 +34,9 @@ enum class ApplyError {
 sealed interface ApplyResult {
     data object Success : ApplyResult
 
-    data class Failure(val error: ApplyError) : ApplyResult
+    data class Failure(
+        val error: ApplyError,
+    ) : ApplyResult
 }
 
 /** Failure taxonomy for saving a wallpaper into storage. */
@@ -55,9 +57,14 @@ enum class SaveError {
  * to consume it. [fileName] is the bare display name of the written file.
  */
 sealed interface SaveResult {
-    data class Success(val uri: String, val fileName: String) : SaveResult
+    data class Success(
+        val uri: String,
+        val fileName: String,
+    ) : SaveResult
 
-    data class Failure(val error: SaveError) : SaveResult
+    data class Failure(
+        val error: SaveError,
+    ) : SaveResult
 }
 
 /**

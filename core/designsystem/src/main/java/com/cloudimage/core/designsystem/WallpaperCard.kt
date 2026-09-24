@@ -54,7 +54,8 @@ fun WallpaperCard(
         ) {
             AsyncImage(
                 model =
-                    ImageRequest.Builder(LocalContext.current)
+                    ImageRequest
+                        .Builder(LocalContext.current)
                         .data(wallpaper.thumbUrl)
                         .crossfade(durationMillis = 220)
                         .build(),

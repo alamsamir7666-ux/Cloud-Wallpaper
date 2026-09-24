@@ -67,7 +67,9 @@ class RepoStore(
     }
 
     @Serializable
-    private data class Repos(val repos: List<StoredRepo>)
+    private data class Repos(
+        val repos: List<StoredRepo>,
+    )
 }
 
 private val json = Json { prettyPrint = true }

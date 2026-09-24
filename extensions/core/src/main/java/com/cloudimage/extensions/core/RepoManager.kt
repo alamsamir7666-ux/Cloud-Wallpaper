@@ -12,9 +12,13 @@ import javax.inject.Singleton
 
 /** Outcome of adding a repository. */
 sealed interface AddRepoResult {
-    data class Added(val repo: StoredRepo) : AddRepoResult
+    data class Added(
+        val repo: StoredRepo,
+    ) : AddRepoResult
 
-    data class Failed(val error: RepoError) : AddRepoResult
+    data class Failed(
+        val error: RepoError,
+    ) : AddRepoResult
 }
 
 /**
@@ -169,7 +173,11 @@ class DefaultRepoManager
 
 /** Outcome of fetching a repo index. */
 sealed interface RepoIndexResult {
-    data class Ok(val index: RepoIndexDto) : RepoIndexResult
+    data class Ok(
+        val index: RepoIndexDto,
+    ) : RepoIndexResult
 
-    data class Failed(val error: RepoError) : RepoIndexResult
+    data class Failed(
+        val error: RepoError,
+    ) : RepoIndexResult
 }

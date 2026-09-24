@@ -22,7 +22,9 @@ object DetailDestination {
 
     /** Serializes the wallpaper into a navigation-safe route argument. */
     fun encode(wallpaper: Wallpaper): String =
-        Base64.getUrlEncoder().withoutPadding()
+        Base64
+            .getUrlEncoder()
+            .withoutPadding()
             .encodeToString(json.encodeToString(Wallpaper.serializer(), wallpaper).toByteArray())
 
     /** Parses the route argument back into a [Wallpaper], or null when invalid. */

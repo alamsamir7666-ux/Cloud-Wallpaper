@@ -28,13 +28,21 @@ import javax.inject.Inject
 
 /** One-time messages for the snackbar. */
 sealed interface ExtensionsEvent {
-    data class RepoAdded(val name: String) : ExtensionsEvent
+    data class RepoAdded(
+        val name: String,
+    ) : ExtensionsEvent
 
-    data class Installed(val name: String) : ExtensionsEvent
+    data class Installed(
+        val name: String,
+    ) : ExtensionsEvent
 
-    data class InstallFailed(val reason: String) : ExtensionsEvent
+    data class InstallFailed(
+        val reason: String,
+    ) : ExtensionsEvent
 
-    data class KeySaved(val provider: String) : ExtensionsEvent
+    data class KeySaved(
+        val provider: String,
+    ) : ExtensionsEvent
 }
 
 /** Immutable snapshot of the extension manager screen. */

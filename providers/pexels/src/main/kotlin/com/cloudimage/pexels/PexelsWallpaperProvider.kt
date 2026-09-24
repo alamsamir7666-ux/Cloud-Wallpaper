@@ -83,7 +83,12 @@ class PexelsWallpaperProvider : WallpaperProvider {
         runCatching {
             val url =
                 buildString {
-                    append(BASE_URL).append(path).append("?per_page=").append(PER_PAGE).append("&page=").append(page)
+                    append(BASE_URL)
+                        .append(path)
+                        .append("?per_page=")
+                        .append(PER_PAGE)
+                        .append("&page=")
+                        .append(page)
                     if (query != null) {
                         append("&query=").append(encode(query))
                     }

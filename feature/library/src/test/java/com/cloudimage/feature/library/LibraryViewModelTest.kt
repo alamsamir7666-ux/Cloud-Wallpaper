@@ -64,7 +64,10 @@ class LibraryViewModelTest {
 
             assertEquals(
                 listOf("new"),
-                viewModel.state.first { it.favorites.isNotEmpty() }.favorites.map { it.wallpaper.id },
+                viewModel.state
+                    .first { it.favorites.isNotEmpty() }
+                    .favorites
+                    .map { it.wallpaper.id },
             )
         }
 
@@ -78,7 +81,10 @@ class LibraryViewModelTest {
 
             assertEquals(
                 listOf("w1"),
-                viewModel.state.first { it.history.isNotEmpty() }.history.map { it.wallpaper.id },
+                viewModel.state
+                    .first { it.history.isNotEmpty() }
+                    .history
+                    .map { it.wallpaper.id },
             )
         }
 
@@ -92,7 +98,12 @@ class LibraryViewModelTest {
 
             viewModel.removeFromFavorites(saved)
 
-            assertTrue(viewModel.state.first { !it.isLoading && it.favorites.isEmpty() }.favorites.isEmpty())
+            assertTrue(
+                viewModel.state
+                    .first { !it.isLoading && it.favorites.isEmpty() }
+                    .favorites
+                    .isEmpty(),
+            )
         }
 
     @Test

@@ -70,7 +70,9 @@ class ExtensionWallpaperSources
                             is LoadResult.Loaded ->
                                 SourceInfo(
                                     id = manifest.id,
-                                    name = loaded.provider.meta.name.ifBlank { manifest.name },
+                                    name =
+                                        loaded.provider.meta.name
+                                            .ifBlank { manifest.name },
                                     requiresApiKey = loaded.provider.meta.requiresApiKey,
                                 )
                             is LoadResult.Failed -> {
@@ -139,7 +141,8 @@ class ExtensionWallpaperSources
             }
 
         private suspend fun readyProviders(): List<WallpaperProvider> =
-            extensions.installed.value.orEmpty()
+            extensions.installed.value
+                .orEmpty()
                 .filter { it.status == ExtensionStatus.READY }
                 .mapNotNull { extension ->
                     when (val loaded = extensions.providerFor(extension)) {
@@ -183,14 +186,15 @@ class ExtensionWallpaperSources
                 selections["category"] = categories.mapTo(mutableSetOf()) { it.name.lowercase() }
             }
             val purity =
-                contentRatings.mapNotNull { rating ->
-                    when (rating) {
-                        ContentRating.SFW -> "sfw"
-                        ContentRating.SKETCHY -> "sketchy"
-                        // Never requestable in V1; the post-filter enforces it anyway.
-                        ContentRating.NSFW -> null
-                    }
-                }.toSet()
+                contentRatings
+                    .mapNotNull { rating ->
+                        when (rating) {
+                            ContentRating.SFW -> "sfw"
+                            ContentRating.SKETCHY -> "sketchy"
+                            // Never requestable in V1; the post-filter enforces it anyway.
+                            ContentRating.NSFW -> null
+                        }
+                    }.toSet()
             if (purity.isNotEmpty()) {
                 selections["purity"] = purity
             }

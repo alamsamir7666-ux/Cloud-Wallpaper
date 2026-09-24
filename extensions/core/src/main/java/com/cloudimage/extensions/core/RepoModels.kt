@@ -56,8 +56,12 @@ sealed interface RepoError {
     data object InvalidUrl : RepoError
 
     /** The location answered, but the payload is not a valid index. */
-    data class BadIndex(val reason: String) : RepoError
+    data class BadIndex(
+        val reason: String,
+    ) : RepoError
 
     /** The fetch or download failed at the network level. */
-    data class Network(val cause: com.cloudimage.core.network.NetworkError) : RepoError
+    data class Network(
+        val cause: com.cloudimage.core.network.NetworkError,
+    ) : RepoError
 }
