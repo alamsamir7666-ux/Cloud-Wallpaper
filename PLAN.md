@@ -155,5 +155,30 @@ on principle).
   provider kept public with its no-arg constructor, worker kept by name;
   plugin ABI audit 0 unresolved over 5,603 host classes. 231 debug unit
   tests, 0 failures (19 new). Release APK 2.82 MB.
-  Remaining v1.1 backlog: toolchain debt batch (never mixed into
-  patches), TV UI, cloud sync.
+- **2026-09-24 — v1.0.5 shipped.** Toolchain debt batch, the v1.1 roadmap
+  item pulled forward with nothing feature-shaped mixed in: AGP 8.7.3 →
+  9.4.1 on Gradle 8.9 → 9.7.1, Kotlin 2.0.21 → 2.4.20 through AGP 9's
+  built-in Kotlin (the org.jetbrains.kotlin.android plugin is gone — AGP 9
+  makes stacking it an error; the built-in Kotlin runs 2.4.20 via the
+  buildscript classpath override in the root build file, alongside KSP
+  2.3.12), the compilerOptions DSL migration (kotlinOptions is removed in
+  Kotlin 2.4), compileSdk/targetSdk 35 → 37, and the gated library floor:
+  Hilt 2.60.1 + androidx.hilt 1.4.0, Compose BOM 2026.09.00 (foundation
+  1.12.1, material3 1.4.0), Room 2.8.5, kotlinx-serialization 1.11.0,
+  ktlint-gradle 14.2.0 (with a repo-wide auto-format pass for its new
+  rules), and the standalone d8 used to dex provider packages aligned to
+  r8 9.4.24. AGP 9 migrations: the bundled-extensions Sync became
+  SyncBundledExtensionsTask in build-logic (Gradle 9 cannot instantiate
+  script-declared task classes) wired through the Variant API's
+  addGeneratedSourceDirectory, which also carries the mergeAssets task
+  dependency the old matching block used to; the engine's test-fixture
+  resources moved to the new source-set DSL (AGP 9 rejects Provider
+  instances on the legacy one); Gradle 9.6's error-level
+  `configurations.creating`/`tasks.registering` delegates became direct
+  create/register calls. CI unchanged (AGP 9 still only needs JDK 17).
+  Known deprecations parked for the next batch: hiltViewModel's move to
+  androidx.hilt.lifecycle.viewmodel.compose, TabRow → PrimaryTabRow.
+  Plugin ABI intact under the new R8: audit clean — 5,518 host classes,
+  wallhaven 27 classes / 32 external refs, 0 unresolved. 426 unit tests
+  (231 debug + 156 release), 0 failures. Release APK 2.96 MB.
+  Remaining v1.1 backlog: deprecation cleanup, TV UI, cloud sync.
