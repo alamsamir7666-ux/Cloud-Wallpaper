@@ -1,5 +1,4 @@
-import java.security.MessageDigest
-import java.util.zip.ZipFile
+import com.cloudimage.buildlogic.SyncBundledExtensionsTask
 
 // Release signing material arrives via environment variables (CI secrets or
 // a local shell); nothing key-shaped is ever committed.
@@ -22,8 +21,8 @@ android {
 
     defaultConfig {
         applicationId = "com.cloudimage.app"
-        versionCode = 5
-        versionName = "1.0.4"
+        versionCode = 6
+        versionName = "1.0.5"
     }
 
     buildFeatures {
@@ -59,47 +58,35 @@ android {
             }
         }
     }
-
-    // The bundled default providers live in a generated assets dir that the
-    // sync task below fills from the provider modules' packaged zips.
-    sourceSets {
-        getByName("main") {
-            assets.srcDir(layout.buildDirectory.dir("generated/bundledExtensions"))
-        }
-    }
 }
 
 // Consumes the packaged (dexed) provider zips of every bundled provider and
 // stages them, plus a generated bundled.json manifest with ids + sha256s,
 // into the app's assets — a fresh install reconciles them through the
 // normal engine at first start.
-val bundledExtensions: Configuration by configurations.creating {
-    isCanBeConsumed = false
-    isCanBeResolved = true
-}
-
-val syncBundledExtensions by tasks.registering(Sync::class) {
-    from(bundledExtensions)
-    into(layout.buildDirectory.dir("generated/bundledExtensions"))
-    doLast {
-        val dir = layout.buildDirectory.dir("generated/bundledExtensions").get().asFile
-        val zips = dir.listFiles { file -> file.extension == "zip" }.orEmpty()
-        val manifest =
-            zips.joinToString(prefix = "[\n", separator = ",\n", postfix = "\n]") { zip ->
-                val id = readExtensionId(zip)
-                val sha = sha256(zip)
-                """  {"id": "$id", "fileName": "${zip.name}", "sha256": "$sha"}"""
-            }
-        File(dir, "bundled.json").writeText(manifest)
+//
+// The task class lives in build-logic (Gradle 9 cannot instantiate task
+// classes declared inside build scripts) and exposes its output as a
+// DirectoryProperty so it can be wired through the Variant API — AGP 9
+// forbids Provider instances on the legacy SourceSet DSL, and
+// addGeneratedSourceDirectory carries the task dependency to asset merging
+// itself, so the old merge/lint `dependsOn` matching block is gone.
+val bundledExtensions =
+    configurations.create("bundledExtensions") {
+        isCanBeConsumed = false
+        isCanBeResolved = true
     }
-}
 
-tasks.matching {
-    (it.name.contains("merge", ignoreCase = true) && it.name.endsWith("Assets")) ||
-        it.name.startsWith("lintVitalAnalyze") ||
-        it.name.startsWith("generateReleaseLintVitalReportModel")
-}.configureEach {
-    dependsOn(syncBundledExtensions)
+val syncBundledExtensions =
+    tasks.register<SyncBundledExtensionsTask>("syncBundledExtensions") {
+        packages.from(bundledExtensions)
+        output.set(layout.buildDirectory.dir("generated/bundledExtensions"))
+    }
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(syncBundledExtensions) { it.output }
+    }
 }
 
 dependencies {
@@ -133,28 +120,4 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.androidx.datastore.preferences)
     testImplementation(libs.junit)
-}
-
-/** Reads the `id` field out of the extension.json inside a package zip. */
-fun readExtensionId(zip: File): String {
-    val text =
-        ZipFile(zip).use { archive ->
-            val entry = archive.getEntry("extension.json") ?: error("${zip.name} has no extension.json")
-            archive.getInputStream(entry).bufferedReader().readText()
-        }
-    return text.substringAfter("\"id\"").substringAfter(':').substringAfter('"').substringBefore('"')
-}
-
-/** Hex sha256 of a file, matching the engine's checksum format. */
-fun sha256(file: File): String {
-    val digest = MessageDigest.getInstance("SHA-256")
-    file.inputStream().use { input ->
-        val buffer = ByteArray(64 * 1024)
-        while (true) {
-            val read = input.read(buffer)
-            if (read < 0) break
-            digest.update(buffer, 0, read)
-        }
-    }
-    return digest.digest().joinToString("") { "%02x".format(it) }
 }

@@ -16,8 +16,9 @@ dependencies {
 // URL classloader seam. Publishing a custom configuration (instead of the
 // default runtimeElements) keeps provider:api's jar out of the payload —
 // the host supplies the contract at runtime, exactly like production.
-val fixtureJar: Configuration by configurations.creating {
-    isCanBeConsumed = true
-    isCanBeResolved = false
-    outgoing.artifact(tasks.named("jar"))
-}
+val fixtureJar =
+    configurations.create("fixtureJar") {
+        isCanBeConsumed = true
+        isCanBeResolved = false
+        outgoing.artifact(tasks.named("jar"))
+    }

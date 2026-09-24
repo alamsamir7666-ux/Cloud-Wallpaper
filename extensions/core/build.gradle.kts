@@ -1,3 +1,5 @@
+import com.android.build.api.dsl.LibraryExtension
+
 plugins {
     id("cloudimage.android.library")
     id("cloudimage.hilt")
@@ -6,28 +8,34 @@ plugins {
 
 android {
     namespace = "com.cloudimage.extensions.core"
+}
 
-    // The engine's tests install a real extension package through the URL
-    // classloader seam; the payload classes come from :fixture:demo-provider.
-    sourceSets {
-        getByName("test") {
-            resources.srcDir(layout.buildDirectory.dir("generated/test-fixtures"))
-        }
+// The engine's tests install a real extension package through the URL
+// classloader seam; the payload classes come from :fixture:demo-provider.
+// AGP 9 removed the legacy source-set types behind the default `android
+// { sourceSets }` accessor, so the test-resources dir is configured through
+// the new public DSL interface with a plain path string (Providers are
+// rejected); the task dependency is carried by the matching block below.
+extensions.configure<LibraryExtension> {
+    sourceSets.getByName("test") {
+        resources.srcDir("build/generated/test-fixtures")
     }
 }
 
 // Brings in exactly the demo fixture jar (not provider:api's, which the host
 // supplies at runtime) and re-exposes it as a test resource.
-val demoProvider: Configuration by configurations.creating {
-    isCanBeConsumed = false
-    isCanBeResolved = true
-}
+val demoProvider =
+    configurations.create("demoProvider") {
+        isCanBeConsumed = false
+        isCanBeResolved = true
+    }
 
-val copyDemoProviderFixture by tasks.registering(Copy::class) {
-    from(demoProvider)
-    into(layout.buildDirectory.dir("generated/test-fixtures"))
-    rename { "demo-provider.jar" }
-}
+val copyDemoProviderFixture =
+    tasks.register<Copy>("copyDemoProviderFixture") {
+        from(demoProvider)
+        into(layout.buildDirectory.dir("generated/test-fixtures"))
+        rename { "demo-provider.jar" }
+    }
 
 tasks.matching { it.name.lowercase().contains("test") }.configureEach {
     dependsOn(copyDemoProviderFixture)
