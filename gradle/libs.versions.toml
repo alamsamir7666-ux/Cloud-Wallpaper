@@ -4,6 +4,8 @@ kotlin = "2.0.21"
 ksp = "2.0.21-1.0.28"
 hilt = "2.52"
 hiltNavigationCompose = "1.2.0"
+androidxHilt = "1.2.0"
+work = "2.9.1"
 coreKtx = "1.13.1"
 splashscreen = "1.0.1"
 activityCompose = "1.9.2"
@@ -46,6 +48,11 @@ androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling
 hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hilt" }
 hilt-compiler = { module = "com.google.dagger:hilt-android-compiler", version.ref = "hilt" }
 hilt-navigation-compose = { module = "androidx.hilt:hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
+
+# Background work (auto-rotate, v1.0.3)
+androidx-hilt-work = { module = "androidx.hilt:hilt-work", version.ref = "androidxHilt" }
+androidx-hilt-compiler = { module = "androidx.hilt:hilt-compiler", version.ref = "androidxHilt" }
+androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 
 # Kotlin ecosystem
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }

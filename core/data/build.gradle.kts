@@ -25,6 +25,9 @@ dependencies {
     implementation(project(":extensions:core"))
     implementation(project(":provider:api"))
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.work.runtime)
+    implementation(libs.androidx.hilt.work)
+    ksp(libs.androidx.hilt.compiler)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
 
@@ -35,4 +38,5 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core.ktx)
     testImplementation(libs.androidx.test.ext.junit)
+    testImplementation(libs.androidx.datastore.preferences)
 }

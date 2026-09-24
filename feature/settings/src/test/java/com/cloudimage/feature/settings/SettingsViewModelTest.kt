@@ -1,10 +1,14 @@
 package com.cloudimage.feature.settings
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import com.cloudimage.core.data.repository.ApplyError
+import com.cloudimage.core.data.rotation.RotationResult
 import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.Favorite
 import com.cloudimage.core.model.HistoryAction
 import com.cloudimage.core.model.HistoryEntry
+import com.cloudimage.core.model.RotationSettings
+import com.cloudimage.core.model.RotationTarget
 import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.core.network.NetworkError
 import com.cloudimage.core.network.NetworkResult
@@ -12,6 +16,7 @@ import com.cloudimage.core.testing.FakeAppUpdateRepository
 import com.cloudimage.core.testing.FakeFavoritesRepository
 import com.cloudimage.core.testing.FakeHistoryRepository
 import com.cloudimage.core.testing.FakeUpdateInstaller
+import com.cloudimage.core.testing.FakeWallpaperRotator
 import com.cloudimage.core.testing.MainDispatcherRule
 import com.cloudimage.core.testing.appUpdate
 import com.cloudimage.core.testing.installFailure
@@ -62,6 +67,7 @@ class SettingsViewModelTest {
             assertTrue(state.dynamicColorsEnabled)
             assertEquals(2, state.gridColumns)
             assertEquals("1.2.3", state.versionName)
+            assertEquals(RotationSettings(), state.rotation)
         }
 
     @Test
@@ -185,20 +191,101 @@ class SettingsViewModelTest {
             )
         }
 
+    // ---- Wallpaper auto-rotation (v1.0.3) ----
+
+    @Test
+    fun rotationKnobsWriteThroughTheDataStore() =
+        runTest {
+            val preferences = newPreferences()
+            val viewModel = newViewModel(preferences = preferences)
+
+            viewModel.setRotationEnabled(true)
+            viewModel.setRotationInterval(720)
+            viewModel.setRotationWifiOnly(true)
+            viewModel.setRotationTarget(RotationTarget.LOCK)
+
+            val stored = preferences.preferences.first().rotation
+            assertTrue(stored.enabled)
+            assertEquals(720, stored.intervalMinutes)
+            assertTrue(stored.wifiOnly)
+            assertEquals(RotationTarget.LOCK, stored.target)
+        }
+
+    @Test
+    fun rotateNowSurfacesTheAppliedWallpaper() =
+        runTest {
+            val rotator = FakeWallpaperRotator()
+            val applied = wallpaper(id = "applied")
+            rotator.result = RotationResult.Success(applied)
+            val viewModel = newViewModel(rotator = rotator)
+
+            viewModel.rotateNow()
+
+            val state = viewModel.state.first { it.rotateNow is RotateNowState.Done }
+            assertEquals(applied, (state.rotateNow as RotateNowState.Done).wallpaper)
+            assertEquals(RotationTarget.HOME, rotator.targets.single())
+        }
+
+    @Test
+    fun rotateNowUsesTheChosenTarget() =
+        runTest {
+            val rotator = FakeWallpaperRotator()
+            val preferences = newPreferences()
+            preferences.setRotationTarget(RotationTarget.BOTH)
+            val viewModel = newViewModel(preferences = preferences, rotator = rotator)
+
+            viewModel.rotateNow()
+
+            // The fake's default outcome: no saved wallpapers. Reaching it
+            // proves rotateOnce already ran with the stored target.
+            viewModel.state.first { it.rotateNow is RotateNowState.NoFavorites }
+            assertEquals(RotationTarget.BOTH, rotator.targets.single())
+        }
+
+    @Test
+    fun rotateNowWithNoFavoritesSurfacesTheHint() =
+        runTest {
+            val rotator = FakeWallpaperRotator()
+            rotator.result = RotationResult.NoWallpapers
+            val viewModel = newViewModel(rotator = rotator)
+
+            viewModel.rotateNow()
+
+            assertTrue(viewModel.state.first { it.rotateNow is RotateNowState.NoFavorites }.rotateNow is RotateNowState.NoFavorites)
+        }
+
+    @Test
+    fun rotateNowFailureSurfacesTheError() =
+        runTest {
+            val rotator = FakeWallpaperRotator()
+            rotator.result = RotationResult.ApplyFailed(ApplyError.OFFLINE)
+            val viewModel = newViewModel(rotator = rotator)
+
+            viewModel.rotateNow()
+
+            assertEquals(
+                ApplyError.OFFLINE,
+                (viewModel.state.first { it.rotateNow is RotateNowState.Failed }.rotateNow as RotateNowState.Failed).error,
+            )
+        }
+
     private fun TestScope.newViewModel(
         favorites: FakeFavoritesRepository = FakeFavoritesRepository(),
         history: FakeHistoryRepository = FakeHistoryRepository(),
         preferences: UserPreferencesRepository = newPreferences(),
         updates: FakeAppUpdateRepository = FakeAppUpdateRepository(),
         installer: FakeUpdateInstaller = FakeUpdateInstaller(),
+        rotator: FakeWallpaperRotator = FakeWallpaperRotator(),
     ): SettingsViewModel =
         SettingsViewModel(
             userPreferencesRepository = preferences,
             appUpdateRepository = updates,
             updateInstaller = installer,
+            rotator = rotator,
             favoritesRepository = favorites,
             historyRepository = history,
             versionName = VersionName("1.2.3"),
+            rotationScope = backgroundScope,
         )
 
     private fun TestScope.newPreferences(): UserPreferencesRepository =

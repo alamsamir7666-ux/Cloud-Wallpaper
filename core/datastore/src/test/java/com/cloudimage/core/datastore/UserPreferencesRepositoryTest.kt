@@ -1,7 +1,11 @@
 package com.cloudimage.core.datastore
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import app.cash.turbine.test
+import com.cloudimage.core.model.RotationSettings
+import com.cloudimage.core.model.RotationTarget
 import com.cloudimage.core.model.UserPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
@@ -71,6 +75,75 @@ class UserPreferencesRepositoryTest {
             val preferences = repository.preferences.first()
             assertTrue(preferences.onboardingCompleted)
             assertFalse(preferences.sfwOnly)
+        }
+
+    // ---- Wallpaper auto-rotation (v1.0.3) ----
+
+    @Test
+    fun rotationIsDisabledByDefault() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            assertEquals(RotationSettings(), repository.preferences.first().rotation)
+        }
+
+    @Test
+    fun rotationKnobsWriteAndFlow() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            repository.preferences.test {
+                assertEquals(RotationSettings(), awaitItem().rotation)
+
+                repository.setRotationEnabled(true)
+                assertEquals(RotationSettings(enabled = true), awaitItem().rotation)
+
+                repository.setRotationInterval(1440)
+                assertEquals(RotationSettings(enabled = true, intervalMinutes = 1440), awaitItem().rotation)
+
+                repository.setRotationWifiOnly(true)
+                assertEquals(
+                    RotationSettings(enabled = true, intervalMinutes = 1440, wifiOnly = true),
+                    awaitItem().rotation,
+                )
+
+                repository.setRotationTarget(RotationTarget.BOTH)
+                assertEquals(
+                    RotationSettings(enabled = true, intervalMinutes = 1440, wifiOnly = true, target = RotationTarget.BOTH),
+                    awaitItem().rotation,
+                )
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun unofferedIntervalsFallBackToTheDefault() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            repository.setRotationInterval(7)
+
+            assertEquals(RotationSettings.DEFAULT_INTERVAL_MINUTES, repository.preferences.first().rotation.intervalMinutes)
+        }
+
+    @Test
+    fun unknownStoredTargetNamesDegradeToHome() =
+        runTest {
+            val dataStore = newDataStore(backgroundScope)
+            val repository = UserPreferencesRepository(dataStore)
+            dataStore.edit { it[stringPreferencesKey("rotation_target")] = "SIDEWAYS" }
+
+            assertEquals(RotationTarget.HOME, repository.preferences.first().rotation.target)
+        }
+
+    @Test
+    fun theRotationCursorPersists() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            repository.setLastRotationKey("wallhaven/e1abc2")
+
+            assertEquals("wallhaven/e1abc2", repository.lastRotationKey.first())
         }
 
     private fun newDataStore(scope: CoroutineScope) =

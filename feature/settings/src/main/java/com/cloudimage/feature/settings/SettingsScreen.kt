@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,10 +16,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.Autorenew
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ErrorOutline
@@ -26,7 +30,9 @@ import androidx.compose.material.icons.rounded.HealthAndSafety
 import androidx.compose.material.icons.rounded.HistoryEdu
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -51,7 +57,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.cloudimage.core.data.repository.ApplyError
 import com.cloudimage.core.model.AppUpdate
+import com.cloudimage.core.model.RotationSettings
+import com.cloudimage.core.model.RotationTarget
 
 /** Where the "Source code" row points; also used by onboarding-free deep links. */
 private const val SOURCE_URL = "https://github.com/alamsamir7666-ux/Cloud-Wallpaper"
@@ -116,6 +125,45 @@ fun SettingsScreen(
             )
         }
         item { GridColumnsRow(selected = state.gridColumns, onSelect = viewModel::setGridColumns) }
+
+        item { SectionHeader(R.string.settings_section_rotation) }
+        item {
+            SwitchRow(
+                icon = Icons.Rounded.Autorenew,
+                titleRes = R.string.settings_rotation_title,
+                bodyRes = R.string.settings_rotation_body,
+                checked = state.rotation.enabled,
+                onCheckedChange = viewModel::setRotationEnabled,
+                modifier = Modifier.testTag("settings:rotation"),
+            )
+        }
+        if (state.rotation.enabled) {
+            if (state.favoriteCount == 0) {
+                item { RotationEmptyHint() }
+            }
+            item {
+                RotationIntervalRow(
+                    selected = state.rotation.intervalMinutes,
+                    onSelect = viewModel::setRotationInterval,
+                )
+            }
+            item {
+                RotationTargetRow(
+                    selected = state.rotation.target,
+                    onSelect = viewModel::setRotationTarget,
+                )
+            }
+            item {
+                SwitchRow(
+                    icon = Icons.Rounded.Wifi,
+                    titleRes = R.string.settings_rotation_wifi_title,
+                    bodyRes = R.string.settings_rotation_wifi_body,
+                    checked = state.rotation.wifiOnly,
+                    onCheckedChange = viewModel::setRotationWifiOnly,
+                )
+            }
+            item { RotateNowRow(state = state, onRotate = viewModel::rotateNow) }
+        }
 
         item { SectionHeader(R.string.settings_section_data) }
         item {
@@ -471,3 +519,177 @@ private fun LinkRow(
         )
     }
 }
+
+@Composable
+private fun RotationEmptyHint(modifier: Modifier = Modifier) {
+    Text(
+        text = stringResource(R.string.settings_rotation_empty),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 4.dp),
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RotationIntervalRow(
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.settings_rotation_interval_title),
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(top = 10.dp),
+        ) {
+            RotationSettings.INTERVAL_CHOICES_MINUTES.forEach { minutes ->
+                FilterChip(
+                    selected = minutes == selected,
+                    onClick = { onSelect(minutes) },
+                    label = { Text(intervalLabel(minutes)) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun intervalLabel(minutes: Int): String =
+    if (minutes < 60) {
+        stringResource(R.string.settings_rotation_interval_minutes, minutes)
+    } else {
+        stringResource(R.string.settings_rotation_interval_hours, minutes / 60)
+    }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RotationTargetRow(
+    selected: RotationTarget,
+    onSelect: (RotationTarget) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.settings_rotation_target_title),
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(top = 10.dp),
+        ) {
+            RotationTarget.entries.forEach { target ->
+                FilterChip(
+                    selected = target == selected,
+                    onClick = { onSelect(target) },
+                    label = { Text(target.label()) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RotationTarget.label(): String =
+    when (this) {
+        RotationTarget.HOME -> stringResource(R.string.settings_rotation_target_home)
+        RotationTarget.LOCK -> stringResource(R.string.settings_rotation_target_lock)
+        RotationTarget.BOTH -> stringResource(R.string.settings_rotation_target_both)
+    }
+
+/**
+ * The immediate-action row: one tap applies the next saved wallpaper now,
+ * with inline feedback of what happened (which one, or why it failed).
+ */
+@Composable
+private fun RotateNowRow(
+    state: SettingsUiState,
+    onRotate: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+    ) {
+        OutlinedButton(
+            onClick = onRotate,
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .testTag("settings:rotation_now"),
+        ) {
+            if (state.rotateNow is RotateNowState.Running) {
+                CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(16.dp),
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Rounded.Refresh,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(stringResource(R.string.settings_rotation_now))
+        }
+        val feedback = state.rotateNow.message()
+        if (feedback != null) {
+            Text(
+                text = feedback,
+                style = MaterialTheme.typography.bodySmall,
+                color =
+                    if (state.rotateNow is RotateNowState.Failed) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+    }
+}
+
+/** Inline feedback under the "rotate now" button; null keeps the row quiet. */
+@Composable
+private fun RotateNowState.message(): String? =
+    when (this) {
+        RotateNowState.Idle -> null
+        RotateNowState.Running -> stringResource(R.string.settings_rotation_now_running)
+        is RotateNowState.Done -> {
+            val title = wallpaper.title ?: wallpaper.providerId
+            stringResource(R.string.settings_rotation_now_done, title)
+        }
+        RotateNowState.NoFavorites -> stringResource(R.string.settings_rotation_now_empty)
+        is RotateNowState.Failed -> error.message()
+    }
+
+@Composable
+private fun ApplyError.message(): String =
+    when (this) {
+        ApplyError.OFFLINE -> stringResource(R.string.settings_rotation_error_offline)
+        ApplyError.TIMEOUT -> stringResource(R.string.settings_rotation_error_timeout)
+        ApplyError.HTTP -> stringResource(R.string.settings_rotation_error_http)
+        ApplyError.DECODE -> stringResource(R.string.settings_rotation_error_decode)
+        ApplyError.UNSUPPORTED -> stringResource(R.string.settings_rotation_error_unsupported)
+        ApplyError.IO -> stringResource(R.string.settings_rotation_error_io)
+    }

@@ -2,6 +2,8 @@ package com.cloudimage.app
 
 import android.content.Context
 import com.cloudimage.core.data.repository.WallpaperSources
+import com.cloudimage.core.data.rotation.RotationScheduler
+import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.extensions.core.BundledExtensionsInstaller
 import com.cloudimage.extensions.core.BundledPackage
 import com.cloudimage.extensions.core.BundledPackageSource
@@ -9,6 +11,8 @@ import com.cloudimage.extensions.core.ExtensionRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -28,8 +32,9 @@ private data class BundledEntry(
 /**
  * Startup pass: installs the provider packages this APK bundles in its
  * assets (see the sync task in app/build.gradle.kts), refreshes the
- * engine, and primes the browse sources so the first browse tab visit
- * has content.
+ * engine, primes the browse sources so the first browse tab visit
+ * has content, and keeps the periodic wallpaper rotation in lockstep
+ * with the stored settings.
  *
  * Runs once per process start on a background dispatcher; the reconcile
  * pass is idempotent, so an app update simply reinstalls whichever
@@ -42,6 +47,8 @@ class AppBootstrapper
         @ApplicationContext private val context: Context,
         private val repository: ExtensionRepository,
         private val sources: WallpaperSources,
+        private val rotationScheduler: RotationScheduler,
+        private val userPreferencesRepository: UserPreferencesRepository,
         private val appScope: CoroutineScope,
     ) {
         fun start() {
@@ -55,6 +62,15 @@ class AppBootstrapper
                     ).reconcile(repository)
                 }
                 sources.refresh()
+            }
+
+            // Rotation: every settings change re-syncs the periodic work;
+            // unchanged settings leave the running cycle untouched.
+            appScope.launch {
+                userPreferencesRepository.preferences
+                    .map { it.rotation }
+                    .distinctUntilChanged()
+                    .collect { settings -> rotationScheduler.sync(settings) }
             }
         }
 

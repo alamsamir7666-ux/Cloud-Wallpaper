@@ -77,11 +77,13 @@ data class HistoryEntry(
     val atMillis: Long,
 )
 
-/** User settings surfaced in Part 7; persisted via Preferences DataStore. */
+/** User settings surfaced in Part 7 and beyond; persisted via Preferences DataStore. */
 data class UserPreferences(
     val sfwOnly: Boolean = true,
     val dynamicColorsEnabled: Boolean = true,
     val gridColumns: Int = 2,
     /** False until the user finishes the first-run welcome flow. */
     val onboardingCompleted: Boolean = false,
+    /** Wallpaper auto-rotation (v1.0.3). */
+    val rotation: RotationSettings = RotationSettings(),
 )

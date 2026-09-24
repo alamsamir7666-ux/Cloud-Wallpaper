@@ -11,6 +11,8 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
+import com.cloudimage.core.model.RotationSettings
+import com.cloudimage.core.model.RotationTarget
 import com.cloudimage.core.model.UserPreferences
 import dagger.Module
 import dagger.Provides
@@ -30,10 +32,39 @@ private object PreferencesKeys {
     val GRID_COLUMNS = intPreferencesKey("grid_columns")
     val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
     val PROVIDER_KEY_IDS = stringSetPreferencesKey("provider_key_ids")
+
+    // Wallpaper auto-rotation (v1.0.3).
+    val ROTATION_ENABLED = booleanPreferencesKey("rotation_enabled")
+    val ROTATION_INTERVAL = intPreferencesKey("rotation_interval_minutes")
+    val ROTATION_WIFI_ONLY = booleanPreferencesKey("rotation_wifi_only")
+    val ROTATION_TARGET = stringPreferencesKey("rotation_target")
+    val LAST_ROTATION_KEY = stringPreferencesKey("last_rotation_key")
 }
 
 private const val PREFERENCES_FILE = "user_preferences"
 private const val PROVIDER_KEY_PREFIX = "provider_key."
+
+/**
+ * Reads the rotation knobs out of a preferences snapshot. Unknown or stale
+ * values (a cadence this build no longer offers, a target name from a
+ * settings backup) degrade to defaults instead of crashing or blocking.
+ */
+private fun Preferences.toRotationSettings(): RotationSettings {
+    val interval =
+        this[PreferencesKeys.ROTATION_INTERVAL]
+            ?.takeIf { it in RotationSettings.INTERVAL_CHOICES_MINUTES }
+            ?: RotationSettings.DEFAULT_INTERVAL_MINUTES
+    val target =
+        this[PreferencesKeys.ROTATION_TARGET]
+            ?.let { stored -> runCatching { RotationTarget.valueOf(stored) }.getOrNull() }
+            ?: RotationTarget.HOME
+    return RotationSettings(
+        enabled = this[PreferencesKeys.ROTATION_ENABLED] ?: false,
+        intervalMinutes = interval,
+        wifiOnly = this[PreferencesKeys.ROTATION_WIFI_ONLY] ?: false,
+        target = target,
+    )
+}
 
 /**
  * Reads and writes user settings via Preferences DataStore.
@@ -64,6 +95,7 @@ class UserPreferencesRepository
                         dynamicColorsEnabled = prefs[PreferencesKeys.DYNAMIC_COLORS] ?: true,
                         gridColumns = prefs[PreferencesKeys.GRID_COLUMNS] ?: 2,
                         onboardingCompleted = prefs[PreferencesKeys.ONBOARDING_COMPLETED] ?: false,
+                        rotation = prefs.toRotationSettings(),
                     )
                 }
 
@@ -82,6 +114,45 @@ class UserPreferencesRepository
         /** Marks the first-run welcome flow as finished. Never un-finished. */
         suspend fun setOnboardingCompleted() {
             dataStore.edit { it[PreferencesKeys.ONBOARDING_COMPLETED] = true }
+        }
+
+        // ---- Wallpaper auto-rotation (v1.0.3) ----
+
+        suspend fun setRotationEnabled(enabled: Boolean) {
+            dataStore.edit { it[PreferencesKeys.ROTATION_ENABLED] = enabled }
+        }
+
+        /** Only the offered cadences are stored; anything else falls back to the default. */
+        suspend fun setRotationInterval(minutes: Int) {
+            dataStore.edit {
+                it[PreferencesKeys.ROTATION_INTERVAL] =
+                    minutes.takeIf { candidate -> candidate in RotationSettings.INTERVAL_CHOICES_MINUTES }
+                        ?: RotationSettings.DEFAULT_INTERVAL_MINUTES
+            }
+        }
+
+        suspend fun setRotationWifiOnly(wifiOnly: Boolean) {
+            dataStore.edit { it[PreferencesKeys.ROTATION_WIFI_ONLY] = wifiOnly }
+        }
+
+        suspend fun setRotationTarget(target: RotationTarget) {
+            dataStore.edit { it[PreferencesKeys.ROTATION_TARGET] = target.name }
+        }
+
+        /** Where the rotator left off: "providerId/wallpaperId" of the last pick. */
+        val lastRotationKey: Flow<String?> =
+            dataStore.data
+                .catch { exception ->
+                    if (exception is IOException) {
+                        emit(emptyPreferences())
+                    } else {
+                        throw exception
+                    }
+                }
+                .map { it[PreferencesKeys.LAST_ROTATION_KEY] }
+
+        suspend fun setLastRotationKey(key: String) {
+            dataStore.edit { it[PreferencesKeys.LAST_ROTATION_KEY] = key }
         }
 
         /** The stored API key of every provider, keyed by provider id. */

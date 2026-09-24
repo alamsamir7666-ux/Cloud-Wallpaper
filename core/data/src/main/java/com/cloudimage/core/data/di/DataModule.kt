@@ -18,6 +18,10 @@ import com.cloudimage.core.data.repository.UpdateInstaller
 import com.cloudimage.core.data.repository.WallpaperApplier
 import com.cloudimage.core.data.repository.WallpaperSaver
 import com.cloudimage.core.data.repository.WallpaperSources
+import com.cloudimage.core.data.rotation.FavoriteWallpaperRotator
+import com.cloudimage.core.data.rotation.RotationScheduler
+import com.cloudimage.core.data.rotation.WallpaperRotator
+import com.cloudimage.core.data.rotation.WorkManagerRotationScheduler
 import com.cloudimage.provider.api.ProviderSettings
 import dagger.Binds
 import dagger.Module
@@ -65,6 +69,12 @@ internal abstract class DataModule {
 
     @Binds
     abstract fun bindUpdateInstaller(impl: AndroidUpdateInstaller): UpdateInstaller
+
+    @Binds
+    abstract fun bindWallpaperRotator(impl: FavoriteWallpaperRotator): WallpaperRotator
+
+    @Binds
+    abstract fun bindRotationScheduler(impl: WorkManagerRotationScheduler): RotationScheduler
 }
 
 /**
