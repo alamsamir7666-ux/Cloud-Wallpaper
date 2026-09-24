@@ -4,6 +4,7 @@
     <string name="settings_section_content">Content</string>
     <string name="settings_section_appearance">Appearance</string>
     <string name="settings_section_data">Your data</string>
+    <string name="settings_section_updates">Updates</string>
     <string name="settings_section_about">About</string>
     <string name="settings_sfw_title">Safe content only</string>
     <string name="settings_sfw_body">Hide sketchy and NSFW results everywhere. Recommended.</string>
@@ -18,4 +19,16 @@
     <string name="settings_source_title">Source code</string>
     <string name="settings_licenses_title">Licenses</string>
     <string name="settings_licenses_value">App: Apache-2.0 · Provider API: MIT</string>
+    <string name="settings_update_checking">Checking for updates…</string>
+    <string name="settings_update_up_to_date">Cloudimage %1$s is up to date</string>
+    <string name="settings_update_available_title">Version %1$s available</string>
+    <string name="settings_update_available_body">Download size %1$s · installed with your confirmation</string>
+    <string name="settings_update_download">Download &amp; install</string>
+    <string name="settings_update_downloading">Downloading update…</string>
+    <string name="settings_update_retry">Retry</string>
+    <string name="settings_update_error_http">Could not reach the update server.</string>
+    <string name="settings_update_error_timeout">The update check timed out.</string>
+    <string name="settings_update_error_offline">You appear to be offline.</string>
+    <string name="settings_update_error_bad_data">The update information was unreadable.</string>
+    <string name="settings_update_error_install">The update downloaded but the installer did not start.</string>
 </resources>
