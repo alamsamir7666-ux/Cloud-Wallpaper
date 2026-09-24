@@ -86,6 +86,9 @@ class AndroidUpdateInstaller
                 NetworkError.Timeout -> UpdateInstallError.TIMEOUT
                 is NetworkError.Io -> UpdateInstallError.OFFLINE
                 is NetworkError.Serialization -> UpdateInstallError.IO
+                // Update APKs download straight from GitHub Releases — no
+                // plugin involved; kept for exhaustiveness.
+                is NetworkError.Source -> UpdateInstallError.IO
             }
 
         private fun String.sanitized(): String = filter { it.isLetterOrDigit() || it == '.' || it == '-' }.ifEmpty { "latest" }

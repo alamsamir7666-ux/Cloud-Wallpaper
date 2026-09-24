@@ -31,6 +31,13 @@ interface WallpaperSources {
      */
     val sources: StateFlow<List<SourceInfo>?>
 
+    /**
+     * Load-failure reasons by source id, filled by every [refresh] — the
+     * extension manager renders them as per-source diagnostics so a broken
+     * source says why it is broken. Empty when everything loads.
+     */
+    val loadFailures: StateFlow<Map<String, String>>
+
     /** Rescans the extensions area; cheap and idempotent. */
     suspend fun refresh()
 

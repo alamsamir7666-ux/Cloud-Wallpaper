@@ -156,6 +156,8 @@ class DefaultRepoManager
                 is NetworkError.Io -> ExtensionError.Io(error.cause)
                 NetworkError.Timeout -> ExtensionError.Io(IOException("download of $fileName timed out"))
                 is NetworkError.Serialization -> ExtensionError.Io(IOException("download of $fileName produced bad data"))
+                // Repo downloads never involve a plugin; kept for exhaustiveness.
+                is NetworkError.Source -> ExtensionError.Io(IOException("download of $fileName failed: ${error.reason}"))
             }
 
         private companion object {

@@ -194,6 +194,26 @@ class BrowseViewModelTest {
         }
 
     @Test
+    fun sourceFailureSurfacesAsSourceErrorNotOffline() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            // A plugin that crashed — the v1.0.0 failure mode. Must NOT
+            // surface as a connectivity ("offline") error.
+            fake.enqueueSearch(NetworkResult.Failure(NetworkError.Source("source failed to load")))
+            val viewModel = newViewModel(fake, backgroundScope)
+            val failed = viewModel.state.first { !it.isFirstLoading }
+
+            assertEquals(BrowseError.SOURCE, failed.error)
+            assertTrue(failed.showFullscreenError)
+
+            fake.enqueueSearch(page(ids = listOf("fixed"), nextPage = null))
+            viewModel.onRetry()
+            val recovered = viewModel.state.first { it.wallpapers.isNotEmpty() }
+
+            assertNull(recovered.error)
+        }
+
+    @Test
     fun loadMoreFailureKeepsListAndRetryAppends() =
         runTest {
             val fake = FakeWallpaperSources()

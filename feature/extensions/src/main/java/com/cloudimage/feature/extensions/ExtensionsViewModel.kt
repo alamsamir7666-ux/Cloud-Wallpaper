@@ -14,6 +14,7 @@ import com.cloudimage.extensions.core.RepoIndexResult
 import com.cloudimage.extensions.core.RepoManager
 import com.cloudimage.extensions.core.RepoPackageEntry
 import com.cloudimage.extensions.core.StoredRepo
+import com.cloudimage.extensions.core.reason
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,6 +42,8 @@ data class ExtensionsUiState(
     val loading: Boolean = true,
     val extensions: List<InstalledExtension> = emptyList(),
     val sources: List<SourceInfo> = emptyList(),
+    /** Load-failure reasons by source id — per-source diagnostics. */
+    val loadFailures: Map<String, String> = emptyMap(),
     val repos: List<StoredRepo> = emptyList(),
     /** Catalogs by repo id; null while that repo's index is being fetched. */
     val catalogs: Map<String, List<RepoPackageEntry>?> = emptyMap(),
@@ -85,6 +88,11 @@ class ExtensionsViewModel
             viewModelScope.launch {
                 sources.sources.collect { available ->
                     _state.update { it.copy(sources = available.orEmpty()) }
+                }
+            }
+            viewModelScope.launch {
+                sources.loadFailures.collect { failures ->
+                    _state.update { it.copy(loadFailures = failures) }
                 }
             }
             viewModelScope.launch {
@@ -174,12 +182,5 @@ class ExtensionsViewModel
             }
         }
 
-        private fun describe(error: com.cloudimage.extensions.core.ExtensionError): String =
-            when (error) {
-                is com.cloudimage.extensions.core.ExtensionError.ChecksumMismatch -> "checksum mismatch"
-                is com.cloudimage.extensions.core.ExtensionError.UnsupportedApi -> "unsupported api ${error.declared}"
-                is com.cloudimage.extensions.core.ExtensionError.InvalidManifest -> "invalid manifest"
-                is com.cloudimage.extensions.core.ExtensionError.Io -> "network or storage failure"
-                else -> "package could not be loaded"
-            }
+        private fun describe(error: com.cloudimage.extensions.core.ExtensionError): String = error.reason
     }

@@ -208,6 +208,7 @@ private fun ManagerList(
                     extension = extension,
                     needsKey = state.sources.firstOrNull { it.id == extension.manifest?.id }?.requiresApiKey == true,
                     hasKey = extension.manifest?.id in state.keyedProviders,
+                    loadFailure = extension.manifest?.id?.let { state.loadFailures[it] },
                     onKey = {
                         state.sources
                             .firstOrNull { it.id == extension.manifest?.id }
@@ -262,6 +263,7 @@ private fun ExtensionRow(
     extension: InstalledExtension,
     needsKey: Boolean,
     hasKey: Boolean,
+    loadFailure: String?,
     onKey: () -> Unit,
     onUninstall: () -> Unit,
 ) {
@@ -306,6 +308,13 @@ private fun ExtensionRow(
                             contentColor = MaterialTheme.colorScheme.onErrorContainer,
                         )
                     }
+                }
+                loadFailure?.let { reason ->
+                    Text(
+                        text = stringResource(R.string.extensions_load_failed, reason),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
             if (needsKey) {

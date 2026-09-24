@@ -31,8 +31,12 @@ class ProviderHttpResponse(
  * Raised by the host HTTP facade when a request could not be completed at
  * all — connectivity loss, timeouts, DNS failures. Providers usually let
  * this propagate: the app maps it to a typed error surface of its own.
+ *
+ * Open since v1.0.2 so the HOST can raise a subclass carrying its own
+ * typed error across the plugin boundary; binary-compatible for plugins,
+ * which only throw and catch this type, never extend it.
  */
-class ProviderHttpException(
+open class ProviderHttpException(
     message: String,
     cause: Throwable? = null,
 ) : RuntimeException(message, cause)

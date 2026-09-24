@@ -49,3 +49,24 @@ sealed interface LoadResult {
 
     data class Failed(val error: ExtensionError) : LoadResult
 }
+
+/**
+ * Short, stable, human-readable reason for an extension failure — surfaced
+ * by the extension manager's per-source diagnostics so a broken source says
+ * WHY it is broken instead of degrading into a misleading generic error.
+ */
+val ExtensionError.reason: String
+    get() =
+        when (val error = this) {
+            is ExtensionError.InvalidManifest -> "invalid package manifest (${error.reason})"
+            is ExtensionError.ChecksumMismatch -> "package failed its checksum verification"
+            is ExtensionError.UnsupportedApi -> "targets provider API v${error.declared}, this app implements v${error.supported}"
+            is ExtensionError.NotLoadable -> "package is ${error.status}"
+            is ExtensionError.EntryClassMissing -> "entry class ${error.entryClass} is missing from the package"
+            is ExtensionError.NotAProvider -> "entry class ${error.entryClass} does not implement the provider contract"
+            is ExtensionError.InstantiationFailed ->
+                "entry class could not be instantiated (${error.cause.message ?: error.cause.javaClass.simpleName})"
+            is ExtensionError.ProviderSetupFailed ->
+                "rejected its setup: ${error.cause.message ?: error.cause.javaClass.simpleName}"
+            is ExtensionError.Io -> "storage or network failure (${error.cause.message ?: "I/O error"})"
+        }

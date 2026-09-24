@@ -34,6 +34,7 @@
     <string name="browse_error_timeout">The request timed out.</string>
     <string name="browse_error_offline">Check your connection and try again.</string>
     <string name="browse_error_bad_data">The response could not be read.</string>
+    <string name="browse_error_source">A wallpaper source failed to load — check the Extensions tab for details.</string>
     <string name="browse_retry">Retry</string>
     <string name="browse_empty_results_title">Nothing found</string>
     <string name="browse_empty_results_body">Try a different search or loosen the filters.</string>

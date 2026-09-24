@@ -142,6 +142,8 @@ internal fun NetworkError.toApplyError(): ApplyError =
         NetworkError.Timeout -> ApplyError.TIMEOUT
         is NetworkError.Io -> ApplyError.OFFLINE
         is NetworkError.Serialization -> ApplyError.HTTP
+        // Image downloads never involve a plugin; kept for exhaustiveness.
+        is NetworkError.Source -> ApplyError.HTTP
     }
 
 @VisibleForTesting
@@ -151,6 +153,8 @@ internal fun NetworkError.toSaveError(): SaveError =
         NetworkError.Timeout -> SaveError.TIMEOUT
         is NetworkError.Io -> SaveError.OFFLINE
         is NetworkError.Serialization -> SaveError.HTTP
+        // Image downloads never involve a plugin; kept for exhaustiveness.
+        is NetworkError.Source -> SaveError.HTTP
     }
 
 /** Where gallery saves land on API 29+. */

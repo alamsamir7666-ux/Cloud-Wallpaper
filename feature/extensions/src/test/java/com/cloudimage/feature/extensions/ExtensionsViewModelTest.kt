@@ -113,6 +113,9 @@ class ExtensionsViewModelTest {
         val sourcesState = MutableStateFlow<List<SourceInfo>?>(null)
         override val sources: StateFlow<List<SourceInfo>?> = sourcesState.asStateFlow()
 
+        val failuresState = MutableStateFlow<Map<String, String>>(emptyMap())
+        override val loadFailures: StateFlow<Map<String, String>> = failuresState.asStateFlow()
+
         override suspend fun refresh() {}
 
         override suspend fun search(
@@ -332,6 +335,23 @@ class ExtensionsViewModelTest {
             assertEquals(
                 listOf(SourceInfo("cloudimage.unsplash", "Unsplash", true)),
                 viewModel.state.value.sources,
+            )
+        }
+
+    @Test
+    fun loadFailuresFeedStateForDiagnostics() =
+        runTest {
+            val sources = FakeSources()
+            val viewModel = viewModel(sources = sources)
+
+            sources.failuresState.value =
+                mapOf("cloudimage.broken" to "entry class com.example.Broken is missing from the package")
+
+            val state = viewModel.state.first { it.loadFailures.isNotEmpty() }
+
+            assertEquals(
+                "entry class com.example.Broken is missing from the package",
+                state.loadFailures["cloudimage.broken"],
             )
         }
 }

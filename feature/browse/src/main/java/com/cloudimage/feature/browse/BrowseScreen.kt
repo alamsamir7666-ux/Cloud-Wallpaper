@@ -354,6 +354,7 @@ private fun BrowseError.message(): String =
         BrowseError.TIMEOUT -> stringResource(R.string.browse_error_timeout)
         BrowseError.OFFLINE -> stringResource(R.string.browse_error_offline)
         BrowseError.BAD_DATA -> stringResource(R.string.browse_error_bad_data)
+        BrowseError.SOURCE -> stringResource(R.string.browse_error_source)
     }
 
 private const val PREFETCH_BUFFER = 8

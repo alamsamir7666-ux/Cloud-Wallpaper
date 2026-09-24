@@ -11,6 +11,8 @@ import com.cloudimage.core.network.NetworkResult
 import com.cloudimage.extensions.core.ExtensionRepository
 import com.cloudimage.extensions.core.ExtensionStatus
 import com.cloudimage.extensions.core.LoadResult
+import com.cloudimage.extensions.core.ProviderTransportException
+import com.cloudimage.extensions.core.reason
 import com.cloudimage.provider.api.Capability
 import com.cloudimage.provider.api.Filters
 import com.cloudimage.provider.api.ProviderHttpException
@@ -24,7 +26,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerializationException
-import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 import com.cloudimage.provider.api.ContentRating as ProviderRating
@@ -36,8 +37,9 @@ import com.cloudimage.provider.api.Wallpaper as ProviderWallpaper
  *
  * The engine's provider cache makes per-search loading cheap: a READY
  * extension that was loaded before is served from memory, keyed by the
- * package checksum. Sources that fail to load are silently skipped —
- * broken plugins degrade to absence, never to a dead feed.
+ * package checksum. Sources that fail to load are skipped from the feed —
+ * but never silently: [loadFailures] carries the reason so the
+ * extension manager can tell the user exactly what is broken.
  */
 @Singleton
 class ExtensionWallpaperSources
@@ -49,12 +51,16 @@ class ExtensionWallpaperSources
         private val state = MutableStateFlow<List<SourceInfo>?>(null)
         override val sources: StateFlow<List<SourceInfo>?> = state.asStateFlow()
 
+        private val failures = MutableStateFlow<Map<String, String>>(emptyMap())
+        override val loadFailures: StateFlow<Map<String, String>> = failures.asStateFlow()
+
         init {
             appScope.launch { refresh() }
         }
 
         override suspend fun refresh() {
             extensions.refresh()
+            val newFailures = mutableMapOf<String, String>()
             state.value =
                 (extensions.installed.value.orEmpty())
                     .filter { it.status == ExtensionStatus.READY }
@@ -67,9 +73,13 @@ class ExtensionWallpaperSources
                                     name = loaded.provider.meta.name.ifBlank { manifest.name },
                                     requiresApiKey = loaded.provider.meta.requiresApiKey,
                                 )
-                            is LoadResult.Failed -> null
+                            is LoadResult.Failed -> {
+                                newFailures[manifest.id] = loaded.error.reason
+                                null
+                            }
                         }
                     }
+            failures.value = newFailures
         }
 
         override suspend fun search(
@@ -78,7 +88,10 @@ class ExtensionWallpaperSources
         ): NetworkResult<Page> {
             val providers = readyProviders()
             if (providers.isEmpty()) {
-                return NetworkResult.Failure(NetworkError.Io(IOException("no wallpaper sources installed")))
+                // Not a connectivity problem — say so. Silently mapping this
+                // to Io is exactly what made v1.0.0 tell users to "check
+                // your connection" while their internet was fine.
+                return NetworkResult.Failure(NetworkError.Source(noSourcesReason()))
             }
             val filters = query.toFilters()
             val ratings = query.contentRatings
@@ -135,11 +148,33 @@ class ExtensionWallpaperSources
                     }
                 }
 
+        /** Diagnoses WHY no source is usable, for the failure reason. */
+        private fun noSourcesReason(): String {
+            val installed = extensions.installed.value.orEmpty()
+            return when {
+                installed.isEmpty() -> "no wallpaper sources installed"
+                installed.none { it.status == ExtensionStatus.READY } ->
+                    "every installed package is corrupted or untrusted — see the Extensions tab"
+                else -> "every installed source failed to load — see the Extensions tab"
+            }
+        }
+
+        /**
+         * The honest mapping: a transport failure keeps its type (a timeout
+         * stays a timeout, offline stays offline), and everything else is
+         * the SOURCE failing — never a connectivity claim.
+         */
         private fun Throwable.toNetworkError(): NetworkError =
             when (this) {
+                is ProviderTransportException -> error
                 is SerializationException -> NetworkError.Serialization(this)
-                is ProviderHttpException -> NetworkError.Io(IOException(message, this))
-                else -> NetworkError.Io(IOException(message ?: "source failed", this))
+                is LinkageError ->
+                    NetworkError.Source(
+                        "source failed to bind its classes (${javaClass.simpleName}: $message) — " +
+                            "update the app or reinstall the source",
+                    )
+                is ProviderHttpException -> NetworkError.Source("source failed: $message")
+                else -> NetworkError.Source("source failed: ${message ?: javaClass.simpleName}")
             }
 
         private fun WallpaperQuery.toFilters(): Filters {

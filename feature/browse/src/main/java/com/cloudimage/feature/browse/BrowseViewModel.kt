@@ -31,6 +31,9 @@ enum class BrowseError {
     TIMEOUT,
     OFFLINE,
     BAD_DATA,
+
+    /** A source failed for its own reasons — NOT a connectivity problem. */
+    SOURCE,
 }
 
 /** Immutable snapshot of everything the browse screen renders. */
@@ -230,4 +233,5 @@ private fun NetworkError.toBrowseError(): BrowseError =
         NetworkError.Timeout -> BrowseError.TIMEOUT
         is NetworkError.Io -> BrowseError.OFFLINE
         is NetworkError.Serialization -> BrowseError.BAD_DATA
+        is NetworkError.Source -> BrowseError.SOURCE
     }

@@ -19,6 +19,16 @@ sealed interface NetworkError {
 
     /** The body arrived but is not the JSON shape we expected. */
     data class Serialization(val cause: Exception) : NetworkError
+
+    /**
+     * The wallpaper source behind the call failed for its own reasons — it
+     * crashed, its package is broken, or no loadable source exists.
+     *
+     * This is NOT a connectivity problem: the transport layer never failed.
+     * Mapping source failures onto [Io] is what made the v1.0.0 release
+     * tell users to "check your connection" while their internet was fine.
+     */
+    data class Source(val reason: String) : NetworkError
 }
 
 /**

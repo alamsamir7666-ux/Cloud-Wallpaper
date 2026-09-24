@@ -182,6 +182,9 @@ class SettingsViewModel
                 NetworkError.Timeout -> UpdateError.TIMEOUT
                 is NetworkError.Io -> UpdateError.OFFLINE
                 is NetworkError.Serialization -> UpdateError.BAD_DATA
+                // The update check talks to GitHub Releases directly — no
+                // plugin involved; kept for exhaustiveness.
+                is NetworkError.Source -> UpdateError.HTTP
             }
 
         private companion object {

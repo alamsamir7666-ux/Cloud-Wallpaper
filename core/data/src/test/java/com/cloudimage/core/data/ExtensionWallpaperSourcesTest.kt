@@ -14,6 +14,7 @@ import com.cloudimage.extensions.core.ExtensionStatus
 import com.cloudimage.extensions.core.InstallResult
 import com.cloudimage.extensions.core.InstalledExtension
 import com.cloudimage.extensions.core.LoadResult
+import com.cloudimage.extensions.core.ProviderTransportException
 import com.cloudimage.provider.api.Capability
 import com.cloudimage.provider.api.Filters
 import com.cloudimage.provider.api.ProviderMeta
@@ -99,7 +100,9 @@ class ExtensionWallpaperSourcesTest {
             val provider =
                 byId[extension.manifest?.id]
                     ?: return LoadResult.Failed(
-                        com.cloudimage.extensions.core.ExtensionError.EntryClassMissing(""),
+                        com.cloudimage.extensions.core.ExtensionError.EntryClassMissing(
+                            extension.manifest?.entryClass.orEmpty(),
+                        ),
                     )
             return LoadResult.Loaded(provider)
         }
@@ -227,7 +230,7 @@ class ExtensionWallpaperSourcesTest {
         }
 
     @Test
-    fun `all sources failing surfaces a network error`() =
+    fun `all sources failing surfaces a source error`() =
         runTest {
             val provider =
                 RecordingProvider(
@@ -242,7 +245,48 @@ class ExtensionWallpaperSourcesTest {
             val result = sources.search(WallpaperQuery(), page = 1)
 
             assertTrue(result is NetworkResult.Failure)
-            assertTrue((result as NetworkResult.Failure).error is NetworkError.Io)
+            val error = (result as NetworkResult.Failure).error
+            assertTrue(error is NetworkError.Source)
+            assertTrue((error as NetworkError.Source).reason.contains("GET failed"))
+        }
+
+    @Test
+    fun `transport failures keep their honest type across the plugin boundary`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.a"),
+                    capabilities = setOf(Capability.POPULAR),
+                    error = ProviderTransportException(NetworkError.Timeout, "https://example.invalid"),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.a"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val result = sources.search(WallpaperQuery(), page = 1)
+
+            // A real timeout surfaces as a timeout — not as "no connection".
+            assertTrue((result as NetworkResult.Failure).error is NetworkError.Timeout)
+        }
+
+    @Test
+    fun `a plugin that cannot bind its classes is a source error`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.a"),
+                    capabilities = setOf(Capability.POPULAR),
+                    error = NoClassDefFoundError("kotlin.Unit"),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.a"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val result = sources.search(WallpaperQuery(), page = 1)
+
+            val error = (result as NetworkResult.Failure).error
+            assertTrue(error is NetworkError.Source)
+            assertTrue((error as NetworkError.Source).reason.contains("bind its classes"))
         }
 
     @Test
@@ -273,13 +317,15 @@ class ExtensionWallpaperSourcesTest {
         }
 
     @Test
-    fun `no sources installed is an io error`() =
+    fun `no sources installed is a source error`() =
         runTest {
             val sources = ExtensionWallpaperSources(FakeEngine(), CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
 
             val result = sources.search(WallpaperQuery(), page = 1)
 
-            assertTrue((result as NetworkResult.Failure).error is NetworkError.Io)
+            val error = (result as NetworkResult.Failure).error
+            assertTrue(error is NetworkError.Source)
+            assertTrue((error as NetworkError.Source).reason.contains("no wallpaper sources installed"))
         }
 
     @Test
@@ -300,6 +346,20 @@ class ExtensionWallpaperSourcesTest {
                 listOf(SourceInfo("cloudimage.unsplash", "Unsplash", true)),
                 sources.sources.value,
             )
+        }
+
+    @Test
+    fun `refresh records why a source failed to load`() =
+        runTest {
+            val engine = FakeEngine() // every providerFor misses: EntryClassMissing
+            engine.publish(extension("cloudimage.broken"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            sources.refresh()
+
+            val reason = sources.loadFailures.value["cloudimage.broken"]
+            assertTrue(reason.orEmpty().contains("entry class com.example.cloudimage.broken is missing"))
+            assertTrue(sources.sources.value.orEmpty().isEmpty())
         }
 
     @Test
