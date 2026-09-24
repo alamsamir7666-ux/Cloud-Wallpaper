@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="library_title">Library</string>
+    <string name="library_tab_favorites">Favorites</string>
+    <string name="library_tab_history">History</string>
+    <string name="library_empty_favorites_title">No favorites yet</string>
+    <string name="library_empty_favorites_body">Tap the heart on a wallpaper to keep it here.</string>
+    <string name="library_empty_history_title">Nothing here yet</string>
+    <string name="library_empty_history_body">Wallpapers you view, apply, or download will show up here.</string>
+    <string name="library_remove_favorite">Remove from favorites</string>
+    <string name="library_clear_history">Clear history</string>
+    <string name="library_clear_confirm_title">Clear history?</string>
+    <string name="library_clear_confirm_body">All history records will be removed. Favorites are kept.</string>
+    <string name="library_clear_confirm">Clear</string>
+    <string name="library_clear_cancel">Cancel</string>
+    <string name="library_action_viewed">Viewed</string>
+    <string name="library_action_applied">Applied</string>
+    <string name="library_action_downloaded">Downloaded</string>
+</resources>
