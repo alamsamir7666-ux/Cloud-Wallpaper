@@ -65,7 +65,9 @@ Every part ends green: app builds, tests pass, CI clean.
       signed APK on `v*` tags. Release APK: 2.0 MB, down from 19.2 MB
       debug.)
 
-**Out of scope for V1** (v1.1+): auto-rotate, Muzei source, TV UI, cloud sync.
+**Out of scope for V1** (v1.1+): TV UI, cloud sync, toolchain debt batch
+(AGP 9, compileSdk 37, Kotlin 2.4, hilt 2.60 — kept out of patch releases
+on principle).
 
 ## Status log
 
@@ -134,6 +136,24 @@ Every part ends green: app builds, tests pass, CI clean.
   constraint by the Wi-Fi-only setting. Successful rotations record
   APPLIED history like manual applies. 205 debug unit tests, 0 failures;
   dex audit clean (5,575 host classes). Release APK 2.68 MB.
-  Remaining v1.1 backlog: toolchain debt batch (AGP 9, compileSdk 37,
-  Kotlin 2.4, hilt 2.60 — never mixed into patches), Muzei source,
-  TV UI, cloud sync.
+- **2026-09-24 — v1.0.4 shipped.** Muzei source integration: Cloudimage is
+  now selectable as an artwork source inside Muzei. New `:core:muzei`
+  module — `CloudimageMuzeiArtProvider` (muzei-api 3.4.2, manifest-declared
+  under Muzei's ACCESS_PROVIDER permission + intent action, with the
+  AAR's documents provider alongside) enqueues a @HiltWorker
+  `MuzeiArtworkWorker`; selection lives in the tested
+  `FavoriteMuzeiArtworkSelector`: the batch is the saved wallpapers
+  (save-date order, SFW/Sketchy per the SFW-only setting, NSFW never),
+  served as a rotated list with a persisted cursor advanced BEFORE the
+  handoff so a broken download can't stall the carousel, capped at 200
+  artworks per binder transaction. Fresh installs with nothing saved
+  serve the default feed instead, one page per load, wrapping to page 1
+  when a source runs dry. Transport failures (offline/timeout/HTTP)
+  retry with WorkManager backoff; source failures don't — Muzei keeps
+  its current artwork. getCommandActions offers "Open Cloudimage"
+  (RemoteActionCompat, the AAR's launch icon). R8 survival verified:
+  provider kept public with its no-arg constructor, worker kept by name;
+  plugin ABI audit 0 unresolved over 5,603 host classes. 231 debug unit
+  tests, 0 failures (19 new). Release APK 2.82 MB.
+  Remaining v1.1 backlog: toolchain debt batch (never mixed into
+  patches), TV UI, cloud sync.
