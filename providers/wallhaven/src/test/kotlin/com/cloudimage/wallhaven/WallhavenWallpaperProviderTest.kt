@@ -123,6 +123,36 @@ class WallhavenWallpaperProviderTest {
         }
 
     @Test
+    fun `wire tags become wallpaper tags and blank ones drop`() =
+        runTest {
+            clientWith(
+                """
+                {
+                  "data": [
+                    {
+                      "id": "tagged1",
+                      "path": "https://w/full/tagged1.jpg",
+                      "purity": "sfw",
+                      "tags": [
+                        {"id": 1, "name": "forest"},
+                        {"id": 2, "name": "mist"},
+                        {"id": 3, "name": "   "}
+                      ]
+                    }
+                  ],
+                  "meta": {"current_page": 1, "last_page": 1}
+                }
+                """.trimIndent(),
+            )
+
+            val page = provider.popular(page = 1).getOrThrow()
+
+            // The detail screen's "More like this" consumes these as query
+            // words — blanks are dropped so they never poison the query.
+            assertEquals(listOf("forest", "mist"), page.wallpapers.single().tags)
+        }
+
+    @Test
     fun `thumb falls back to original then path`() =
         runTest {
             clientWith(

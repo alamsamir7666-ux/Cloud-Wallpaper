@@ -7,13 +7,19 @@ import com.cloudimage.core.data.repository.ApplyResult
 import com.cloudimage.core.data.repository.ApplyTarget
 import com.cloudimage.core.data.repository.SaveError
 import com.cloudimage.core.data.repository.SaveResult
+import com.cloudimage.core.data.repository.SourceCapability
+import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.model.Favorite
 import com.cloudimage.core.model.HistoryAction
+import com.cloudimage.core.model.Page
 import com.cloudimage.core.model.Wallpaper
+import com.cloudimage.core.network.NetworkError
+import com.cloudimage.core.network.NetworkResult
 import com.cloudimage.core.testing.FakeFavoritesRepository
 import com.cloudimage.core.testing.FakeHistoryRepository
 import com.cloudimage.core.testing.FakeWallpaperApplier
 import com.cloudimage.core.testing.FakeWallpaperSaver
+import com.cloudimage.core.testing.FakeWallpaperSources
 import com.cloudimage.core.testing.MainDispatcherRule
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -38,6 +44,7 @@ class DetailViewModelTest {
     private val saver = FakeWallpaperSaver()
     private val favorites = FakeFavoritesRepository()
     private val history = FakeHistoryRepository()
+    private val sources = FakeWallpaperSources()
 
     private val wallpaper =
         Wallpaper(
@@ -49,6 +56,18 @@ class DetailViewModelTest {
             height = 1080,
         )
 
+    /** [wallpaper] carrying tags — the seed the recommendation row needs. */
+    private val taggedWallpaper = wallpaper.copy(tags = listOf("forest", "mist", "night", "mountain"))
+
+    /** A capable source entry: SEARCH + TAGS, the More-like-this gate. */
+    private val capableSource =
+        SourceInfo(
+            id = "wallhaven",
+            name = "Wallhaven",
+            requiresApiKey = false,
+            capabilities = setOf(SourceCapability.SEARCH, SourceCapability.TAGS),
+        )
+
     private fun createViewModel(encoded: String?): DetailViewModel =
         DetailViewModel(
             savedStateHandle = SavedStateHandle(mapOf(DetailDestination.arg to encoded)),
@@ -56,6 +75,7 @@ class DetailViewModelTest {
             saver = saver,
             favoritesRepository = favorites,
             historyRepository = history,
+            sources = sources,
         )
 
     @Test
@@ -64,6 +84,106 @@ class DetailViewModelTest {
 
         assertEquals(wallpaper, viewModel.state.value.wallpaper)
     }
+
+    @Test
+    fun moreLikeThisLoadsOverTopTagsFromTheSameSource() =
+        runTest {
+            sources.setSources(capableSource)
+            val lookalike = taggedWallpaper.copy(id = "zzz999")
+            sources.enqueueSearch(
+                NetworkResult.Success(Page(wallpapers = listOf(lookalike, taggedWallpaper), nextPage = null)),
+            )
+
+            val viewModel = createViewModel(DetailDestination.encode(taggedWallpaper))
+            advanceUntilIdle()
+
+            // The wallpaper itself is filtered out of its own row.
+            assertEquals(listOf(lookalike), viewModel.state.value.moreLikeThis)
+            // Top three tags join the query; the source is pinned.
+            val call = sources.searchCalls.single()
+            assertEquals("forest mist night", call.first.text)
+            assertEquals(1, call.second)
+            assertEquals("wallhaven", sources.searchSourceIds.single())
+        }
+
+    @Test
+    fun moreLikeThisBroadensToTheSingleTagWhenTheCombinationMatchesNothing() =
+        runTest {
+            sources.setSources(capableSource)
+            val lookalike = taggedWallpaper.copy(id = "zzz999")
+            sources.enqueueSearch(NetworkResult.Success(Page(wallpapers = emptyList(), nextPage = null)))
+            sources.enqueueSearch(
+                NetworkResult.Success(Page(wallpapers = listOf(lookalike), nextPage = null)),
+            )
+
+            val viewModel = createViewModel(DetailDestination.encode(taggedWallpaper))
+            advanceUntilIdle()
+
+            assertEquals(listOf(lookalike), viewModel.state.value.moreLikeThis)
+            assertEquals(
+                listOf("forest mist night", "forest"),
+                sources.searchCalls.map { it.first.text },
+            )
+        }
+
+    @Test
+    fun moreLikeThisStaysHiddenWhenTheSourceLacksTagSearch() =
+        runTest {
+            sources.setSources(
+                SourceInfo(
+                    id = "wallhaven",
+                    name = "Wallhaven",
+                    requiresApiKey = false,
+                    capabilities = setOf(SourceCapability.SEARCH),
+                ),
+            )
+
+            val viewModel = createViewModel(DetailDestination.encode(taggedWallpaper))
+            advanceUntilIdle()
+
+            val settled = viewModel.state.value
+            assertTrue(settled.moreLikeThis.isEmpty())
+            assertTrue(sources.searchCalls.isEmpty())
+        }
+
+    @Test
+    fun moreLikeThisStaysHiddenWhenTheItemHasNoTags() =
+        runTest {
+            sources.setSources(capableSource)
+
+            val viewModel = createViewModel(DetailDestination.encode(wallpaper))
+            advanceUntilIdle()
+
+            val settled = viewModel.state.value
+            assertTrue(settled.moreLikeThis.isEmpty())
+            assertTrue(sources.searchCalls.isEmpty())
+        }
+
+    @Test
+    fun moreLikeThisStaysHiddenWhenTheSourceIsUnknown() =
+        runTest {
+            sources.setSources(capableSource.copy(id = "some.other.source"))
+
+            val viewModel = createViewModel(DetailDestination.encode(taggedWallpaper))
+            advanceUntilIdle()
+
+            val settled = viewModel.state.value
+            assertTrue(settled.moreLikeThis.isEmpty())
+            assertTrue(sources.searchCalls.isEmpty())
+        }
+
+    @Test
+    fun moreLikeThisHidesWhenTheSourceFails() =
+        runTest {
+            sources.setSources(capableSource)
+            sources.enqueueSearch(NetworkResult.Failure(NetworkError.Timeout))
+
+            val viewModel = createViewModel(DetailDestination.encode(taggedWallpaper))
+            advanceUntilIdle()
+
+            val settled = viewModel.state.value
+            assertTrue(settled.moreLikeThis.isEmpty())
+        }
 
     @Test
     fun invalidArgumentYieldsEmptyStateAndNoHistory() =

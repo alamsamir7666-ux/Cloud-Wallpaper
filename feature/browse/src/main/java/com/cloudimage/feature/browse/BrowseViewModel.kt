@@ -2,12 +2,14 @@ package com.cloudimage.feature.browse
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.cloudimage.core.data.repository.HistoryRepository
 import com.cloudimage.core.data.repository.SourceFailure
 import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.SourceSection
 import com.cloudimage.core.data.repository.WallpaperSources
 import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.ContentRating
+import com.cloudimage.core.model.HistoryAction
 import com.cloudimage.core.model.Page
 import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.core.model.WallpaperQuery
@@ -92,6 +94,12 @@ data class BrowseUiState(
     val mode: BrowseMode = BrowseMode.SECTIONS,
     /** The home rows; empty in the grid fallback (the v1.0.8 flat feed). */
     val sections: List<BrowseSectionState> = emptyList(),
+    /**
+     * Recently applied wallpapers, most recent first (v1.0.9) — the
+     * personal row that leads the home when it exists. Empty hides it:
+     * a fresh install shows no ghost row.
+     */
+    val recentlyApplied: List<Wallpaper> = emptyList(),
     /** The section title when the grid was opened through See-all. */
     val scopeTitle: String? = null,
     /** The section's source when the grid is scoped; the search then runs pinned to it. */
@@ -185,6 +193,7 @@ class BrowseViewModel
     constructor(
         private val sources: WallpaperSources,
         private val userPreferencesRepository: UserPreferencesRepository,
+        private val historyRepository: HistoryRepository,
     ) : ViewModel() {
         private val _state = MutableStateFlow(BrowseUiState())
         val state: StateFlow<BrowseUiState> = _state.asStateFlow()
@@ -280,6 +289,21 @@ class BrowseViewModel
             userPreferencesRepository.searchHistory
                 .onEach { history -> _state.update { it.copy(history = history) } }
                 .launchIn(viewModelScope)
+
+            // The personal row (v1.0.9): applies only — views and downloads
+            // have their own trails in Library — deduped so re-applying a
+            // wallpaper keeps it in place, newest first, capped to one row.
+            historyRepository
+                .observeRecent(HISTORY_SCAN_LIMIT)
+                .onEach { entries ->
+                    val applied =
+                        entries
+                            .filter { it.action == HistoryAction.APPLIED }
+                            .distinctBy { "${it.wallpaper.providerId}:${it.wallpaper.id}" }
+                            .map { it.wallpaper }
+                            .take(RECENTLY_APPLIED_LIMIT)
+                    _state.update { it.copy(recentlyApplied = applied) }
+                }.launchIn(viewModelScope)
         }
 
         /**
@@ -845,6 +869,12 @@ class BrowseViewModel
 
             /** Suggestions land before the search commits, so chips are visible while typing. */
             const val SUGGEST_DEBOUNCE_MS = 200L
+
+            /** How much history the personal row scans before filtering. */
+            const val HISTORY_SCAN_LIMIT = 50
+
+            /** How many recently-applied cards the home row shows. */
+            const val RECENTLY_APPLIED_LIMIT = 10
         }
     }
 

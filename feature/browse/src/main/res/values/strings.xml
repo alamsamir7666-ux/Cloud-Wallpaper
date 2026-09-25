@@ -50,6 +50,7 @@
 
     <string name="browse_see_all">See all in this section</string>
     <string name="browse_section_empty">Nothing here yet</string>
+    <string name="browse_recently_applied">Recently applied</string>
     <string name="browse_scope_close">Back to sections</string>
 
     <string name="browse_suggestions_title">Suggested tags</string>

@@ -36,6 +36,8 @@ data class WallhavenWallpaperDto(
     val colors: List<String> = emptyList(),
     val path: String? = null,
     val thumbs: WallhavenThumbsDto? = null,
+    /** Per-item tags (v1.0.9) — the seed for "More like this". */
+    val tags: List<WallhavenTagDto> = emptyList(),
 )
 
 @Serializable

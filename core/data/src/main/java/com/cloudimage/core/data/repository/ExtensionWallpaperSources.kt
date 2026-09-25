@@ -102,6 +102,7 @@ class ExtensionWallpaperSources
                                         loaded.provider.meta.name
                                             .ifBlank { manifest.name },
                                     requiresApiKey = loaded.provider.meta.requiresApiKey,
+                                    capabilities = loaded.provider.capabilities.toSourceCapabilities(),
                                 )
                             is LoadResult.Failed -> {
                                 newFailures[manifest.id] = loaded.error.reason
@@ -440,8 +441,21 @@ class ExtensionWallpaperSources
                 width = width,
                 height = height,
                 sourceUrl = null,
+                tags = tags,
                 contentRating = contentRating.toCore(),
             )
+
+        private fun Capability.toSourceCapability(): SourceCapability =
+            when (this) {
+                Capability.POPULAR -> SourceCapability.POPULAR
+                Capability.LATEST -> SourceCapability.LATEST
+                Capability.SEARCH -> SourceCapability.SEARCH
+                Capability.TAGS -> SourceCapability.TAGS
+                Capability.RANDOM -> SourceCapability.RANDOM
+                Capability.FILTERS -> SourceCapability.FILTERS
+            }
+
+        private fun Set<Capability>.toSourceCapabilities(): Set<SourceCapability> = mapTo(HashSet()) { it.toSourceCapability() }
     }
 
 /** How many merged tag suggestions survive per lookup (v1.0.9). */

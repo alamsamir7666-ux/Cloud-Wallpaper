@@ -31,9 +31,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -53,7 +53,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.cloudimage.core.designsystem.WallpaperCard
@@ -116,7 +116,9 @@ fun LibraryScreen(
             }
         }
 
-        TabRow(selectedTabIndex = selectedTab) {
+        // PrimaryTabRow: the v1.0.9 housekeeping swap — the old TabRow is
+        // the deprecated M3 top-level style; same arguments, modern look.
+        PrimaryTabRow(selectedTabIndex = selectedTab) {
             Tab(
                 selected = tab == LibraryTab.FAVORITES,
                 onClick = { selectedTab = LibraryTab.FAVORITES.ordinal },

@@ -55,10 +55,15 @@ import com.cloudimage.core.model.Wallpaper
  * its own pagination. Row headers carry a chevron that opens the staggered
  * grid scoped to the section (See all), mirroring CloudStream's
  * `home_child_more_info` header over its horizontal RecyclerView.
+ *
+ * The personal "Recently applied" row (v1.0.9) leads the list when it
+ * exists — CloudStream's bookmarks/continue-watching analog, tapping a
+ * card reopens the detail screen.
  */
 @Composable
 internal fun SectionsHome(
     sections: List<BrowseSectionState>,
+    recentlyApplied: List<Wallpaper>,
     listState: LazyListState,
     onWallpaperClick: (Wallpaper) -> Unit,
     onSeeAll: (String) -> Unit,
@@ -73,6 +78,14 @@ internal fun SectionsHome(
                 .fillMaxSize()
                 .testTag("browse:sections"),
     ) {
+        if (recentlyApplied.isNotEmpty()) {
+            item(key = "recently-applied") {
+                RecentlyAppliedRow(
+                    wallpapers = recentlyApplied,
+                    onWallpaperClick = onWallpaperClick,
+                )
+            }
+        }
         items(sections, key = { it.key }) { section ->
             SectionRow(
                 section = section,
@@ -80,6 +93,45 @@ internal fun SectionsHome(
                 onSeeAll = onSeeAll,
                 onLoadMoreSection = onLoadMoreSection,
             )
+        }
+    }
+}
+
+/**
+ * The personal row: a titled carousel of the wallpapers the user actually
+ * applied, newest first. No See-all chevron — the Library's history tab is
+ * the full trail; this row is the shortcut.
+ */
+@Composable
+private fun RecentlyAppliedRow(
+    wallpapers: List<Wallpaper>,
+    onWallpaperClick: (Wallpaper) -> Unit,
+) {
+    Column(
+        modifier =
+            Modifier
+                .padding(vertical = 8.dp)
+                .testTag("browse:recently-applied"),
+    ) {
+        Text(
+            text = stringResource(R.string.browse_recently_applied),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.heightIn(min = CARD_HEIGHT + 4.dp),
+        ) {
+            items(wallpapers, key = { "${it.providerId}:${it.id}" }) { wallpaper ->
+                SectionWallpaperCard(
+                    wallpaper = wallpaper,
+                    onClick = { onWallpaperClick(wallpaper) },
+                )
+            }
         }
     }
 }

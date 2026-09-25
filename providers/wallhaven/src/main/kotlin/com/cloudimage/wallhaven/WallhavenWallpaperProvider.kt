@@ -202,6 +202,9 @@ class WallhavenWallpaperProvider : WallpaperProvider {
             title = null,
             width = dimensionX,
             height = dimensionY,
+            // Per-item tags (v1.0.9): blank names are dropped — the detail
+            // screen's "More like this" row consumes them as query words.
+            tags = tags.mapNotNull { it.name.takeIf(String::isNotBlank) },
             contentRating =
                 when (purity) {
                     "sketchy" -> ContentRating.SKETCHY

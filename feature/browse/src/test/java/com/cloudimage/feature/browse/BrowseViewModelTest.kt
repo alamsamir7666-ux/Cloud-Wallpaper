@@ -6,11 +6,14 @@ import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.SourceSection
 import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.ContentRating
+import com.cloudimage.core.model.HistoryAction
+import com.cloudimage.core.model.HistoryEntry
 import com.cloudimage.core.model.Page
 import com.cloudimage.core.model.WallpaperQuery
 import com.cloudimage.core.model.WallpaperSorting
 import com.cloudimage.core.network.NetworkError
 import com.cloudimage.core.network.NetworkResult
+import com.cloudimage.core.testing.FakeHistoryRepository
 import com.cloudimage.core.testing.FakeWallpaperSources
 import com.cloudimage.core.testing.MainDispatcherRule
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +36,72 @@ class BrowseViewModelTest {
 
     @get:Rule
     val tmpFolder: TemporaryFolder = TemporaryFolder.builder().assureDeletion().build()
+
+    /** History fed to the personal row (v1.0.9); fresh per test method. */
+    private val history = FakeHistoryRepository()
+
+    @Test
+    fun recentlyAppliedRowShowsAppliesOnlyNewestFirstDeduped() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            val newest = fakeWallpaper("a1")
+            val reapplied = fakeWallpaper("a1")
+            val oldest = fakeWallpaper("a2")
+            history.setEntries(
+                listOf(
+                    HistoryEntry(newest, HistoryAction.APPLIED, atMillis = 5L),
+                    HistoryEntry(fakeWallpaper("v1"), HistoryAction.VIEWED, atMillis = 4L),
+                    HistoryEntry(reapplied, HistoryAction.APPLIED, atMillis = 3L),
+                    HistoryEntry(fakeWallpaper("d1"), HistoryAction.DOWNLOADED, atMillis = 2L),
+                    HistoryEntry(oldest, HistoryAction.APPLIED, atMillis = 1L),
+                ),
+            )
+
+            val viewModel = newViewModel(fake, backgroundScope)
+            val state = viewModel.state.first { it.recentlyApplied.isNotEmpty() }
+
+            assertEquals(listOf("a1", "a2"), state.recentlyApplied.map { it.id })
+        }
+
+    @Test
+    fun recentlyAppliedRowCapsAtOneCarousel() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            // Newest first, like the Room DAO orders them (the fake returns
+            // entries in insertion order, so we insert in that convention).
+            history.setEntries(
+                (12 downTo 1).map { index ->
+                    HistoryEntry(fakeWallpaper("w$index"), HistoryAction.APPLIED, atMillis = index.toLong())
+                },
+            )
+
+            val viewModel = newViewModel(fake, backgroundScope)
+            val state = viewModel.state.first { it.recentlyApplied.isNotEmpty() }
+
+            assertEquals(10, state.recentlyApplied.size)
+            // The row keeps the newest ten — w12 down to w3 — and drops
+            // the two oldest.
+            assertFalse(state.recentlyApplied.any { it.id == "w1" || it.id == "w2" })
+            assertEquals("w12", state.recentlyApplied.first().id)
+        }
+
+    @Test
+    fun recentlyAppliedRowStaysHiddenWithoutApplies() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            history.setEntries(
+                listOf(
+                    HistoryEntry(fakeWallpaper("v1"), HistoryAction.VIEWED, atMillis = 2L),
+                    HistoryEntry(fakeWallpaper("d1"), HistoryAction.DOWNLOADED, atMillis = 1L),
+                ),
+            )
+
+            val viewModel = newViewModel(fake, backgroundScope)
+            advanceUntilIdle()
+
+            val settled = viewModel.state.value
+            assertTrue(settled.recentlyApplied.isEmpty())
+        }
 
     @Test
     fun initialLoadShowsFirstPage() =
@@ -132,6 +201,7 @@ class BrowseViewModelTest {
                 BrowseViewModel(
                     sources = fake,
                     userPreferencesRepository = preferences,
+                    historyRepository = history,
                 )
             viewModel.state.first { !it.isFirstLoading }
 
@@ -167,6 +237,7 @@ class BrowseViewModelTest {
                 BrowseViewModel(
                     sources = fake,
                     userPreferencesRepository = preferences,
+                    historyRepository = history,
                 )
             viewModel.state.first { !it.isFirstLoading }
             preferences.setSfwOnly(false)
@@ -319,7 +390,7 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
             val preferences = newPreferences()
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
             viewModel.state.first { it.sourceBar.isNotEmpty() && !it.isFirstLoading }
 
             fake.enqueueSearch(page(ids = listOf("px1"), nextPage = null))
@@ -346,7 +417,7 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("p1"), nextPage = null))
 
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
 
             val state = viewModel.state.first { !it.isFirstLoading }
             assertEquals("pexels", state.selectedSourceId)
@@ -364,7 +435,7 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
             val preferences = newPreferences()
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
             viewModel.state.first { !it.isFirstLoading }
 
             viewModel.onSourceSelected("unsplash")
@@ -394,7 +465,7 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
             val preferences = newPreferences()
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
             viewModel.state.first { !it.isFirstLoading }
 
             fake.enqueueSearch(page(ids = listOf("p1"), nextPage = null))
@@ -684,7 +755,7 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
             val preferences = newPreferences()
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
             viewModel.state.first {
                 it.sections.isNotEmpty() &&
                     it.sections
@@ -736,7 +807,7 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
             val preferences = newPreferences()
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
             viewModel.state.first {
                 it.sections
                     .singleOrNull()
@@ -906,7 +977,7 @@ class BrowseViewModelTest {
             preferences.addSearchQuery("nature")
             preferences.addSearchQuery("space")
             fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
             viewModel.state.first { it.history == listOf("space", "nature") }
 
             fake.enqueueSearch(page(ids = listOf("s1"), nextPage = null))
@@ -925,7 +996,7 @@ class BrowseViewModelTest {
             val preferences = newPreferences()
             preferences.addSearchQuery("nature")
             fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
             viewModel.state.first { it.history.isNotEmpty() }
 
             viewModel.onSearchFocusChange(true)
@@ -974,7 +1045,7 @@ class BrowseViewModelTest {
             val preferences = newPreferences()
             preferences.setBrowseSourceId("cloudimage.a")
             fake.enqueueSearch(page(ids = emptyList(), nextPage = null))
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
 
             val state = viewModel.state.first { !it.isFirstLoading }
 
@@ -998,7 +1069,7 @@ class BrowseViewModelTest {
                     tmpFolder.newFile("preferences_${System.nanoTime()}.preferences_pb")
                 },
             )
-        return BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+        return BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
     }
 
     private fun TestScope.newPreferences(): UserPreferencesRepository =

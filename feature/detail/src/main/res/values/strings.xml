@@ -41,4 +41,5 @@
     <string name="detail_error_bad_image">the image could not be decoded</string>
     <string name="detail_error_unsupported">not supported on this device</string>
     <string name="detail_error_storage">storage error</string>
+    <string name="detail_more_like_this">More like this</string>
 </resources>

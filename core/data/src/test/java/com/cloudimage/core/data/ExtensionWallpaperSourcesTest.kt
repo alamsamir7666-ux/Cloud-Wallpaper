@@ -2,6 +2,7 @@ package com.cloudimage.core.data
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.cloudimage.core.data.repository.ExtensionWallpaperSources
+import com.cloudimage.core.data.repository.SourceCapability
 import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.ContentRating
@@ -161,12 +162,14 @@ class ExtensionWallpaperSourcesTest {
     private fun sourceWallpaper(
         id: String,
         rating: ContentRating = ContentRating.SFW,
+        tags: List<String> = emptyList(),
     ): com.cloudimage.provider.api.Wallpaper =
         com.cloudimage.provider.api.Wallpaper(
             id = id,
             providerId = "any",
             thumbUrl = "https://t/$id",
             fullUrl = "https://f/$id",
+            tags = tags,
             contentRating =
                 when (rating) {
                     ContentRating.SFW -> com.cloudimage.provider.api.ContentRating.SFW
@@ -462,9 +465,69 @@ class ExtensionWallpaperSourcesTest {
             sources.refresh()
 
             assertEquals(
-                listOf(SourceInfo("cloudimage.unsplash", "Unsplash", true)),
+                listOf(
+                    SourceInfo(
+                        "cloudimage.unsplash",
+                        "Unsplash",
+                        true,
+                        capabilities = setOf(SourceCapability.SEARCH),
+                    ),
+                ),
                 sources.sources.value,
             )
+        }
+
+    @Test
+    fun `sources expose every capability the provider declared`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.POPULAR, Capability.SEARCH, Capability.TAGS),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val sources = sources(engine)
+
+            sources.refresh()
+
+            val info =
+                sources
+                    .sources
+                    .value
+                    .orEmpty()
+                    .single()
+            assertEquals(
+                setOf(SourceCapability.POPULAR, SourceCapability.SEARCH, SourceCapability.TAGS),
+                info.capabilities,
+            )
+        }
+
+    @Test
+    fun `search results carry their tags for the detail recommendations`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.POPULAR),
+                    popularPage =
+                        ProviderPage(
+                            listOf(
+                                sourceWallpaper("w1", tags = listOf("forest", "mist")),
+                                sourceWallpaper("w2"),
+                            ),
+                            null,
+                        ),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val sources = sources(engine)
+
+            val result = sources.search(WallpaperQuery(), page = 1)
+
+            val wallpapers = (result as NetworkResult.Success).value.page.wallpapers
+            assertEquals(listOf("forest", "mist"), wallpapers.first { it.id == "w1" }.tags)
+            assertTrue(wallpapers.first { it.id == "w2" }.tags.isEmpty())
         }
 
     @Test

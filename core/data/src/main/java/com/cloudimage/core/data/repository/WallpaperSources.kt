@@ -7,6 +7,21 @@ import com.cloudimage.core.network.NetworkResult
 import kotlinx.coroutines.flow.StateFlow
 
 /**
+ * What an installed source can do, mirrored from the provider contract so
+ * the UI can gate affordances without touching plugin classes (v1.0.9).
+ * [SEARCH] and [TAGS] together drive the detail screen's "More like this"
+ * row; the rest are carried for future surfaces.
+ */
+enum class SourceCapability {
+    POPULAR,
+    LATEST,
+    SEARCH,
+    TAGS,
+    RANDOM,
+    FILTERS,
+}
+
+/**
  * One usable wallpaper source, surfaced to the UI.
  *
  * [requiresApiKey] is true when the provider is useless without a stored
@@ -16,6 +31,8 @@ data class SourceInfo(
     val id: String,
     val name: String,
     val requiresApiKey: Boolean,
+    /** What the provider declared it can do (v1.0.9). */
+    val capabilities: Set<SourceCapability> = emptySet(),
 )
 
 /**

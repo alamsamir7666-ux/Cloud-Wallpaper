@@ -76,7 +76,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cloudimage.core.designsystem.WallpaperCard
 import com.cloudimage.core.model.Wallpaper
@@ -185,6 +185,7 @@ fun BrowseScreen(
                 state.mode == BrowseMode.SECTIONS && state.sections.isNotEmpty() ->
                     SectionsHome(
                         sections = state.sections,
+                        recentlyApplied = state.recentlyApplied,
                         listState = sectionsState,
                         onWallpaperClick = onWallpaperClick,
                         onSeeAll = viewModel::onSeeAll,

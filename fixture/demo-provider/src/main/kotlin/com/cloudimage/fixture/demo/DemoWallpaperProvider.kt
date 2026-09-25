@@ -71,6 +71,9 @@ class DemoWallpaperProvider : WallpaperProvider {
                 thumbUrl = "demo://thumb",
                 fullUrl = "demo://full",
                 title = "Demo wallpaper",
+                // Tags ride along so the v1.0.9 "More like this" gate has
+                // something to chew on across the classloader boundary.
+                tags = listOf("demo", "sunset"),
             )
         return Result.success(Page(wallpapers = listOf(wallpaper), nextPage = if (page < 2) page + 1 else null))
     }

@@ -77,6 +77,9 @@ fun CloudimageNavHost(
         ) { backStackEntry ->
             DetailScreen(
                 onBack = { navController.popBackStack() },
+                onOpenWallpaper = { wallpaper: Wallpaper ->
+                    navController.navigate(DetailDestination.createRoute(wallpaper))
+                },
             )
         }
     }

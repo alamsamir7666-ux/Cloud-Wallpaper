@@ -9,18 +9,24 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -35,6 +41,7 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -56,14 +63,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.cloudimage.core.data.repository.ApplyTarget
 import com.cloudimage.core.model.Wallpaper
 import java.io.File
@@ -72,10 +85,14 @@ import java.io.File
  * Fullscreen preview + apply screen: zoomable image, favorite toggle, an info
  * sheet, set-as-wallpaper (home / lock / both), save-to-gallery and share.
  * One-shot results (snackbars, share intents) arrive through the event flow.
+ * When the source declared SEARCH + TAGS and the item carries tags, a
+ * same-provider "More like this" carousel rides above the action bar
+ * (v1.0.9) — tapping a card reopens detail for that wallpaper.
  */
 @Composable
 fun DetailScreen(
     onBack: () -> Unit,
+    onOpenWallpaper: (Wallpaper) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: DetailViewModel = hiltViewModel(),
 ) {
@@ -123,6 +140,13 @@ fun DetailScreen(
                 onShare = viewModel::onShare,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
+            if (state.moreLikeThis.isNotEmpty()) {
+                MoreLikeThisRow(
+                    wallpapers = state.moreLikeThis,
+                    onOpenWallpaper = onOpenWallpaper,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            }
         }
 
         SnackbarHost(
@@ -258,6 +282,85 @@ private fun ActionIconButton(
             CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
         } else {
             Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+/**
+ * The "More like this" carousel (v1.0.9): compact same-provider lookalikes
+ * riding above the action bar, mirroring the home carousels' card metrics
+ * at a smaller scale so the fullscreen image stays the hero. It only
+ * exists when the ViewModel found something — empty means hidden.
+ */
+@Composable
+private fun MoreLikeThisRow(
+    wallpapers: List<Wallpaper>,
+    onOpenWallpaper: (Wallpaper) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 104.dp)
+                .testTag("detail:more-like-this"),
+    ) {
+        Text(
+            text = stringResource(R.string.detail_more_like_this),
+            style = MaterialTheme.typography.titleSmall,
+            color = Color.White.copy(alpha = 0.9f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 20.dp),
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.heightIn(min = LOOKALIKE_HEIGHT + 4.dp),
+        ) {
+            items(wallpapers, key = { "${it.providerId}:${it.id}" }) { wallpaper ->
+                LookalikeCard(
+                    wallpaper = wallpaper,
+                    onClick = { onOpenWallpaper(wallpaper) },
+                )
+            }
+        }
+    }
+}
+
+/** One compact carousel card — a thumbnail sized by its real aspect ratio. */
+@Composable
+private fun LookalikeCard(
+    wallpaper: Wallpaper,
+    onClick: () -> Unit,
+) {
+    val ratio =
+        wallpaper.aspectRatio?.coerceIn(minimumValue = 0.5f, maximumValue = 2.4f) ?: 1.4f
+    Card(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        modifier =
+            Modifier
+                .height(LOOKALIKE_HEIGHT)
+                .aspectRatio(ratio)
+                .testTag("detail:more-like-this:${wallpaper.providerId}:${wallpaper.id}"),
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            AsyncImage(
+                model =
+                    ImageRequest
+                        .Builder(LocalContext.current)
+                        .data(wallpaper.thumbUrl)
+                        .crossfade(durationMillis = 220)
+                        .build(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                placeholder = ColorPainter(Color.White.copy(alpha = 0.08f)),
+                error = ColorPainter(Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 }
@@ -409,6 +512,9 @@ private fun Wallpaper.resolution(): String? = if (width != null && height != nul
 private fun String?.orDash(): String = this ?: "—"
 
 private val HeartRed = Color(0xFFEF6C74)
+
+/** Height of one "More like this" card. */
+private val LOOKALIKE_HEIGHT = 128.dp
 
 /** Fires the system share sheet with a FileProvider-backed image uri. */
 private fun shareWallpaper(

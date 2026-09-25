@@ -28,6 +28,12 @@ data class Wallpaper(
     val width: Int? = null,
     val height: Int? = null,
     val sourceUrl: String? = null,
+    /**
+     * Tags the source attached to this item (v1.0.9) — the seed for the
+     * detail screen's "More like this" row. Defaults to empty: sources
+     * that do not tag their results simply offer no recommendations.
+     */
+    val tags: List<String> = emptyList(),
     val contentRating: ContentRating = ContentRating.SFW,
 ) {
     /** width / height, or null when dimensions are unknown. */
