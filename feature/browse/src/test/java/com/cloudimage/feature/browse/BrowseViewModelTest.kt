@@ -511,11 +511,21 @@ class BrowseViewModelTest {
             fake.enqueueSearch(page(ids = listOf("t1"), nextPage = 2))
             fake.enqueueSearch(page(ids = listOf("t2"), nextPage = null))
             val viewModel = newViewModel(fake, backgroundScope)
-            viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.isNotEmpty() == true }
+            viewModel.state.first {
+                it.sections
+                    .singleOrNull()
+                    ?.wallpapers
+                    ?.isNotEmpty() == true
+            }
 
             viewModel.loadMoreSection("wallhaven:trending")
             val done =
-                viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.size == 2 }
+                viewModel.state.first {
+                    it.sections
+                        .singleOrNull()
+                        ?.wallpapers
+                        ?.size == 2
+                }
 
             assertTrue(done.sections.single().endReached)
             viewModel.loadMoreSection("wallhaven:trending")
@@ -545,7 +555,12 @@ class BrowseViewModelTest {
             fake.enqueueSearch(page(ids = listOf("t1"), nextPage = null))
             viewModel.loadMoreSection("wallhaven:trending")
             val recovered =
-                viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.isNotEmpty() == true }
+                viewModel.state.first {
+                    it.sections
+                        .singleOrNull()
+                        ?.wallpapers
+                        ?.isNotEmpty() == true
+                }
 
             // A failed FIRST page retries page 1 — there is nothing to
             // append onto, so advancing the cursor would skip content.
@@ -571,7 +586,12 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("t1"), nextPage = null))
             val viewModel = newViewModel(fake, backgroundScope)
-            viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.isNotEmpty() == true }
+            viewModel.state.first {
+                it.sections
+                    .singleOrNull()
+                    ?.wallpapers
+                    ?.isNotEmpty() == true
+            }
 
             fake.enqueueSearch(page(ids = listOf("g1", "g2"), nextPage = null))
             viewModel.onSeeAll("wallhaven:trending")
@@ -617,7 +637,12 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("t1"), nextPage = null))
             val viewModel = newViewModel(fake, backgroundScope)
-            viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.isNotEmpty() == true }
+            viewModel.state.first {
+                it.sections
+                    .singleOrNull()
+                    ?.wallpapers
+                    ?.isNotEmpty() == true
+            }
 
             fake.enqueueSearch(page(ids = listOf("s1"), nextPage = null))
             viewModel.onSearchTextChange("nature")
@@ -710,7 +735,12 @@ class BrowseViewModelTest {
             fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
             val preferences = newPreferences()
             val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
-            viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.isNotEmpty() == true }
+            viewModel.state.first {
+                it.sections
+                    .singleOrNull()
+                    ?.wallpapers
+                    ?.isNotEmpty() == true
+            }
 
             fake.setSectionsResult(
                 NetworkResult.Success(listOf(section(sectionId = "trending", title = "Trending"))),
@@ -718,7 +748,12 @@ class BrowseViewModelTest {
             fake.enqueueSearch(page(ids = listOf("b"), nextPage = null))
             preferences.setSfwOnly(false)
             val state =
-                viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.map { it.id } == listOf("b") }
+                viewModel.state.first {
+                    it.sections
+                        .singleOrNull()
+                        ?.wallpapers
+                        ?.map { it.id } == listOf("b")
+                }
 
             assertEquals(BrowseMode.SECTIONS, state.mode)
         }

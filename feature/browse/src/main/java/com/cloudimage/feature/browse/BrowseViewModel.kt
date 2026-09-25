@@ -255,7 +255,14 @@ class BrowseViewModel
 
         /** Commits a new filter set from the sheet and restarts the grid. */
         fun onQueryChange(query: WallpaperQuery) {
-            _state.update { it.copy(query = query.copy(text = it.query.text), mode = BrowseMode.GRID, scopeTitle = null, scopeSourceId = null) }
+            _state.update {
+                it.copy(
+                    query = query.copy(text = it.query.text),
+                    mode = BrowseMode.GRID,
+                    scopeTitle = null,
+                    scopeSourceId = null,
+                )
+            }
             startGrid()
         }
 
