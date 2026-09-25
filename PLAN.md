@@ -182,3 +182,25 @@ on principle).
   wallhaven 27 classes / 32 external refs, 0 unresolved. 426 unit tests
   (231 debug + 156 release), 0 failures. Release APK 2.96 MB.
   Remaining v1.1 backlog: deprecation cleanup, TV UI, cloud sync.
+- **2026-09-25 — v1.0.6 shipped.** Browse source switcher, from a real user
+  report: after installing a new extension there was no way to view its feed
+  on the home page (the merged feed silently skipped keyless sources, so
+  nothing visibly changed). The home screen now has a source bar — "All
+  sources" plus a chip per usable source, appearing as soon as a second
+  source exists — that pins the feed to one provider: `WallpaperSources`
+  .search gained a `sourceId` route (`ExtensionWallpaperSources` filters
+  the ready providers, with an honest "not installed" failure for a dangling
+  pin), the pin persists in DataStore (`UserPreferences.browseSourceId`,
+  survives process death, and auto-clears with a feed restart when the
+  pinned source is uninstalled), and search/pagination carry it. Chips that
+  need an API key the user hasn't stored show a key hint, and selecting one
+  shows an "API key required" prompt pointing at the Extensions tab
+  instead of firing a request destined to fail — adding the key from the
+  extensions screen un-prompts the feed live. The cold-start-race retry now
+  waits for the first load to settle before rescuing (fixes a duplicate
+  restart when sources are discovered while the initial request is in
+  flight). Search hint de-Wallhavened. 433 unit tests (7 new: browse
+  routing/persist/recreate/prompt-recovery/unpin-fallback, sources
+  routing, datastore), 0 failures; dex audit clean — 5,524 host classes,
+  wallhaven 27 classes / 32 external refs, 0 unresolved. Release APK
+  2.97 MB.
