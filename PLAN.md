@@ -204,3 +204,22 @@ on principle).
   routing, datastore), 0 failures; dex audit clean — 5,524 host classes,
   wallhaven 27 classes / 32 external refs, 0 unresolved. Release APK
   2.97 MB.
+- **2026-09-25 — v1.0.7 shipped.** CloudStream-style source selector,
+  from user feedback on the v1.0.6 chips (they wanted the provider
+  switcher UI CloudStream uses). The chip row is replaced by a
+  full-width selector pill above the search bar — letter avatar + active
+  source name + chevron — that opens a dropdown menu listing "All
+  sources" and every installed extension (a round avatar tile in one of
+  three container tones, stable per source name; a checkmark on the
+  active entry; the key hint on keyless sources), plus a "Manage
+  extensions" entry that jumps to the Extensions tab with the bottom
+  bar's save/restore-state navigation contract — the discovery path the
+  user said was missing from the app. The selector now shows with a
+  single usable source too (it names where the feed comes from and
+  always carries the Extensions shortcut) instead of waiting for a
+  second source. The API-key prompt gained an "Open Extensions" recovery
+  button next to "Show all sources". Persistence, pin routing, dangling
+  -pin fallback and key-prompt recovery all carried over unchanged from
+  v1.0.6. 434 unit tests (1 new: single-source selector visibility),
+  0 failures; dex audit clean — 5,543 host classes, wallhaven 27
+  classes / 32 external refs, 0 unresolved. Release APK 2.99 MB.
