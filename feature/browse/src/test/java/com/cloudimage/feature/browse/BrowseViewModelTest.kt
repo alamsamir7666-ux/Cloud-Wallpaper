@@ -1,6 +1,7 @@
 package com.cloudimage.feature.browse
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.ContentRating
 import com.cloudimage.core.model.Page
@@ -295,15 +296,119 @@ class BrowseViewModelTest {
             viewModel.state.first { it.error != null && !it.isFirstLoading }
 
             fake.enqueueSearch(page(ids = listOf("s1"), nextPage = null))
-            fake.setSources(
-                com.cloudimage.core.data.repository
-                    .SourceInfo("cloudimage.test", "Test", false),
-            )
+            fake.setSources(SourceInfo("cloudimage.test", "Test", false))
 
             val recovered = viewModel.state.first { it.wallpapers.isNotEmpty() }
 
             assertEquals(listOf("s1"), recovered.wallpapers.map { it.id })
             assertNull(recovered.error)
+        }
+
+    // ---- Source switcher (v1.0.6) ----
+
+    @Test
+    fun selectingASourceRoutesTheFeedToItAndPersists() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false),
+                SourceInfo("pexels", "Pexels", requiresApiKey = false),
+            )
+            fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
+            val preferences = newPreferences()
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            viewModel.state.first { it.sourceBar.isNotEmpty() && !it.isFirstLoading }
+
+            fake.enqueueSearch(page(ids = listOf("px1"), nextPage = null))
+            viewModel.onSourceSelected("pexels")
+            val state = viewModel.state.first { it.selectedSourceId == "pexels" && !it.isFirstLoading }
+
+            assertEquals(listOf("px1"), state.wallpapers.map { it.id })
+            assertEquals("pexels", fake.searchSourceIds.last())
+            assertEquals(1, fake.searchCalls.last().second)
+            assertEquals("pexels", preferences.preferences.first().browseSourceId)
+            // No key needed — no hint on the chip.
+            assertFalse(state.sourceBar.single { it.id == "pexels" }.needsApiKey)
+        }
+
+    @Test
+    fun storedSelectionDrivesTheFeedAfterRecreation() =
+        runTest {
+            val preferences = newPreferences()
+            preferences.setBrowseSourceId("pexels")
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false),
+                SourceInfo("pexels", "Pexels", requiresApiKey = false),
+            )
+            fake.enqueueSearch(page(ids = listOf("p1"), nextPage = null))
+
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+
+            val state = viewModel.state.first { !it.isFirstLoading }
+            assertEquals("pexels", state.selectedSourceId)
+            assertEquals("pexels", fake.searchSourceIds.single())
+            assertEquals(listOf("p1"), state.wallpapers.map { it.id })
+        }
+
+    @Test
+    fun sourceNeedingAKeyPromptsInsteadOfFailingAndAddingTheKeyRecovers() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false),
+                SourceInfo("unsplash", "Unsplash", requiresApiKey = true),
+            )
+            fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
+            val preferences = newPreferences()
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            viewModel.state.first { !it.isFirstLoading }
+
+            viewModel.onSourceSelected("unsplash")
+
+            val prompted = viewModel.state.first { it.showApiKeyPrompt }
+            assertFalse(prompted.isFirstLoading)
+            // The guard caught it before any request fired.
+            assertEquals(1, fake.searchCalls.size)
+
+            fake.enqueueSearch(page(ids = listOf("u1"), nextPage = null))
+            preferences.setProviderApiKey("unsplash", "user-key")
+            val recovered = viewModel.state.first { it.wallpapers.map { it.id } == listOf("u1") }
+
+            assertFalse(recovered.showApiKeyPrompt)
+            assertEquals("unsplash", fake.searchSourceIds.last())
+            // The key hint left the chip too.
+            assertFalse(recovered.sourceBar.single { it.id == "unsplash" }.needsApiKey)
+        }
+
+    @Test
+    fun unpinningFallsBackToTheMergedFeedWhenTheSourceDisappears() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false),
+                SourceInfo("pexels", "Pexels", requiresApiKey = false),
+            )
+            fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
+            val preferences = newPreferences()
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            viewModel.state.first { !it.isFirstLoading }
+
+            fake.enqueueSearch(page(ids = listOf("p1"), nextPage = null))
+            viewModel.onSourceSelected("pexels")
+            viewModel.state.first { it.selectedSourceId == "pexels" && !it.isFirstLoading }
+
+            // The pinned source is uninstalled while pinned.
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.enqueueSearch(page(ids = listOf("w2"), nextPage = null))
+
+            val recovered = viewModel.state.first { it.selectedSourceId == null && !it.isFirstLoading }
+
+            assertEquals("", preferences.preferences.first().browseSourceId)
+            assertNull(fake.searchSourceIds.last())
+            assertEquals(listOf("w2"), recovered.wallpapers.map { it.id })
+            // One source left — the bar hides instead of offering no choice.
+            assertTrue(recovered.sourceBar.isEmpty())
         }
 
     private fun newViewModel(

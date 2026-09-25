@@ -42,14 +42,19 @@ interface WallpaperSources {
     suspend fun refresh()
 
     /**
-     * Queries every source with [query] at [page] and merges the results.
+     * Queries the sources with [query] at [page] and merges the results.
      *
      * [WallpaperQuery.contentRatings] is translated into the host filter
      * vocabulary (`purity`) and ALSO enforced per item, so a source that
      * ignores the vocabulary cannot leak content the user excluded.
+     *
+     * [sourceId] pins the query to a single installed source (the v1.0.6
+     * browse source switcher); null — the default — queries every ready
+     * source in parallel and merges the pages.
      */
     suspend fun search(
         query: WallpaperQuery,
         page: Int,
+        sourceId: String? = null,
     ): NetworkResult<Page>
 }

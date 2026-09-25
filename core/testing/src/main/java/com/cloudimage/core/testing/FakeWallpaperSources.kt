@@ -21,6 +21,9 @@ class FakeWallpaperSources : WallpaperSources {
     /** Every (query, page) pair search() was called with, in order. */
     val searchCalls = mutableListOf<Pair<WallpaperQuery, Int>>()
 
+    /** The sourceId each search() was called with, parallel to [searchCalls]. */
+    val searchSourceIds = mutableListOf<String?>()
+
     private val sourcesState = MutableStateFlow<List<SourceInfo>?>(null)
     override val sources: StateFlow<List<SourceInfo>?> = sourcesState.asStateFlow()
 
@@ -51,8 +54,10 @@ class FakeWallpaperSources : WallpaperSources {
     override suspend fun search(
         query: WallpaperQuery,
         page: Int,
+        sourceId: String?,
     ): NetworkResult<Page> {
         searchCalls += query to page
+        searchSourceIds += sourceId
         return scriptedSearches.removeFirstOrNull()
             ?: NetworkResult.Success(Page.EMPTY)
     }

@@ -36,6 +36,14 @@ enum class BrowseError {
     SOURCE,
 }
 
+/** One entry of the source bar: an installed source the feed can be pinned to. */
+data class BrowseSource(
+    val id: String,
+    val name: String,
+    /** The source needs an API key the user has not stored yet. */
+    val needsApiKey: Boolean,
+)
+
 /** Immutable snapshot of everything the browse screen renders. */
 data class BrowseUiState(
     /** Text currently sitting in the search field; not yet committed. */
@@ -51,6 +59,12 @@ data class BrowseUiState(
     val error: BrowseError? = null,
     /** The usable sources, or null while they are being discovered. */
     val sources: List<SourceInfo>? = null,
+    /** The source the feed is pinned to; null means the merged feed of all sources. */
+    val selectedSourceId: String? = null,
+    /** Source-bar entries; empty (row hidden) while fewer than two sources are usable. */
+    val sourceBar: List<BrowseSource> = emptyList(),
+    /** The pinned source needs an API key the user has not stored yet. */
+    val showApiKeyPrompt: Boolean = false,
 ) {
     /** True when the filter sheet holds non-default choices. */
     val filtersActive: Boolean get() = !query.isDefault
@@ -69,14 +83,16 @@ data class BrowseUiState(
  * paging cursor. Preference changes (SFW-only, grid columns) flow in from
  * DataStore and re-shape the feed live; source installs flow in from the
  * extension engine and restart the feed only when they rescue it from
- * empty.
+ * empty. The feed can be pinned to one source (v1.0.6 source switcher);
+ * the pin is persisted, survives process death, and falls back to the
+ * merged feed when the pinned source is no longer installed.
  */
 @HiltViewModel
 class BrowseViewModel
     @Inject
     constructor(
         private val sources: WallpaperSources,
-        userPreferencesRepository: UserPreferencesRepository,
+        private val userPreferencesRepository: UserPreferencesRepository,
     ) : ViewModel() {
         private val _state = MutableStateFlow(BrowseUiState())
         val state: StateFlow<BrowseUiState> = _state.asStateFlow()
@@ -90,17 +106,29 @@ class BrowseViewModel
         /** The in-flight request; cancelled whenever a new search starts. */
         private var searchJob: Job? = null
 
+        /** Provider ids that have an API key stored; drives the key prompts. */
+        private var storedApiKeyIds: Set<String> = emptySet()
+
         init {
             var preferencesSeen = false
             userPreferencesRepository.preferences
                 .onEach { preferences ->
                     val sfwChanged = preferences.sfwOnly != _state.value.sfwOnly
+                    val storedSelection = preferences.browseSourceId.ifEmpty { null }
+                    val selectionChanged = storedSelection != _state.value.selectedSourceId
                     _state.update {
-                        it.copy(sfwOnly = preferences.sfwOnly, gridColumns = preferences.gridColumns)
+                        it.copy(
+                            sfwOnly = preferences.sfwOnly,
+                            gridColumns = preferences.gridColumns,
+                            selectedSourceId = storedSelection,
+                        )
                     }
+                    rebuildSourceBar()
                     // First emission triggers the initial load; later SFW flips
-                    // restart the feed because the purity parameter changes.
-                    if (!preferencesSeen || sfwChanged) restartSearch()
+                    // restart the feed because the purity parameter changes;
+                    // a selection change restarts it because the provider set
+                    // changed. Never both — one restart per cause.
+                    if (!preferencesSeen || sfwChanged || selectionChanged) restartSearch()
                     preferencesSeen = true
                 }.launchIn(viewModelScope)
 
@@ -108,13 +136,36 @@ class BrowseViewModel
             sources.sources
                 .onEach { available ->
                     _state.update { it.copy(sources = available) }
+                    // A pin that outlived its package (uninstalled elsewhere)
+                    // falls back to the merged feed instead of a dead screen.
+                    val selected = _state.value.selectedSourceId
+                    val selectionDangling =
+                        available != null && selected != null && available.none { it.id == selected }
+                    if (selectionDangling) {
+                        viewModelScope.launch { userPreferencesRepository.setBrowseSourceId(null) }
+                    }
+                    rebuildSourceBar()
                     // A feed that is empty or failed while sources were
                     // still being discovered gets a second chance once the
                     // engine finishes loading — the classic cold-start race.
-                    val feedNeedsRetry = _state.value.wallpapers.isEmpty()
+                    // Only once the first load has SETTLED though: an initial
+                    // request still in flight has an empty list too, and
+                    // rescuing it would fire a duplicate restart.
+                    val feedNeedsRetry =
+                        !_state.value.isFirstLoading && _state.value.wallpapers.isEmpty()
                     val nowUsable = !available.orEmpty().isEmpty()
                     if (feedNeedsRetry && nowUsable && sourcesSeen.orEmpty().isEmpty()) restartSearch()
                     sourcesSeen = available
+                }.launchIn(viewModelScope)
+
+            userPreferencesRepository.providerApiKeys
+                .onEach { keys ->
+                    storedApiKeyIds = keys.keys
+                    val wasPrompting = _state.value.showApiKeyPrompt
+                    rebuildSourceBar()
+                    // The user may have just added the missing key from the
+                    // Extensions tab — unprompt the feed immediately.
+                    if (wasPrompting && !selectedNeedsApiKey()) restartSearch()
                 }.launchIn(viewModelScope)
         }
 
@@ -135,6 +186,15 @@ class BrowseViewModel
             restartSearch()
         }
 
+        /**
+         * Pins the feed to [sourceId] (null = the merged feed of every
+         * source). The write round-trips through DataStore, so the restart
+         * happens exactly once, in the preferences collector.
+         */
+        fun onSourceSelected(sourceId: String?) {
+            viewModelScope.launch { userPreferencesRepository.setBrowseSourceId(sourceId) }
+        }
+
         /** Appends the next page when the grid approaches its end. */
         fun loadMore() {
             val current = _state.value
@@ -144,7 +204,7 @@ class BrowseViewModel
                 viewModelScope.launch {
                     _state.update { it.copy(isLoadingMore = true) }
                     sources
-                        .search(effectiveQuery(), page)
+                        .search(effectiveQuery(), page, sourceId = current.selectedSourceId)
                         .onSuccess { result ->
                             currentPage = page
                             _state.update { state ->
@@ -165,21 +225,27 @@ class BrowseViewModel
             searchJob?.cancel()
             currentPage = 1
             randomSeed = null
+            // A pinned source without its API key cannot answer anything —
+            // say that instead of firing a request destined to fail with a
+            // misleading generic error (the honest-taxonomy principle).
+            val needsKey = selectedNeedsApiKey()
             _state.update {
                 it.copy(
                     wallpapers = emptyList(),
-                    isFirstLoading = true,
+                    isFirstLoading = !needsKey,
                     isLoadingMore = false,
                     endReached = false,
                     error = null,
+                    showApiKeyPrompt = needsKey,
                 )
             }
+            if (needsKey) return
             val query = effectiveQuery()
             randomSeed = query.seed
             searchJob =
                 viewModelScope.launch {
                     sources
-                        .search(query, page = 1)
+                        .search(query, page = 1, sourceId = _state.value.selectedSourceId)
                         .onSuccess { result ->
                             _state.update { state ->
                                 state.copy(
@@ -193,6 +259,36 @@ class BrowseViewModel
                             _state.update { it.copy(isFirstLoading = false, error = error.toBrowseError()) }
                         }
                 }
+        }
+
+        /** True when the pinned source is useless until the user stores its key. */
+        private fun selectedNeedsApiKey(): Boolean {
+            val selected = _state.value.selectedSourceId ?: return false
+            val info = _state.value.sources?.firstOrNull { it.id == selected } ?: return false
+            return info.requiresApiKey && selected !in storedApiKeyIds
+        }
+
+        /** Rebuilds the source bar from the discovered sources and stored keys. */
+        private fun rebuildSourceBar() {
+            _state.update { state ->
+                val available = state.sources.orEmpty()
+                state.copy(
+                    sourceBar =
+                        if (available.size < 2) {
+                            // One source needs no switching; zero needs the
+                            // install-a-source empty state instead.
+                            emptyList()
+                        } else {
+                            available.map { info ->
+                                BrowseSource(
+                                    id = info.id,
+                                    name = info.name,
+                                    needsApiKey = info.requiresApiKey && info.id !in storedApiKeyIds,
+                                )
+                            }
+                        },
+                )
+            }
         }
 
         /**

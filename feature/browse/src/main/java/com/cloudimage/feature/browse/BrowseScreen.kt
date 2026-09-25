@@ -1,6 +1,7 @@
 package com.cloudimage.feature.browse
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,18 +16,21 @@ import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Extension
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -54,8 +58,8 @@ import com.cloudimage.core.designsystem.WallpaperCard
 import com.cloudimage.core.model.Wallpaper
 
 /**
- * The home feed: a Wallhaven-backed staggered masonry grid with search,
- * filters and infinite scroll.
+ * The home feed: a staggered masonry grid over every installed source, with
+ * search, filters, a source switcher (v1.0.6) and infinite scroll.
  *
  * Paging is triggered by a prefetch buffer — when the user scrolls within
  * eight items of the end, the next page loads before they hit it.
@@ -83,8 +87,21 @@ fun BrowseScreen(
             filtersActive = state.filtersActive,
         )
 
+        // The source bar appears as soon as a second usable source exists —
+        // which is exactly when switching becomes meaningful.
+        if (state.sourceBar.isNotEmpty()) {
+            SourceBarRow(
+                sources = state.sourceBar,
+                selectedSourceId = state.selectedSourceId,
+                onSourceSelected = viewModel::onSourceSelected,
+            )
+        }
+
         when {
             state.isFirstLoading -> FullScreenLoading()
+            state.showApiKeyPrompt ->
+                ApiKeyPrompt(onShowAllSources = { viewModel.onSourceSelected(null) })
+
             state.showFullscreenError ->
                 FullScreenError(error = state.error!!, onRetry = viewModel::onRetry)
 
@@ -160,6 +177,50 @@ private fun SearchBarRow(
                     contentDescription = stringResource(R.string.browse_open_filters),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SourceBarRow(
+    sources: List<BrowseSource>,
+    selectedSourceId: String?,
+    onSourceSelected: (String?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+    ) {
+        FilterChip(
+            selected = selectedSourceId == null,
+            onClick = { onSourceSelected(null) },
+            label = { Text(stringResource(R.string.browse_source_all)) },
+            modifier = Modifier.testTag("browse:source:all"),
+        )
+        sources.forEach { source ->
+            FilterChip(
+                selected = selectedSourceId == source.id,
+                onClick = { onSourceSelected(source.id) },
+                label = { Text(source.name) },
+                leadingIcon =
+                    if (source.needsApiKey) {
+                        {
+                            Icon(
+                                Icons.Rounded.Key,
+                                contentDescription = stringResource(R.string.browse_source_needs_key),
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                modifier = Modifier.testTag("browse:source:${source.id}"),
+            )
         }
     }
 }
@@ -344,6 +405,38 @@ private fun NoSources(modifier: Modifier = Modifier) {
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+private fun ApiKeyPrompt(
+    onShowAllSources: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier.fillMaxSize().padding(32.dp).testTag("browse:api-key-prompt"),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Key,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(56.dp),
+        )
+        Text(
+            text = stringResource(R.string.browse_api_key_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            text = stringResource(R.string.browse_api_key_body),
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(onClick = onShowAllSources) {
+            Text(stringResource(R.string.browse_api_key_show_all))
+        }
     }
 }
 

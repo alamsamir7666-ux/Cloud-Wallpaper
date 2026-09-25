@@ -121,6 +121,7 @@ class ExtensionsViewModelTest {
         override suspend fun search(
             query: WallpaperQuery,
             page: Int,
+            sourceId: String?,
         ): NetworkResult<Page> = NetworkResult.Success(Page.EMPTY)
     }
 

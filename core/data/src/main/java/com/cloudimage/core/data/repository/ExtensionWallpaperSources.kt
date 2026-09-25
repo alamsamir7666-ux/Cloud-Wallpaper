@@ -87,9 +87,23 @@ class ExtensionWallpaperSources
         override suspend fun search(
             query: WallpaperQuery,
             page: Int,
+            sourceId: String?,
         ): NetworkResult<Page> {
             val providers = readyProviders()
-            if (providers.isEmpty()) {
+            // A pinned source routes the whole query to that one provider.
+            val routed =
+                sourceId
+                    ?.let { id -> providers.filter { it.first == id } }
+                    ?: providers
+            if (routed.isEmpty()) {
+                if (sourceId != null) {
+                    // The pin survived in DataStore but the package did not
+                    // survive on disk — say so instead of pretending the
+                    // whole pipeline is offline.
+                    return NetworkResult.Failure(
+                        NetworkError.Source("source '$sourceId' is not installed or not usable — see the Extensions tab"),
+                    )
+                }
                 // Not a connectivity problem — say so. Silently mapping this
                 // to Io is exactly what made v1.0.0 tell users to "check
                 // your connection" while their internet was fine.
@@ -100,8 +114,8 @@ class ExtensionWallpaperSources
 
             return coroutineScope {
                 val results =
-                    providers
-                        .map { provider -> async { provider.dispatch(query, page, filters) } }
+                    routed
+                        .map { (_, provider) -> async { provider.dispatch(query, page, filters) } }
                         .awaitAll()
 
                 val pages = results.mapNotNull { it.getOrNull() }
@@ -140,13 +154,15 @@ class ExtensionWallpaperSources
                 search(query.text, page, filters)
             }
 
-        private suspend fun readyProviders(): List<WallpaperProvider> =
+        /** Extension manifest id to its loaded provider, READY extensions only. */
+        private suspend fun readyProviders(): List<Pair<String, WallpaperProvider>> =
             extensions.installed.value
                 .orEmpty()
                 .filter { it.status == ExtensionStatus.READY }
                 .mapNotNull { extension ->
+                    val manifest = extension.manifest ?: return@mapNotNull null
                     when (val loaded = extensions.providerFor(extension)) {
-                        is LoadResult.Loaded -> loaded.provider
+                        is LoadResult.Loaded -> manifest.id to loaded.provider
                         is LoadResult.Failed -> null
                     }
                 }

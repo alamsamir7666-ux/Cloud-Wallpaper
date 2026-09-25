@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="browse_search_hint">Search Wallhaven</string>
+    <string name="browse_search_hint">Search wallpapers</string>
     <string name="browse_search_action">Search</string>
     <string name="browse_clear_search">Clear search</string>
     <string name="browse_open_filters">Filters</string>
@@ -40,4 +40,9 @@
     <string name="browse_empty_results_body">Try a different search or loosen the filters.</string>
     <string name="browse_no_sources_title">No wallpaper sources</string>
     <string name="browse_no_sources_body">Install a provider from the Extensions tab to start browsing.</string>
+    <string name="browse_source_all">All sources</string>
+    <string name="browse_source_needs_key">This source needs an API key — add it in the Extensions tab</string>
+    <string name="browse_api_key_title">API key required</string>
+    <string name="browse_api_key_body">This source needs an API key before it can show wallpapers. Add one from the Extensions tab, then come back.</string>
+    <string name="browse_api_key_show_all">Show all sources</string>
 </resources>

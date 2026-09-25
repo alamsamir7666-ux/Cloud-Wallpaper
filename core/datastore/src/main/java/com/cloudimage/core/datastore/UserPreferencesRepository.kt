@@ -43,6 +43,9 @@ private object PreferencesKeys {
     // Muzei source state (v1.0.4).
     val MUZEI_CURSOR = intPreferencesKey("muzei_cursor")
     val MUZEI_FEED_PAGE = intPreferencesKey("muzei_feed_page")
+
+    // Browse feed source pinning (v1.0.6). Empty string = merged feed.
+    val BROWSE_SOURCE_ID = stringPreferencesKey("browse_source_id")
 }
 
 private const val PREFERENCES_FILE = "user_preferences"
@@ -99,6 +102,7 @@ class UserPreferencesRepository
                         gridColumns = prefs[PreferencesKeys.GRID_COLUMNS] ?: 2,
                         onboardingCompleted = prefs[PreferencesKeys.ONBOARDING_COMPLETED] ?: false,
                         rotation = prefs.toRotationSettings(),
+                        browseSourceId = prefs[PreferencesKeys.BROWSE_SOURCE_ID].orEmpty(),
                     )
                 }
 
@@ -117,6 +121,15 @@ class UserPreferencesRepository
         /** Marks the first-run welcome flow as finished. Never un-finished. */
         suspend fun setOnboardingCompleted() {
             dataStore.edit { it[PreferencesKeys.ONBOARDING_COMPLETED] = true }
+        }
+
+        // ---- Browse feed source pinning (v1.0.6) ----
+
+        /** Pins the browse feed to one source; null (or blank) clears the pin. */
+        suspend fun setBrowseSourceId(sourceId: String?) {
+            dataStore.edit {
+                it[PreferencesKeys.BROWSE_SOURCE_ID] = sourceId.orEmpty()
+            }
         }
 
         // ---- Wallpaper auto-rotation (v1.0.3) ----

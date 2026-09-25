@@ -86,4 +86,10 @@ data class UserPreferences(
     val onboardingCompleted: Boolean = false,
     /** Wallpaper auto-rotation (v1.0.3). */
     val rotation: RotationSettings = RotationSettings(),
+    /**
+     * The browse feed's pinned source id (v1.0.6); empty means the merged
+     * feed over every usable source. Cleared automatically when the pinned
+     * source is no longer installed.
+     */
+    val browseSourceId: String = "",
 )

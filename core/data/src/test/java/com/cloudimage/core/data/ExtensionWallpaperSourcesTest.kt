@@ -385,6 +385,50 @@ class ExtensionWallpaperSourcesTest {
             assertTrue(provider.calls.single().contains("seed=[abcd1234]"))
         }
 
+    @Test
+    fun `a pinned source routes the query to that provider only`() =
+        runTest {
+            val wallhaven =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.POPULAR),
+                    popularPage = ProviderPage(listOf(sourceWallpaper("w1")), null),
+                )
+            val pexels =
+                RecordingProvider(
+                    meta = meta("cloudimage.pexels"),
+                    capabilities = setOf(Capability.POPULAR),
+                    popularPage = ProviderPage(listOf(sourceWallpaper("px1")), null),
+                )
+            val engine = FakeEngine(wallhaven, pexels)
+            engine.publish(extension("cloudimage.wallhaven"), extension("cloudimage.pexels"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val result =
+                sources.search(WallpaperQuery(), page = 1, sourceId = "cloudimage.pexels") as
+                    NetworkResult.Success
+
+            assertEquals(listOf("px1"), result.value.wallpapers.map { it.id })
+            assertTrue(pexels.calls.single().startsWith("popular:1:"))
+            assertTrue(wallhaven.calls.isEmpty())
+        }
+
+    @Test
+    fun `pinning a source that is not installed fails honestly`() =
+        runTest {
+            val provider =
+                RecordingProvider(meta = meta("cloudimage.wallhaven"), capabilities = setOf(Capability.POPULAR))
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val result = sources.search(WallpaperQuery(), page = 1, sourceId = "cloudimage.gone")
+
+            val error = (result as NetworkResult.Failure).error
+            assertTrue(error is NetworkError.Source)
+            assertTrue((error as NetworkError.Source).reason.contains("cloudimage.gone"))
+        }
+
     private fun meta(id: String): ProviderMeta =
         ProviderMeta(
             id = id,

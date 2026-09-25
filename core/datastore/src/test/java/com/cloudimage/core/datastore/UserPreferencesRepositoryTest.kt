@@ -182,6 +182,22 @@ class UserPreferencesRepositoryTest {
             assertEquals(1, repository.muzeiFeedPage.first())
         }
 
+    // ---- Browse feed source pinning (v1.0.6) ----
+
+    @Test
+    fun browseSourceSelectionStartsUnpinnedPersistsAndClears() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            assertEquals("", repository.preferences.first().browseSourceId)
+
+            repository.setBrowseSourceId("unsplash")
+            assertEquals("unsplash", repository.preferences.first().browseSourceId)
+
+            repository.setBrowseSourceId(null)
+            assertEquals("", repository.preferences.first().browseSourceId)
+        }
+
     private fun newDataStore(scope: CoroutineScope) =
         PreferenceDataStoreFactory.create(
             // Caller-provided scope: cancelled automatically when the test ends.
