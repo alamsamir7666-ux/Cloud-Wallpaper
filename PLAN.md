@@ -78,7 +78,7 @@ their GPL stays theirs). Scope was set by reading their source, not by
 recollection. Four parts, each ending green (builds, tests, CI clean),
 one release at the end.
 
-- [ ] **Part 1 — Home sections (CloudStream `mainPage` model).** The flat
+- [x] **Part 1 — Home sections (CloudStream `mainPage` model).** The flat
       feed becomes CloudStream's home: named section rows, each a
       horizontal carousel with its own pagination and a header row with
       a "See all" chevron (their `home_child_more_info` + horizontal
@@ -98,6 +98,16 @@ one release at the end.
       taxonomy) carries over untouched. `:fixture:demo-provider`
       overrides `sections()` to prove compatibility in both directions;
       R8 keep rules + dex audit re-run for the new API surface.
+      (Delivered 2026-09-25, commits 25f1183 + 4a066a4: sections carry
+      host-vocabulary `Filters` presets the repository translates to
+      `WallpaperQuery` — purity deliberately never read, the SFW setting
+      stays the owner; a degenerate empty home falls back to the v1.0.8
+      flat merged feed; the merged view labels default rows with the
+      source name and composes "Source · Section" for declared ones;
+      See-all scopes the grid to the section's source with a chip as the
+      way back; 452 tests (+18), dex audit PASS — 5,543 host classes,
+      wallhaven 27/32/0 unresolved; the extension repo re-published with
+      the sections-capable wallhaven package.)
 - [ ] **Part 2 — Search UX (CloudStream search).** Debounced
       search-as-you-type (IME submit stays); persisted search history
       (capped, deduped, most-recent first, clear-all with confirm) shown
@@ -316,3 +326,27 @@ Cloudimage), third-party web-search suggestions.
   scoped from the reference source (home sections, search UX, extensions
   platform, personal rows + housekeeping — see the "v1.0.9" section
   above); roadmap committed to PLAN.md. Awaiting the user's GO for Part 1.
+- **2026-09-25 — v1.0.9 Part 1 done (home sections).** The CloudStream
+  `mainPage` model landed: `WallpaperProvider.sections()` as an additive
+  default method (HomeSection = id + title + Filters preset;
+  ProviderApi.VERSION stays 1 — engine tests prove both classloader
+  directions: the fixture overrides with two sections, a
+  non-overriding provider answers with the default Popular).
+  Wallhaven declares Trending/Latest/Anime/People; key-based plugins
+  inherit the default. `WallpaperSources.sections(sourceId)` resolves
+  the pinned list or one primary row per source, translating filters
+  to `WallpaperQuery` (purity never read — SFW setting owns ratings);
+  failing sources degrade like search. BrowseViewModel: rows load
+  their first page in parallel pinned to their source, carousels
+  paginate with a prefetch buffer and retry failed first pages on
+  page 1, See-all opens the grid scoped to the section's source (chip
+  + back), search/filters keep their grid, empty degenerate homes
+  fall back to the v1.0.8 flat feed, and the pin/dangling/key-prompt/
+  cold-start pipeline carried over untouched. Two real bugs were
+  caught by the new tests before shipping: search-submit not entering
+  grid mode, and See-all querying all sources instead of the
+  section's. 452 tests (18 new), 0 failures; ktlint clean (one CI
+  catch on a hand-edited line — fixup 4a066a4); dex audit PASS
+  (5,543 host classes, wallhaven 27 classes/32 external refs/0
+  unresolved); the extension repo re-published with the
+  sections-capable wallhaven package.
