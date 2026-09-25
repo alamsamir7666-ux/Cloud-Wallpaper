@@ -129,13 +129,27 @@ one release at the end.
       returns `SearchOutcome{page, sourceFailures}` so merged failures
       surface as a summary chip with retry while survivors still show.
       476 tests (+24), ktlint clean, dex audit 0 unresolved.)
-- [ ] **Part 3 — Extensions platform (CloudStream plugins).** Update
+- [x] **Part 3 — Extensions platform (CloudStream plugins).** Update
       detection: catalog `versionName` vs installed → Update state on
       the catalog row plus an update action (install-over); per-extension
       enable/disable surfaced in the manager; their proportional stats
       bar (installed / disabled / available counts); catalog search by
       name; per-repo catalog refresh ("check for updates"). Update
       semantics ride the engine's existing sha256 + version gates.
+      (Delivered 2026-09-25, commit f9f27f6: the catalog row compares
+      versionCode first, versionName as the equal-code tiebreak — an
+      "Update to vX" chip plus a download action whose install-over is
+      the engine's ordinary replace-in-one-step; the manager row gains
+      a Switch backed by a disabled-id set in DataStore, and a disabled
+      source drops out of sources/search/sections/suggestTags (and the
+      browse switcher) while staying installed — a disable also clears
+      a browse pin naming it, and a pinned query on a disabled source
+      fails with "enable it in the Extensions tab" instead of a
+      connectivity lie; the proportional stats bar renders
+      enabled/disabled/available as weighted segments with a legend;
+      catalog search filters rows by id-contains and folds repos with
+      no match; each repo header gets a check-for-updates refresh with
+      an in-flight guard. 301 tests (+24), ktlint clean, dex audit PASS.)
 - [ ] **Part 4 — Personal rows + detail recommendations + housekeeping.**
       Detail screen grows "More like this": same-provider search over the
       wallpaper's top tags (SEARCH + TAGS capability-gated) as a
@@ -391,3 +405,35 @@ Cloudimage), third-party web-search suggestions.
   binds); one known lintVital OOM recovered by the usual
   kill-daemon-and-rerun recipe; the extension repo re-published with
   the TAGS-capable wallhaven package. CI green on 1211e07.
+- **2026-09-25 — v1.0.9 Part 3 done (extensions platform).** The
+  extension manager grew up. Update detection: the catalog row compares
+  its versionCode against the installed manifest (versionName as the
+  equal-code tiebreak) and offers an "Update to vX" chip whose action
+  is a plain install-over — the engine's replace-in-one-step and
+  sha256/manifest gates stay the only authority on whether bytes
+  actually move, the UI only labels the button. Per-extension
+  enable/disable: every installed row carries a Switch persisted as a
+  disabled-id set in DataStore; a disabled source drops out of
+  `sources`, `readyProviders`, merged search, sections, suggestions
+  and the browse switcher while staying installed — disabling also
+  clears a browse pin that names it (the pin must never dead-end
+  browse behind the manager's back), and a pinned query on a disabled
+  source fails with "enable it in the Extensions tab" rather than
+  masquerading as connectivity. The "every source is disabled" case
+  gets its own honest failure reason. The proportional stats bar
+  renders enabled/disabled/available as weighted segments with a
+  color legend, driven off the same UiState the rows read. Catalog
+  search filters rows by id-contains (case-insensitive — "unsplash"
+  finds "cloudimage.unsplash") and folds repos with no match; each
+  repo header gains a check-for-updates refresh with an in-flight
+  guard. installPackage now says Updated for install-overs. Counting
+  correction riding along: the suite's honest size is the debug
+  variant's 301 tests (+24 here: 4 datastore, 7 sources bridge, 13
+  ViewModel) — the earlier "476" had stale release-variant results
+  mixed in; CI's `test` task is debug-only. ktlint clean; dex audit
+  PASS (5,581 host classes, wallhaven 35 classes/32 external refs/0
+  unresolved); one known lintVital OOM recovered by the usual
+  kill-daemon-and-rerun recipe. Environment was wiped again mid-gap
+  and recovered per the handoff recipe — JDK is now Temurin
+  17.0.12 at /home/z/jdks/jdk-17.0.12 (the Azul CDN URL 404s now).
+  CI green on f9f27f6.
