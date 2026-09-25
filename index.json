@@ -1,0 +1,49 @@
+{
+  "name": "Cloudimage official repository",
+  "packages": [
+    {
+      "id": "cloudimage.pexels",
+      "fileName": "cloudimage.pexels.zip",
+      "sha256": "f971c190f45159b6628269699d2c90e1dc97e43bd6f10a8c801ffc5ac56ebf6e",
+      "sizeBytes": 16985,
+      "versionName": "1.0.0",
+      "versionCode": 1,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "Free stock photos and wallpapers from pexels.com. Requires a free API key."
+    },
+    {
+      "id": "cloudimage.pixabay",
+      "fileName": "cloudimage.pixabay.zip",
+      "sha256": "deb783f9d6b254089f6bc36a9c725c0a01e99acd3e75a594a9a338e3fcf3a5ea",
+      "sizeBytes": 15213,
+      "versionName": "1.0.0",
+      "versionCode": 1,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "Free images and vector art from pixabay.com. Requires a free API key."
+    },
+    {
+      "id": "cloudimage.unsplash",
+      "fileName": "cloudimage.unsplash.zip",
+      "sha256": "9f4f18b48d2b8a20678630e00d902b0c72cc50608995cda25c4beeef110f65aa",
+      "sizeBytes": 20016,
+      "versionName": "1.0.0",
+      "versionCode": 1,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "Free high-resolution photography from unsplash.com. Requires a free API key."
+    },
+    {
+      "id": "cloudimage.wallhaven",
+      "fileName": "cloudimage.wallhaven.zip",
+      "sha256": "257a725706b2be42c92bc874729a6cad5f2c429403121c4a5e25c9389f7a4931",
+      "sizeBytes": 26834,
+      "versionName": "1.0.0",
+      "versionCode": 1,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "Wallpapers from wallhaven.cc - the app's original default source."
+    }
+  ]
+}
