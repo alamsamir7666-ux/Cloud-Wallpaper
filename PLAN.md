@@ -223,3 +223,28 @@ on principle).
   v1.0.6. 434 unit tests (1 new: single-source selector visibility),
   0 failures; dex audit clean — 5,543 host classes, wallhaven 27
   classes / 32 external refs, 0 unresolved. Release APK 2.99 MB.
+- **2026-09-25 — v1.0.8 shipped.** The real CloudStream switcher, ported
+  from source: the user supplied the recloudstream/cloudstream repository
+  as reference after the v1.0.7 pill+dropdown missed the mark. The home
+  screen now mirrors CloudStream's pattern — a bold extended FAB pinned
+  to the feed's bottom-end corner (filter-list icon, gray container) whose
+  label is the active source name ("All sources" when merged), shrinking
+  to its icon when the feed scrolls down and re-extending on scroll up,
+  exactly like homeApiFab.shrink()/extend(). Tapping it opens the CloudStream
+  provider picker: a bottom sheet that skips the half-expanded state
+  (their BottomSheetDialog uses STATE_EXPANDED) with a single-choice list —
+  "All sources" first, then every installed source sorted alphabetically
+  (sortedBy name.lowercase()) — bold 16sp rows with a check mark and source
+  color on the active entry (their CheckLabel style), a key hint on
+  keyless sources, and tap-to-apply-and-dismiss. The sheet ends with a
+  "Manage extensions" row deep-linking to the Extensions tab, standing in
+  for CloudStream's per-provider action row. Deliberately not ported:
+  CloudStream's "Random" fixed entry (no random-source mode here), TvType
+  filter chips (no source-type dimension in Cloudimage), provider pinning
+  (no pinned-providers preference yet) and the FAB long-press reload.
+  Under the hood the browse grid's LazyStaggeredGridState was hoisted so
+  the FAB can track scroll direction (index*1e6 + offset, monotonic across
+  item swaps, -5px hysteresis), and a fresh feed always starts with the
+  FAB extended. 434 unit tests (no ViewModel logic changed), 0 failures;
+  dex audit clean — 5,526 host classes, wallhaven 27 classes / 32
+  external refs, 0 unresolved. Release APK 2.99 MB.
