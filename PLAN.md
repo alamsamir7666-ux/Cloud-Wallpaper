@@ -67,7 +67,71 @@ Every part ends green: app builds, tests pass, CI clean.
 
 **Out of scope for V1** (v1.1+): TV UI, cloud sync, toolchain debt batch
 (AGP 9, compileSdk 37, Kotlin 2.4, hilt 2.60 — kept out of patch releases
-on principle).
+on principle). *(Toolchain debt was pulled into v1.0.5; TV UI and cloud
+sync stay parked.)*
+
+## v1.0.9 — CloudStream-grade UX (planned 2026-09-25)
+
+User's call: a "huge upgrade" modeled on the reference repo
+(recloudstream/cloudstream — design reference only, no code copied;
+their GPL stays theirs). Scope was set by reading their source, not by
+recollection. Four parts, each ending green (builds, tests, CI clean),
+one release at the end.
+
+- [ ] **Part 1 — Home sections (CloudStream `mainPage` model).** The flat
+      feed becomes CloudStream's home: named section rows, each a
+      horizontal carousel with its own pagination and a header row with
+      a "See all" chevron (their `home_child_more_info` + horizontal
+      RecyclerView per `homepage_parent`). Contract: `WallpaperProvider`
+      grows an additive default method
+      `suspend fun sections(): List<HomeSection>` where a section is
+      id + title + `WallpaperQuery` — binary-compatible for plugins built
+      against V1 (they inherit the default: a single "Popular" section
+      over `popular()`; `ProviderApi.VERSION` stays 1). Built-ins declare
+      real sections (Wallhaven: Trending / Latest / Anime / People via
+      TOPLIST, DATE and categories; the others by POPULAR / LATEST
+      capability). Single-source mode shows that source's sections;
+      "All sources" shows each usable source's primary section as its
+      own row. "See all" opens the staggered grid scoped to that
+      section's query (the grid stays for search + drill-down). The
+      v1.0.6–1.0.8 pipeline (pin, FAB switcher, key prompt, failure
+      taxonomy) carries over untouched. `:fixture:demo-provider`
+      overrides `sections()` to prove compatibility in both directions;
+      R8 keep rules + dex audit re-run for the new API surface.
+- [ ] **Part 2 — Search UX (CloudStream search).** Debounced
+      search-as-you-type (IME submit stays); persisted search history
+      (capped, deduped, most-recent first, clear-all with confirm) shown
+      while the field is focused and empty; tag suggestions while typing
+      from providers declaring the TAGS capability — no third-party
+      suggest API (honesty + privacy). In "All sources" mode every card
+      carries its provider label (their per-result `apiName` analog) and
+      a per-source failure summary chip with retry (built on the v1.0.2
+      failure taxonomy). Pinned-mode empty results get a "try All
+      sources" CTA.
+- [ ] **Part 3 — Extensions platform (CloudStream plugins).** Update
+      detection: catalog `versionName` vs installed → Update state on
+      the catalog row plus an update action (install-over); per-extension
+      enable/disable surfaced in the manager; their proportional stats
+      bar (installed / disabled / available counts); catalog search by
+      name; per-repo catalog refresh ("check for updates"). Update
+      semantics ride the engine's existing sha256 + version gates.
+- [ ] **Part 4 — Personal rows + detail recommendations + housekeeping.**
+      Detail screen grows "More like this": same-provider search over the
+      wallpaper's top tags (SEARCH + TAGS capability-gated) as a
+      horizontal carousel on the detail screen. Home grows a
+      "Recently applied" row from history when present (their home
+      bookmarks/continue-watching rows analog). The two parked
+      deprecations land: `TabRow` → `PrimaryTabRow` (Library),
+      `hiltViewModel` → androidx.hilt.lifecycle.viewmodel.compose
+      across features.
+- [ ] **Release — v1.0.9.** versionCode 10 / versionName "1.0.9", full
+      ritual: ktlint, unit tests, assembleRelease, dex audit, push, CI
+      green, tag v1.0.9 + signed APK Release, PLAN/handoff/worklog.
+
+Not ported (deliberate): video-oriented surfaces (player, subtitles,
+download queue, Chromecast), accounts/sync, TV layout (stays v1.1
+backlog), extension language / TvType filters (no such dimensions in
+Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
@@ -248,3 +312,7 @@ on principle).
   FAB extended. 434 unit tests (no ViewModel logic changed), 0 failures;
   dex audit clean — 5,526 host classes, wallhaven 27 classes / 32
   external refs, 0 unresolved. Release APK 2.99 MB.
+- **2026-09-25 — v1.0.9 planned.** Four-part CloudStream-grade UX upgrade
+  scoped from the reference source (home sections, search UX, extensions
+  platform, personal rows + housekeeping — see the "v1.0.9" section
+  above); roadmap committed to PLAN.md. Awaiting the user's GO for Part 1.
