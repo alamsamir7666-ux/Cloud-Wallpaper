@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -34,6 +35,17 @@ fun CloudimageNavHost(
             BrowseScreen(
                 onWallpaperClick = { wallpaper: Wallpaper ->
                     navController.navigate(DetailDestination.createRoute(wallpaper))
+                },
+                onOpenExtensions = {
+                    // Same navigation contract as the bottom bar, so the
+                    // browse tab's state survives the round trip.
+                    navController.navigate(TopLevelDestination.EXTENSIONS.route) {
+                        popUpTo(navController.graph.findStartDestination().id) {
+                            saveState = true
+                        }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
                 },
             )
         }

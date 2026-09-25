@@ -1,26 +1,29 @@
 package com.cloudimage.feature.browse
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Key
@@ -29,8 +32,11 @@ import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,10 +53,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -59,7 +68,8 @@ import com.cloudimage.core.model.Wallpaper
 
 /**
  * The home feed: a staggered masonry grid over every installed source, with
- * search, filters, a source switcher (v1.0.6) and infinite scroll.
+ * search, filters, a CloudStream-style source selector (v1.0.7) and infinite
+ * scroll.
  *
  * Paging is triggered by a prefetch buffer — when the user scrolls within
  * eight items of the end, the next page loads before they hit it.
@@ -67,6 +77,7 @@ import com.cloudimage.core.model.Wallpaper
 @Composable
 fun BrowseScreen(
     onWallpaperClick: (Wallpaper) -> Unit,
+    onOpenExtensions: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: BrowseViewModel = hiltViewModel(),
 ) {
@@ -77,8 +88,21 @@ fun BrowseScreen(
         modifier =
             modifier
                 .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background),
+                .background(MaterialTheme.colorScheme.background)
+                .statusBarsPadding(),
     ) {
+        // The selector names the active source and opens the switcher —
+        // it appears as soon as one usable source exists.
+        if (state.sourceBar.isNotEmpty()) {
+            SourceSelectorRow(
+                sources = state.sourceBar,
+                selectedSourceId = state.selectedSourceId,
+                onSourceSelected = viewModel::onSourceSelected,
+                onOpenExtensions = onOpenExtensions,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
+            )
+        }
+
         SearchBarRow(
             searchText = state.searchText,
             onSearchTextChange = viewModel::onSearchTextChange,
@@ -87,20 +111,13 @@ fun BrowseScreen(
             filtersActive = state.filtersActive,
         )
 
-        // The source bar appears as soon as a second usable source exists —
-        // which is exactly when switching becomes meaningful.
-        if (state.sourceBar.isNotEmpty()) {
-            SourceBarRow(
-                sources = state.sourceBar,
-                selectedSourceId = state.selectedSourceId,
-                onSourceSelected = viewModel::onSourceSelected,
-            )
-        }
-
         when {
             state.isFirstLoading -> FullScreenLoading()
             state.showApiKeyPrompt ->
-                ApiKeyPrompt(onShowAllSources = { viewModel.onSourceSelected(null) })
+                ApiKeyPrompt(
+                    onShowAllSources = { viewModel.onSourceSelected(null) },
+                    onOpenExtensions = onOpenExtensions,
+                )
 
             state.showFullscreenError ->
                 FullScreenError(error = state.error!!, onRetry = viewModel::onRetry)
@@ -141,7 +158,7 @@ private fun SearchBarRow(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
         OutlinedTextField(
             value = searchText,
@@ -181,45 +198,162 @@ private fun SearchBarRow(
     }
 }
 
+/**
+ * The source switcher, CloudStream-style: a pill naming the active source
+ * (avatar + name + chevron) that opens a dropdown listing every installed
+ * extension plus the merged feed and a shortcut to the Extensions tab.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SourceBarRow(
+private fun SourceSelectorRow(
     sources: List<BrowseSource>,
     selectedSourceId: String?,
     onSourceSelected: (String?) -> Unit,
+    onOpenExtensions: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 4.dp),
+    var expanded by remember { mutableStateOf(false) }
+    val selected = sources.firstOrNull { it.id == selectedSourceId }
+    val selectedLabel = selected?.name ?: stringResource(R.string.browse_source_all)
+
+    Surface(
+        onClick = { expanded = true },
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = modifier.fillMaxWidth().testTag("browse:source-selector"),
     ) {
-        FilterChip(
-            selected = selectedSourceId == null,
-            onClick = { onSourceSelected(null) },
-            label = { Text(stringResource(R.string.browse_source_all)) },
-            modifier = Modifier.testTag("browse:source:all"),
-        )
-        sources.forEach { source ->
-            FilterChip(
-                selected = selectedSourceId == source.id,
-                onClick = { onSourceSelected(source.id) },
-                label = { Text(source.name) },
-                leadingIcon =
-                    if (source.needsApiKey) {
-                        {
-                            Icon(
-                                Icons.Rounded.Key,
-                                contentDescription = stringResource(R.string.browse_source_needs_key),
-                                modifier = Modifier.size(16.dp),
-                            )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+        ) {
+            SourceAvatar(name = selected?.name, size = 32.dp)
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = selectedLabel,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                imageVector = Icons.Rounded.ArrowDropDown,
+                contentDescription = stringResource(R.string.browse_source_switch),
+            )
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.browse_source_all)) },
+                    leadingIcon = { SourceAvatar(name = null, size = 28.dp) },
+                    trailingIcon = {
+                        if (selectedSourceId == null) {
+                            Icon(Icons.Rounded.Check, contentDescription = null)
                         }
-                    } else {
-                        null
                     },
-                modifier = Modifier.testTag("browse:source:${source.id}"),
+                    onClick = {
+                        expanded = false
+                        onSourceSelected(null)
+                    },
+                    modifier = Modifier.testTag("browse:source:all"),
+                )
+                sources.forEach { source ->
+                    DropdownMenuItem(
+                        text = { Text(source.name) },
+                        leadingIcon = { SourceAvatar(name = source.name, size = 28.dp) },
+                        trailingIcon = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                if (source.needsApiKey) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Key,
+                                        contentDescription = stringResource(R.string.browse_source_needs_key),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                                if (selectedSourceId == source.id) {
+                                    Icon(Icons.Rounded.Check, contentDescription = null)
+                                }
+                            }
+                        },
+                        onClick = {
+                            expanded = false
+                            onSourceSelected(source.id)
+                        },
+                        modifier = Modifier.testTag("browse:source:${source.id}"),
+                    )
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.browse_source_manage)) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Extension,
+                            contentDescription = null,
+                        )
+                    },
+                    onClick = {
+                        expanded = false
+                        onOpenExtensions()
+                    },
+                    modifier = Modifier.testTag("browse:source:manage"),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A source's visual identity: a round tile in one of three container tones
+ * (stable per name) carrying the source's initial — null draws the merged
+ * feed's "all sources" glyph instead. Stands in for the provider logos a
+ * CloudStream-style switcher shows for its providers.
+ */
+@Composable
+private fun SourceAvatar(
+    name: String?,
+    size: Dp,
+    modifier: Modifier = Modifier,
+) {
+    val containerColors =
+        listOf(
+            MaterialTheme.colorScheme.primaryContainer,
+            MaterialTheme.colorScheme.secondaryContainer,
+            MaterialTheme.colorScheme.tertiaryContainer,
+        )
+    val contentColors =
+        listOf(
+            MaterialTheme.colorScheme.onPrimaryContainer,
+            MaterialTheme.colorScheme.onSecondaryContainer,
+            MaterialTheme.colorScheme.onTertiaryContainer,
+        )
+    // ((x % n) + n) % n keeps the index non-negative for any hashCode.
+    val palette =
+        if (name == null) {
+            0
+        } else {
+            ((name.hashCode() % containerColors.size) + containerColors.size) % containerColors.size
+        }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier.size(size).clip(CircleShape).background(containerColors[palette]),
+    ) {
+        if (name == null) {
+            Icon(
+                imageVector = Icons.Rounded.Apps,
+                contentDescription = null,
+                tint = contentColors[palette],
+                modifier = Modifier.size(size / 2 + 2.dp),
+            )
+        } else {
+            Text(
+                text = name.take(1).uppercase(),
+                style = MaterialTheme.typography.labelLarge,
+                color = contentColors[palette],
             )
         }
     }
@@ -411,6 +545,7 @@ private fun NoSources(modifier: Modifier = Modifier) {
 @Composable
 private fun ApiKeyPrompt(
     onShowAllSources: () -> Unit,
+    onOpenExtensions: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -434,8 +569,17 @@ private fun ApiKeyPrompt(
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        TextButton(onClick = onShowAllSources) {
-            Text(stringResource(R.string.browse_api_key_show_all))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(top = 8.dp),
+        ) {
+            FilledTonalButton(onClick = onOpenExtensions) {
+                Text(stringResource(R.string.browse_api_key_open_extensions))
+            }
+            TextButton(onClick = onShowAllSources) {
+                Text(stringResource(R.string.browse_api_key_show_all))
+            }
         }
     }
 }

@@ -327,7 +327,7 @@ class BrowseViewModelTest {
             assertEquals("pexels", fake.searchSourceIds.last())
             assertEquals(1, fake.searchCalls.last().second)
             assertEquals("pexels", preferences.preferences.first().browseSourceId)
-            // No key needed — no hint on the chip.
+            // No key needed — no hint on the menu item.
             assertFalse(state.sourceBar.single { it.id == "pexels" }.needsApiKey)
         }
 
@@ -377,7 +377,7 @@ class BrowseViewModelTest {
 
             assertFalse(recovered.showApiKeyPrompt)
             assertEquals("unsplash", fake.searchSourceIds.last())
-            // The key hint left the chip too.
+            // The key hint left the menu item too.
             assertFalse(recovered.sourceBar.single { it.id == "unsplash" }.needsApiKey)
         }
 
@@ -407,8 +407,23 @@ class BrowseViewModelTest {
             assertEquals("", preferences.preferences.first().browseSourceId)
             assertNull(fake.searchSourceIds.last())
             assertEquals(listOf("w2"), recovered.wallpapers.map { it.id })
-            // One source left — the bar hides instead of offering no choice.
-            assertTrue(recovered.sourceBar.isEmpty())
+            // One source left — the selector stays and names the survivor.
+            assertEquals(listOf("wallhaven"), recovered.sourceBar.map { it.id })
+        }
+
+    @Test
+    fun aSingleSourceStillShowsTheSelectorNamingIt() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+
+            // The selector doubles as feed provenance, so it shows with a
+            // single usable source too (its menu also links to Extensions).
+            val state = viewModel.state.first { it.sourceBar.isNotEmpty() && !it.isFirstLoading }
+
+            assertEquals(listOf(BrowseSource("wallhaven", "Wallhaven", needsApiKey = false)), state.sourceBar)
         }
 
     private fun newViewModel(

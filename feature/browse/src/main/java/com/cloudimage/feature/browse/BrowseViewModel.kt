@@ -61,7 +61,7 @@ data class BrowseUiState(
     val sources: List<SourceInfo>? = null,
     /** The source the feed is pinned to; null means the merged feed of all sources. */
     val selectedSourceId: String? = null,
-    /** Source-bar entries; empty (row hidden) while fewer than two sources are usable. */
+    /** Source-selector entries; empty (selector hidden) while no usable source exists. */
     val sourceBar: List<BrowseSource> = emptyList(),
     /** The pinned source needs an API key the user has not stored yet. */
     val showApiKeyPrompt: Boolean = false,
@@ -83,9 +83,10 @@ data class BrowseUiState(
  * paging cursor. Preference changes (SFW-only, grid columns) flow in from
  * DataStore and re-shape the feed live; source installs flow in from the
  * extension engine and restart the feed only when they rescue it from
- * empty. The feed can be pinned to one source (v1.0.6 source switcher);
- * the pin is persisted, survives process death, and falls back to the
- * merged feed when the pinned source is no longer installed.
+ * empty. The feed can be pinned to one source (v1.0.6 source switcher,
+ * restyled as a CloudStream-style selector in v1.0.7); the pin is
+ * persisted, survives process death, and falls back to the merged feed
+ * when the pinned source is no longer installed.
  */
 @HiltViewModel
 class BrowseViewModel
@@ -268,17 +269,20 @@ class BrowseViewModel
             return info.requiresApiKey && selected !in storedApiKeyIds
         }
 
-        /** Rebuilds the source bar from the discovered sources and stored keys. */
+        /** Rebuilds the source selector entries from the discovered sources and stored keys. */
         private fun rebuildSourceBar() {
             _state.update { state ->
                 val available = state.sources.orEmpty()
                 state.copy(
                     sourceBar =
-                        if (available.size < 2) {
-                            // One source needs no switching; zero needs the
-                            // install-a-source empty state instead.
+                        if (available.isEmpty()) {
+                            // Zero usable sources needs the install-a-source
+                            // empty state instead.
                             emptyList()
                         } else {
+                            // Even a single source is worth naming — the
+                            // selector doubles as provenance for the feed, and
+                            // its menu always offers the Extensions shortcut.
                             available.map { info ->
                                 BrowseSource(
                                     id = info.id,
