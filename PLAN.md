@@ -150,7 +150,7 @@ one release at the end.
       catalog search filters rows by id-contains and folds repos with
       no match; each repo header gets a check-for-updates refresh with
       an in-flight guard. 301 tests (+24), ktlint clean, dex audit PASS.)
-- [ ] **Part 4 — Personal rows + detail recommendations + housekeeping.**
+- [x] **Part 4 — Personal rows + detail recommendations + housekeeping.**
       Detail screen grows "More like this": same-provider search over the
       wallpaper's top tags (SEARCH + TAGS capability-gated) as a
       horizontal carousel on the detail screen. Home grows a
@@ -158,7 +158,21 @@ one release at the end.
       bookmarks/continue-watching rows analog). The two parked
       deprecations land: `TabRow` → `PrimaryTabRow` (Library),
       `hiltViewModel` → androidx.hilt.lifecycle.viewmodel.compose
-      across features.
+      across features. (Shipped as `34a2965`: Wallpaper carries tags
+      end-to-end — wallhaven wire tags, the sources bridge, the demo
+      fixture; SourceInfo gained a defaulted `capabilities` set mirrored
+      from the provider contract by a new SourceCapability enum, so the
+      detail row gates on SEARCH + TAGS without touching plugin classes;
+      the query is the top 3 tags joined, broadening to the single
+      strongest tag when the combination matches nothing, self excluded,
+      capped at 15, failures degrade silently to a hidden row; home's
+      "Recently applied" row leads the section list — APPLIED entries
+      only, deduped newest-first, capped at 10, hidden when empty;
+      Library TabRow → PrimaryTabRow; hiltViewModel migrated to
+      androidx.hilt:hilt-lifecycle-viewmodel-compose:1.4.0 across app +
+      5 features. 352 tests green (+12; the Part 3 "301" undercounted —
+      it missed the plain-JVM `test`-task modules: providers ×4,
+      provider/api), ktlint clean, dex audit PASS.)
 - [ ] **Release — v1.0.9.** versionCode 10 / versionName "1.0.9", full
       ritual: ktlint, unit tests, assembleRelease, dex audit, push, CI
       green, tag v1.0.9 + signed APK Release, PLAN/handoff/worklog.
@@ -169,6 +183,12 @@ backlog), extension language / TvType filters (no such dimensions in
 Cloudimage), third-party web-search suggestions.
 
 ## Status log
+
+- **2026-09-26 — v1.0.9 Part 4 done.** More like this + Recently applied +
+  housekeeping on main (`34a2965`), CI green. Details in the Part 4 entry
+  above; test-counting correction: the suite's honest CI-comparable size is
+  352 (debug-variant Android modules + plain-`test` JVM modules), not the
+  301 recorded after Part 3.
 
 - **2026-09-23 — Part 1 done.** 10-module Gradle structure, Compose M3 shell,
   CI green on GitHub Actions, 4 Dependabot CI-tooling bumps merged.
