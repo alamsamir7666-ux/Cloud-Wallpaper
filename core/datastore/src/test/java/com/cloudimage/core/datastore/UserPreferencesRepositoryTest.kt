@@ -271,6 +271,60 @@ class UserPreferencesRepositoryTest {
             assertTrue(repository.searchHistory.first().isEmpty())
         }
 
+    // ---- Per-extension enable/disable (v1.0.9 Part 3) ----
+
+    @Test
+    fun disabledSourcesStartEmptyAndToggleById() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            assertTrue(repository.disabledSources.first().isEmpty())
+
+            repository.setSourceEnabled("cloudimage.wallhaven", enabled = false)
+
+            assertEquals(setOf("cloudimage.wallhaven"), repository.disabledSources.first())
+        }
+
+    @Test
+    fun enablingARemovedSourceDropsItFromTheSet() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+            repository.setSourceEnabled("cloudimage.a", enabled = false)
+            repository.setSourceEnabled("cloudimage.b", enabled = false)
+
+            repository.setSourceEnabled("cloudimage.a", enabled = true)
+
+            assertEquals(setOf("cloudimage.b"), repository.disabledSources.first())
+        }
+
+    @Test
+    fun togglesEmitThroughTheFlowAsTheyLand() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            repository.disabledSources.test {
+                assertTrue(awaitItem().isEmpty())
+
+                repository.setSourceEnabled("cloudimage.wallhaven", enabled = false)
+                assertEquals(setOf("cloudimage.wallhaven"), awaitItem())
+
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun disablingASourceLeavesTheBrowsePinAlone() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+            repository.setBrowseSourceId("cloudimage.wallhaven")
+
+            repository.setSourceEnabled("cloudimage.wallhaven", enabled = false)
+
+            // The pin lives in UserPreferences; clearing it on disable is
+            // the ViewModel's call, not the store's.
+            assertEquals("cloudimage.wallhaven", repository.preferences.first().browseSourceId)
+        }
+
     private fun newDataStore(scope: CoroutineScope) =
         PreferenceDataStoreFactory.create(
             // Caller-provided scope: cancelled automatically when the test ends.

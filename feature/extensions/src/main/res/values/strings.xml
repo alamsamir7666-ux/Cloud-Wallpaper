@@ -43,4 +43,17 @@
     <string name="extensions_key_cancel">Cancel</string>
     <string name="extensions_key_saved">API key saved</string>
     <string name="extensions_load_failed">Failed to load: %1$s</string>
+
+    <!-- v1.0.9 Part 3: manager upgrades. -->
+    <string name="extensions_enable">Enable source</string>
+    <string name="extensions_disable">Disable source</string>
+    <string name="extensions_disabled_chip">Disabled</string>
+    <string name="extensions_search_hint">Search the catalog</string>
+    <string name="extensions_search_clear">Clear search</string>
+    <string name="extensions_refresh_repo">Check for updates</string>
+    <string name="extensions_catalog_update_to">Update to v%1$s</string>
+    <string name="extensions_updated_snackbar">%1$s updated</string>
+    <string name="extensions_stats_enabled">%1$d enabled</string>
+    <string name="extensions_stats_disabled">%1$d disabled</string>
+    <string name="extensions_stats_available">%1$d available</string>
 </resources>

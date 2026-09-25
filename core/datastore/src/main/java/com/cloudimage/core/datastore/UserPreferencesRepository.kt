@@ -50,6 +50,10 @@ private object PreferencesKeys {
     // Search history (v1.0.9): newline-joined, most recent first. The
     // field is single-line so a query can never contain the separator.
     val SEARCH_HISTORY = stringPreferencesKey("search_history")
+
+    // Per-extension enable/disable (v1.0.9 Part 3). An id in the set is
+    // disabled — everything else (including never-seen ids) is enabled.
+    val DISABLED_SOURCES = stringSetPreferencesKey("disabled_source_ids")
 }
 
 /** How many past searches survive; the newest replace the oldest. */
@@ -196,6 +200,35 @@ class UserPreferencesRepository
         /** Clears every stored search. */
         suspend fun clearSearchHistory() {
             dataStore.edit { it.remove(PreferencesKeys.SEARCH_HISTORY) }
+        }
+
+        // ---- Per-extension enable/disable (v1.0.9 Part 3) ----
+
+        /**
+         * The disabled source ids. Absent means enabled — a source that
+         * has never been toggled (fresh install, restored backup) starts
+         * enabled without ever touching this set.
+         */
+        val disabledSources: Flow<Set<String>> =
+            dataStore.data
+                .catch { exception ->
+                    if (exception is IOException) {
+                        emit(emptyPreferences())
+                    } else {
+                        throw exception
+                    }
+                }.map { it[PreferencesKeys.DISABLED_SOURCES].orEmpty() }
+
+        /** Stores one source's enablement; disabling adds its id, enabling removes it. */
+        suspend fun setSourceEnabled(
+            sourceId: String,
+            enabled: Boolean,
+        ) {
+            dataStore.edit { prefs ->
+                val current = prefs[PreferencesKeys.DISABLED_SOURCES].orEmpty()
+                prefs[PreferencesKeys.DISABLED_SOURCES] =
+                    if (enabled) current - sourceId else current + sourceId
+            }
         }
 
         // ---- Wallpaper auto-rotation (v1.0.3) ----

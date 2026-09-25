@@ -6,6 +6,7 @@ import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.WallpaperSources
 import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.extensions.core.AddRepoResult
+import com.cloudimage.extensions.core.ExtensionManifest
 import com.cloudimage.extensions.core.ExtensionRepository
 import com.cloudimage.extensions.core.InstallResult
 import com.cloudimage.extensions.core.InstalledExtension
@@ -22,6 +23,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -36,6 +38,10 @@ sealed interface ExtensionsEvent {
         val name: String,
     ) : ExtensionsEvent
 
+    data class Updated(
+        val name: String,
+    ) : ExtensionsEvent
+
     data class InstallFailed(
         val reason: String,
     ) : ExtensionsEvent
@@ -45,7 +51,14 @@ sealed interface ExtensionsEvent {
     ) : ExtensionsEvent
 }
 
-/** Immutable snapshot of the extension manager screen. */
+/**
+ * Immutable snapshot of the extension manager screen.
+ *
+ * The v1.0.9 Part 3 additions are [disabledSources], [query] and the
+ * derived helpers under them — the proportional stats bar, the update
+ * detection and the catalog search all read from this state without a
+ * second round-trip through the ViewModel.
+ */
 data class ExtensionsUiState(
     val loading: Boolean = true,
     val extensions: List<InstalledExtension> = emptyList(),
@@ -63,7 +76,51 @@ data class ExtensionsUiState(
     val keyedProviders: Set<String> = emptySet(),
     val addingRepo: Boolean = false,
     val repoError: RepoError? = null,
-)
+    /** Source ids the user switched off (v1.0.9 Part 3). */
+    val disabledSources: Set<String> = emptySet(),
+    /** The catalog search text; blank shows every catalog row (v1.0.9 Part 3). */
+    val query: String = "",
+) {
+    /** Installed manifests by id — broken rows (unreadable manifest) never appear. */
+    val installedManifests: Map<String, ExtensionManifest>
+        get() = extensions.mapNotNull { it.manifest }.associateBy { it.id }
+
+    /** Rows whose source participates in the feed. */
+    val enabledCount: Int get() = installedManifests.count { it.key !in disabledSources }
+
+    /** Rows the user switched off — installed, but out of every query. */
+    val disabledCount: Int get() = installedManifests.count { it.key in disabledSources }
+
+    /** Catalog entries not installed anywhere, distinct across all repos. */
+    val availableCount: Int
+        get() =
+            catalogs.values
+                .filterNotNull()
+                .flatten()
+                .distinctBy { it.id }
+                .count { it.id !in installedManifests }
+
+    /**
+     * True when [entry] advertises something other than what is
+     * installed: a higher code wins outright, and an equal code with a
+     * different name (a re-publish under the same code) still offers the
+     * action. Whether the package actually replaces anything stays the
+     * engine's business — its sha256 + version gates decide at install
+     * time; this is only the label on the button.
+     */
+    fun updateAvailable(entry: RepoPackageEntry): Boolean {
+        val installed = installedManifests[entry.id] ?: return false
+        return entry.versionCode > installed.versionCode ||
+            (entry.versionCode == installed.versionCode && entry.versionName != installed.versionName)
+    }
+
+    /**
+     * The catalog search filter: blank shows everything, non-blank keeps
+     * entries whose id contains the text (case-insensitive) — "unsplash"
+     * finds "cloudimage.unsplash" without knowing the reverse-DNS prefix.
+     */
+    fun catalogMatches(entry: RepoPackageEntry): Boolean = query.isBlank() || entry.id.contains(query, ignoreCase = true)
+}
 
 /**
  * Drives the extension manager: installed extensions, the user's
@@ -108,6 +165,11 @@ class ExtensionsViewModel
                     _state.update { it.copy(keyedProviders = keys.keys) }
                 }
             }
+            viewModelScope.launch {
+                preferences.disabledSources.collect { disabled ->
+                    _state.update { it.copy(disabledSources = disabled) }
+                }
+            }
             refresh()
         }
 
@@ -121,6 +183,38 @@ class ExtensionsViewModel
 
         fun uninstall(extension: InstalledExtension) {
             viewModelScope.launch { repository.uninstall(extension.id) }
+        }
+
+        /**
+         * Switches one installed source on or off (v1.0.9 Part 3). A
+         * disable also clears the browse pin when it names this source —
+         * the pin must never dead-end the browse screen behind the
+         * manager's back.
+         */
+        fun setSourceEnabled(
+            extension: InstalledExtension,
+            enabled: Boolean,
+        ) {
+            val id = extension.manifest?.id ?: return
+            viewModelScope.launch {
+                if (!enabled && preferences.preferences.first().browseSourceId == id) {
+                    preferences.setBrowseSourceId(null)
+                }
+                preferences.setSourceEnabled(id, enabled)
+            }
+        }
+
+        /** Re-fetches one repo's catalog — the "check for updates" affordance. */
+        fun refreshRepo(repo: StoredRepo) {
+            // Null is the in-flight marker set by loadCatalog — a second
+            // tap on a fetching repo must not queue a duplicate fetch.
+            if (_state.value.catalogs[repo.id] == null) return
+            viewModelScope.launch { loadCatalog(repo) }
+        }
+
+        /** The catalog search text; blank shows every catalog row. */
+        fun setQuery(text: String) {
+            _state.update { it.copy(query = text) }
         }
 
         fun addRepo(url: String) {
@@ -152,11 +246,19 @@ class ExtensionsViewModel
         ) {
             if (entry.id in _state.value.installing) return
             viewModelScope.launch {
+                // Install-over vs fresh install decides the snackbar verb.
+                val wasInstalled = entry.id in _state.value.installedManifests
                 _state.update { it.copy(installing = it.installing + entry.id, failed = it.failed - entry.id) }
                 when (val result = repoManager.install(repo, entry)) {
                     is InstallResult.Installed -> {
                         _state.update { it.copy(installing = it.installing - entry.id) }
-                        _events.emit(ExtensionsEvent.Installed(entry.id))
+                        _events.emit(
+                            if (wasInstalled) {
+                                ExtensionsEvent.Updated(entry.id)
+                            } else {
+                                ExtensionsEvent.Installed(entry.id)
+                            },
+                        )
                     }
                     is InstallResult.Failed -> {
                         _state.update { it.copy(installing = it.installing - entry.id, failed = it.failed + entry.id) }

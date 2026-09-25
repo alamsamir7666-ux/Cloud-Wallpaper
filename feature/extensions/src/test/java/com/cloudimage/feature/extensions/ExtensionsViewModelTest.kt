@@ -24,11 +24,14 @@ import com.cloudimage.extensions.core.RepoIndexResult
 import com.cloudimage.extensions.core.RepoManager
 import com.cloudimage.extensions.core.RepoPackageEntry
 import com.cloudimage.extensions.core.StoredRepo
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -73,10 +76,11 @@ class ExtensionsViewModelTest {
 
     private class FakeRepoManager : RepoManager {
         var repos = mutableListOf<StoredRepo>()
-            private set
         val addedUrls = mutableListOf<String>()
         val removedIds = mutableListOf<String>()
         val installedEntries = mutableListOf<RepoPackageEntry>()
+        var catalogCalls = 0
+            private set
         var addResult: AddRepoResult = AddRepoResult.Failed(RepoError.InvalidUrl)
         var catalogResult: RepoIndexResult = RepoIndexResult.Ok(RepoIndexDto(name = "Official"))
         var installResult: InstallResult =
@@ -100,7 +104,10 @@ class ExtensionsViewModelTest {
 
         override fun repos(): List<StoredRepo> = repos
 
-        override suspend fun catalog(repo: StoredRepo): RepoIndexResult = catalogResult
+        override suspend fun catalog(repo: StoredRepo): RepoIndexResult {
+            catalogCalls++
+            return catalogResult
+        }
 
         override suspend fun install(
             repo: StoredRepo,
@@ -142,6 +149,42 @@ class ExtensionsViewModelTest {
             status = ExtensionStatus.READY,
             manifest = null,
         )
+
+    /** A row whose manifest is readable — the only kind the Part 3 stats and update logic count. */
+    private fun manifestRow(
+        id: String = "cloudimage.demo",
+        versionName: String = "1.0.0",
+        versionCode: Int = 1,
+    ): InstalledExtension =
+        InstalledExtension(
+            id = id,
+            fileName = "$id.zip",
+            sha256 = "cafebabe",
+            status = ExtensionStatus.READY,
+            manifest =
+                ExtensionManifest(
+                    id = id,
+                    name = id,
+                    versionName = versionName,
+                    versionCode = versionCode,
+                    apiVersion = 1,
+                    entryClass = "com.example.$id",
+                ),
+        )
+
+    private fun catalogEntry(
+        id: String,
+        versionName: String = "1.0.0",
+        versionCode: Int = 1,
+    ) = RepoPackageEntry(
+        id = id,
+        fileName = "$id.zip",
+        sha256 = "00",
+        versionName = versionName,
+        versionCode = versionCode,
+    )
+
+    private fun repo(id: String) = StoredRepo(id, "$id/index.json", id, 1L)
 
     private fun TestScope.newPreferences() =
         UserPreferencesRepository(
@@ -375,5 +418,227 @@ class ExtensionsViewModelTest {
                 "entry class com.example.Broken is missing from the package",
                 state.loadFailures["cloudimage.broken"],
             )
+        }
+
+    // ---- Per-source enable/disable, stats, search and updates (v1.0.9 Part 3) ----
+
+    @Test
+    fun togglingASourcePersistsThroughPreferences() =
+        runTest {
+            val preferences = newPreferences()
+            val fake = FakeExtensionRepository()
+            val viewModel = viewModel(fake, preferences = preferences)
+            val wallhaven = manifestRow("cloudimage.wallhaven")
+            fake.state.value = listOf(wallhaven)
+
+            viewModel.setSourceEnabled(wallhaven, enabled = false)
+
+            val state = viewModel.state.first { "cloudimage.wallhaven" in it.disabledSources }
+            assertEquals(setOf("cloudimage.wallhaven"), state.disabledSources)
+            assertEquals(1, state.disabledCount)
+            assertEquals(0, state.enabledCount)
+        }
+
+    @Test
+    fun disablingThePinnedSourceClearsTheBrowsePin() =
+        runTest {
+            val preferences = newPreferences()
+            preferences.setBrowseSourceId("cloudimage.wallhaven")
+            val fake = FakeExtensionRepository()
+            val viewModel = viewModel(fake, preferences = preferences)
+            val wallhaven = manifestRow("cloudimage.wallhaven")
+            fake.state.value = listOf(wallhaven)
+
+            viewModel.setSourceEnabled(wallhaven, enabled = false)
+
+            viewModel.state.first { "cloudimage.wallhaven" in it.disabledSources }
+            assertEquals("", preferences.preferences.first().browseSourceId)
+        }
+
+    @Test
+    fun disablingAnUnpinnedSourceKeepsThePin() =
+        runTest {
+            val preferences = newPreferences()
+            preferences.setBrowseSourceId("cloudimage.other")
+            val fake = FakeExtensionRepository()
+            val viewModel = viewModel(fake, preferences = preferences)
+            val wallhaven = manifestRow("cloudimage.wallhaven")
+            fake.state.value = listOf(wallhaven)
+
+            viewModel.setSourceEnabled(wallhaven, enabled = false)
+
+            viewModel.state.first { "cloudimage.wallhaven" in it.disabledSources }
+            assertEquals("cloudimage.other", preferences.preferences.first().browseSourceId)
+        }
+
+    @Test
+    fun togglingRowsWithoutManifestIsIgnored() =
+        runTest {
+            val preferences = newPreferences()
+            val viewModel = viewModel(preferences = preferences)
+            val broken = row("cloudimage.broken") // manifest == null
+
+            viewModel.setSourceEnabled(broken, enabled = false)
+
+            advanceUntilIdle()
+            val disabled = viewModel.state.value.disabledSources
+            assertTrue(disabled.isEmpty())
+        }
+
+    @Test
+    fun catalogSearchMatchesIdsCaseInsensitively() {
+        val state = ExtensionsUiState(query = "UNSPLASH")
+
+        assertTrue(state.catalogMatches(catalogEntry("cloudimage.unsplash")))
+        assertFalse(state.catalogMatches(catalogEntry("cloudimage.wallhaven")))
+    }
+
+    @Test
+    fun blankCatalogQueryShowsEverything() {
+        val state = ExtensionsUiState(query = "")
+
+        assertTrue(state.catalogMatches(catalogEntry("cloudimage.unsplash")))
+        assertTrue(state.catalogMatches(catalogEntry("cloudimage.wallhaven")))
+    }
+
+    @Test
+    fun setQueryIsPlainState() =
+        runTest {
+            val viewModel = viewModel()
+
+            viewModel.setQuery("unsplash")
+
+            assertEquals("unsplash", viewModel.state.value.query)
+        }
+
+    @Test
+    fun updateAvailableComparesCodeThenName() {
+        val state = ExtensionsUiState(extensions = listOf(manifestRow("cloudimage.demo", versionName = "1.0.0", versionCode = 1)))
+
+        assertTrue(state.updateAvailable(catalogEntry("cloudimage.demo", versionName = "1.1.0", versionCode = 2)))
+        assertTrue(state.updateAvailable(catalogEntry("cloudimage.demo", versionName = "1.0.1", versionCode = 1)))
+        assertFalse(state.updateAvailable(catalogEntry("cloudimage.demo", versionName = "1.0.0", versionCode = 1)))
+        assertFalse(state.updateAvailable(catalogEntry("cloudimage.demo", versionName = "0.9.0", versionCode = 0)))
+        assertFalse(state.updateAvailable(catalogEntry("cloudimage.other", versionName = "9.9.9", versionCode = 9)))
+    }
+
+    @Test
+    fun statsBarCountsEnabledDisabledAndAvailable() {
+        val state =
+            ExtensionsUiState(
+                extensions = listOf(manifestRow("cloudimage.wallhaven"), manifestRow("cloudimage.demo")),
+                disabledSources = setOf("cloudimage.demo"),
+                catalogs =
+                    mapOf(
+                        "r1" to listOf(catalogEntry("cloudimage.wallhaven"), catalogEntry("cloudimage.unsplash")),
+                        "r2" to listOf(catalogEntry("cloudimage.wallhaven")),
+                    ),
+            )
+
+        assertEquals(1, state.enabledCount)
+        assertEquals(1, state.disabledCount)
+        // Unsplash once — wallhaven is installed and demo never appears in a catalog.
+        assertEquals(1, state.availableCount)
+    }
+
+    @Test
+    fun installOverAnInstalledEntryEmitsUpdated() =
+        runTest {
+            val repos =
+                FakeRepoManager().apply {
+                    installResult =
+                        InstallResult.Installed(
+                            ExtensionManifest(
+                                id = "cloudimage.unsplash",
+                                name = "Unsplash",
+                                versionName = "1.1.0",
+                                versionCode = 2,
+                                apiVersion = 1,
+                                entryClass = "com.cloudimage.unsplash.UnsplashWallpaperProvider",
+                            ),
+                            "00",
+                        )
+                }
+            val fake = FakeExtensionRepository()
+            val viewModel = viewModel(fake, repos = repos)
+            fake.state.value = listOf(manifestRow("cloudimage.unsplash", versionName = "1.0.0", versionCode = 1))
+            viewModel.state.first { it.extensions.isNotEmpty() }
+            val events = mutableListOf<ExtensionsEvent>()
+            // UNDISPATCHED: subscribe before installPackage's Main.immediate
+            // coroutine can emit — a replay-less SharedFlow keeps nothing.
+            val collector =
+                launch(start = CoroutineStart.UNDISPATCHED) {
+                    viewModel.events.collect { events += it }
+                }
+
+            viewModel.installPackage(repo("r1"), catalogEntry("cloudimage.unsplash", versionName = "1.1.0", versionCode = 2))
+
+            advanceUntilIdle()
+            assertEquals(listOf<ExtensionsEvent>(ExtensionsEvent.Updated("cloudimage.unsplash")), events)
+            collector.cancel()
+        }
+
+    @Test
+    fun freshInstallsStillEmitInstalled() =
+        runTest {
+            val repos =
+                FakeRepoManager().apply {
+                    installResult =
+                        InstallResult.Installed(
+                            ExtensionManifest(
+                                id = "cloudimage.unsplash",
+                                name = "Unsplash",
+                                versionName = "1.0.0",
+                                versionCode = 1,
+                                apiVersion = 1,
+                                entryClass = "com.cloudimage.unsplash.UnsplashWallpaperProvider",
+                            ),
+                            "00",
+                        )
+                }
+            val viewModel = viewModel(repos = repos)
+            val events = mutableListOf<ExtensionsEvent>()
+            val collector =
+                launch(start = CoroutineStart.UNDISPATCHED) {
+                    viewModel.events.collect { events += it }
+                }
+
+            viewModel.installPackage(repo("r1"), catalogEntry("cloudimage.unsplash"))
+
+            advanceUntilIdle()
+            assertEquals(listOf<ExtensionsEvent>(ExtensionsEvent.Installed("cloudimage.unsplash")), events)
+            collector.cancel()
+        }
+
+    @Test
+    fun refreshRepoRefetchesThatCatalog() =
+        runTest {
+            val repos = FakeRepoManager()
+            repos.repos = mutableListOf(repo("r1"), repo("r2"))
+            val viewModel = viewModel(repos = repos)
+
+            advanceUntilIdle()
+            assertEquals(2, repos.catalogCalls)
+
+            viewModel.refreshRepo(repo("r1"))
+
+            advanceUntilIdle()
+            assertEquals(3, repos.catalogCalls)
+        }
+
+    @Test
+    fun refreshRepoWhilePendingIsIgnored() =
+        runTest {
+            val repos = FakeRepoManager()
+            val viewModel = viewModel(repos = repos)
+            advanceUntilIdle()
+            assertEquals(0, repos.catalogCalls)
+
+            // A repo whose catalog has never been fetched reads as pending;
+            // the guard must swallow the duplicate fetch instead of queueing it.
+            viewModel.refreshRepo(repo("ghost"))
+
+            advanceUntilIdle()
+            assertEquals(0, repos.catalogCalls)
         }
 }

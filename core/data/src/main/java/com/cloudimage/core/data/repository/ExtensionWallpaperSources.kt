@@ -1,5 +1,6 @@
 package com.cloudimage.core.data.repository
 
+import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.ContentRating
 import com.cloudimage.core.model.Page
 import com.cloudimage.core.model.Wallpaper
@@ -25,6 +26,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerializationException
 import javax.inject.Inject
@@ -41,12 +43,19 @@ import com.cloudimage.provider.api.Wallpaper as ProviderWallpaper
  * package checksum. Sources that fail to load are skipped from the feed —
  * but never silently: [loadFailures] carries the reason so the
  * extension manager can tell the user exactly what is broken.
+ *
+ * A source the user disabled (v1.0.9 Part 3) is a different animal: it
+ * loads fine, it is simply not wanted. It drops out of [sources], the
+ * merged [search], [sections] and [suggestTags] — the browse switcher
+ * stops offering it and merged queries stop hitting it — while staying
+ * installed and toggleable from the extension manager.
  */
 @Singleton
 class ExtensionWallpaperSources
     @Inject
     constructor(
         private val extensions: ExtensionRepository,
+        private val preferences: UserPreferencesRepository,
         appScope: CoroutineScope,
     ) : WallpaperSources {
         private val state = MutableStateFlow<List<SourceInfo>?>(null)
@@ -55,18 +64,36 @@ class ExtensionWallpaperSources
         private val failures = MutableStateFlow<Map<String, String>>(emptyMap())
         override val loadFailures: StateFlow<Map<String, String>> = failures.asStateFlow()
 
+        /** The disabled source ids, kept current from DataStore (v1.0.9 Part 3). */
+        private val disabled = MutableStateFlow<Set<String>>(emptySet())
+
         init {
             appScope.launch { refresh() }
+            // Toggling a source must ripple into `sources` and every later
+            // query without anyone remembering to refresh — so the disabled
+            // set itself triggers one. refresh() is idempotent and cheap.
+            appScope.launch {
+                preferences.disabledSources.collect { ids ->
+                    disabled.value = ids
+                    refresh()
+                }
+            }
         }
 
         override suspend fun refresh() {
             extensions.refresh()
+            // Authoritative at refresh time — the collector may not have
+            // run yet, and a stale set would briefly resurrect a disabled
+            // source in the switcher.
+            disabled.value = preferences.disabledSources.first()
+            val disabledNow = disabled.value
             val newFailures = mutableMapOf<String, String>()
             state.value =
                 (extensions.installed.value.orEmpty())
                     .filter { it.status == ExtensionStatus.READY }
                     .mapNotNull { extension ->
                         val manifest = extension.manifest ?: return@mapNotNull null
+                        if (manifest.id in disabledNow) return@mapNotNull null
                         when (val loaded = extensions.providerFor(extension)) {
                             is LoadResult.Loaded ->
                                 SourceInfo(
@@ -90,6 +117,13 @@ class ExtensionWallpaperSources
             page: Int,
             sourceId: String?,
         ): NetworkResult<SearchOutcome> {
+            // A pin that survived on disk but points at a disabled source is
+            // the manager's business, not a connectivity mystery.
+            if (sourceId != null && sourceId in disabled.value) {
+                return NetworkResult.Failure(
+                    NetworkError.Source("source '$sourceId' is disabled — enable it in the Extensions tab"),
+                )
+            }
             val providers = readyProviders()
             // A pinned source routes the whole query to that one provider.
             val routed =
@@ -210,6 +244,11 @@ class ExtensionWallpaperSources
          * [search]; only every provider failing at once is an error.
          */
         override suspend fun sections(sourceId: String?): NetworkResult<List<SourceSection>> {
+            if (sourceId != null && sourceId in disabled.value) {
+                return NetworkResult.Failure(
+                    NetworkError.Source("source '$sourceId' is disabled — enable it in the Extensions tab"),
+                )
+            }
             val providers = readyProviders()
             if (sourceId != null) {
                 val pinned = providers.filter { it.first == sourceId }
@@ -305,13 +344,14 @@ class ExtensionWallpaperSources
             )
         }
 
-        /** Extension manifest id to its loaded provider, READY extensions only. */
+        /** Extension manifest id to its loaded provider, READY and enabled only. */
         private suspend fun readyProviders(): List<Pair<String, WallpaperProvider>> =
             extensions.installed.value
                 .orEmpty()
                 .filter { it.status == ExtensionStatus.READY }
                 .mapNotNull { extension ->
                     val manifest = extension.manifest ?: return@mapNotNull null
+                    if (manifest.id in disabled.value) return@mapNotNull null
                     when (val loaded = extensions.providerFor(extension)) {
                         is LoadResult.Loaded -> manifest.id to loaded.provider
                         is LoadResult.Failed -> null
@@ -325,6 +365,8 @@ class ExtensionWallpaperSources
                 installed.isEmpty() -> "no wallpaper sources installed"
                 installed.none { it.status == ExtensionStatus.READY } ->
                     "every installed package is corrupted or untrusted — see the Extensions tab"
+                installed.mapNotNull { it.manifest?.id }.all { it in disabled.value } ->
+                    "every installed source is disabled — enable one in the Extensions tab"
                 else -> "every installed source failed to load — see the Extensions tab"
             }
         }

@@ -1,7 +1,9 @@
 package com.cloudimage.core.data
 
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.cloudimage.core.data.repository.ExtensionWallpaperSources
 import com.cloudimage.core.data.repository.SourceInfo
+import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.ContentRating
 import com.cloudimage.core.model.WallpaperCategory
 import com.cloudimage.core.model.WallpaperQuery
@@ -26,11 +28,15 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import java.io.File
 import com.cloudimage.provider.api.Page as ProviderPage
 
@@ -39,6 +45,9 @@ import com.cloudimage.provider.api.Page as ProviderPage
  * interaction is a real WallpaperProvider recording the calls it saw.
  */
 class ExtensionWallpaperSourcesTest {
+    @get:Rule
+    val tmpFolder: TemporaryFolder = TemporaryFolder.builder().assureDeletion().build()
+
     private class RecordingProvider(
         override val meta: ProviderMeta,
         override val capabilities: Set<Capability>,
@@ -166,6 +175,28 @@ class ExtensionWallpaperSourcesTest {
                 },
         )
 
+    /**
+     * The bridge under test with a fresh real DataStore behind the
+     * preferences seam — disabled-source toggles are real writes, so the
+     * collector path gets exercised exactly as in production.
+     */
+    private fun TestScope.newPreferences() =
+        UserPreferencesRepository(
+            PreferenceDataStoreFactory.create(scope = backgroundScope) {
+                tmpFolder.newFile("sources_prefs_${System.nanoTime()}.preferences_pb")
+            },
+        )
+
+    private fun TestScope.sources(
+        engine: FakeEngine,
+        preferences: UserPreferencesRepository = newPreferences(),
+    ): ExtensionWallpaperSources =
+        ExtensionWallpaperSources(
+            extensions = engine,
+            preferences = preferences,
+            appScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+        )
+
     @Test
     fun `blank query goes to popular with translated filters`() =
         runTest {
@@ -177,7 +208,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.wallhaven"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val result = sources.search(WallpaperQuery(), page = 2)
 
@@ -204,7 +235,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.wallhaven"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
             val query = WallpaperQuery(categories = setOf(WallpaperCategory.ANIME))
 
             sources.search(query, page = 1)
@@ -223,7 +254,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.unsplash"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             sources.search(WallpaperQuery(text = "forest"), page = 1)
 
@@ -247,7 +278,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(a, b)
             engine.publish(extension("cloudimage.a"), extension("cloudimage.b"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val result = sources.search(WallpaperQuery(), page = 1) as NetworkResult.Success
 
@@ -276,7 +307,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(a, b)
             engine.publish(extension("cloudimage.a"), extension("cloudimage.b"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val result = sources.search(WallpaperQuery(), page = 1) as NetworkResult.Success
 
@@ -304,7 +335,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.a"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val result = sources.search(WallpaperQuery(), page = 1, sourceId = "cloudimage.a") as NetworkResult.Success
 
@@ -324,7 +355,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.a"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val result = sources.search(WallpaperQuery(), page = 1)
 
@@ -345,7 +376,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.a"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val result = sources.search(WallpaperQuery(), page = 1)
 
@@ -364,7 +395,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.a"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val result = sources.search(WallpaperQuery(), page = 1)
 
@@ -391,7 +422,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.wallhaven"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val result =
                 sources.search(WallpaperQuery(contentRatings = setOf(ContentRating.SFW)), page = 1) as
@@ -407,7 +438,7 @@ class ExtensionWallpaperSourcesTest {
     @Test
     fun `no sources installed is a source error`() =
         runTest {
-            val sources = ExtensionWallpaperSources(FakeEngine(), CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(FakeEngine())
 
             val result = sources.search(WallpaperQuery(), page = 1)
 
@@ -426,7 +457,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.unsplash"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             sources.refresh()
 
@@ -441,7 +472,7 @@ class ExtensionWallpaperSourcesTest {
         runTest {
             val engine = FakeEngine() // every providerFor misses: EntryClassMissing
             engine.publish(extension("cloudimage.broken"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             sources.refresh()
 
@@ -461,7 +492,7 @@ class ExtensionWallpaperSourcesTest {
                 RecordingProvider(meta = meta("cloudimage.a"), capabilities = setOf(Capability.POPULAR))
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.a"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             sources.search(WallpaperQuery(sorting = WallpaperSorting.RANDOM, seed = "abcd1234"), page = 1)
 
@@ -485,7 +516,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(wallhaven, pexels)
             engine.publish(extension("cloudimage.wallhaven"), extension("cloudimage.pexels"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val result =
                 sources.search(WallpaperQuery(), page = 1, sourceId = "cloudimage.pexels") as
@@ -507,7 +538,7 @@ class ExtensionWallpaperSourcesTest {
                 RecordingProvider(meta = meta("cloudimage.wallhaven"), capabilities = setOf(Capability.POPULAR))
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.wallhaven"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val result = sources.search(WallpaperQuery(), page = 1, sourceId = "cloudimage.gone")
 
@@ -541,7 +572,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(wallhaven, pexels, unsplash)
             engine.publish(extension("cloudimage.wallhaven"), extension("cloudimage.pexels"), extension("cloudimage.unsplash"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val tags = sources.suggestTags("land")
 
@@ -569,7 +600,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(a, broken)
             engine.publish(extension("cloudimage.a"), extension("cloudimage.broken"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val tags = sources.suggestTags("land")
 
@@ -594,7 +625,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(wallhaven, pexels)
             engine.publish(extension("cloudimage.wallhaven"), extension("cloudimage.pexels"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             assertEquals(listOf("landscape"), sources.suggestTags("land", sourceId = "cloudimage.wallhaven"))
             assertTrue(sources.suggestTags("land", sourceId = "cloudimage.pexels").isEmpty())
@@ -613,7 +644,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.wallhaven"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             assertTrue(sources.suggestTags("   ").isEmpty())
             assertTrue(provider.calls.none { it.startsWith("suggestTags") })
@@ -637,7 +668,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.wallhaven"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val rows = (sources.sections("cloudimage.wallhaven") as NetworkResult.Success).value
 
@@ -667,7 +698,7 @@ class ExtensionWallpaperSourcesTest {
             val unsplash = RecordingProvider(meta = meta("cloudimage.unsplash"), capabilities = setOf(Capability.POPULAR))
             val engine = FakeEngine(wallhaven, unsplash)
             engine.publish(extension("cloudimage.wallhaven"), extension("cloudimage.unsplash"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val rows = (sources.sections(null) as NetworkResult.Success).value
 
@@ -698,7 +729,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(healthy, broken)
             engine.publish(extension("cloudimage.wallhaven"), extension("cloudimage.broken"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val rows = (sources.sections(null) as NetworkResult.Success).value
 
@@ -716,7 +747,7 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(broken)
             engine.publish(extension("cloudimage.broken"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val result = sources.sections(null)
 
@@ -732,7 +763,7 @@ class ExtensionWallpaperSourcesTest {
                 RecordingProvider(meta = meta("cloudimage.wallhaven"), capabilities = setOf(Capability.POPULAR))
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.wallhaven"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val result = sources.sections("cloudimage.gone")
 
@@ -744,7 +775,7 @@ class ExtensionWallpaperSourcesTest {
     @Test
     fun `no ready providers yields an empty section list not an error`() =
         runTest {
-            val sources = ExtensionWallpaperSources(FakeEngine(), CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(FakeEngine())
 
             val result = sources.sections(null)
 
@@ -770,13 +801,168 @@ class ExtensionWallpaperSourcesTest {
                 )
             val engine = FakeEngine(provider)
             engine.publish(extension("cloudimage.wallhaven"))
-            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+            val sources = sources(engine)
 
             val row = (sources.sections("cloudimage.wallhaven") as NetworkResult.Success).value.single()
 
             assertEquals(WallpaperCategory.entries.toSet(), row.query.categories)
             assertEquals(WallpaperSorting.RANDOM, row.query.sorting)
             assertEquals(setOf(ContentRating.SFW), row.query.contentRatings)
+        }
+
+    // ---- Per-source enable/disable (v1.0.9 Part 3) ----
+
+    @Test
+    fun `a disabled source drops out of the switcher list`() =
+        runTest {
+            val provider = RecordingProvider(meta = meta("cloudimage.wallhaven"), capabilities = setOf(Capability.POPULAR))
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val preferences = newPreferences()
+            val sources = sources(engine, preferences)
+
+            preferences.setSourceEnabled("cloudimage.wallhaven", enabled = false)
+
+            val listed = sources.sources.first { list -> list?.none { it.id == "cloudimage.wallhaven" } == true }
+            assertTrue(listed.orEmpty().isEmpty())
+        }
+
+    @Test
+    fun `merged search skips a disabled source`() =
+        runTest {
+            val a =
+                RecordingProvider(
+                    meta = meta("cloudimage.a"),
+                    capabilities = setOf(Capability.POPULAR),
+                    popularPage = ProviderPage(listOf(sourceWallpaper("a1")), null),
+                )
+            val b =
+                RecordingProvider(
+                    meta = meta("cloudimage.b"),
+                    capabilities = setOf(Capability.POPULAR),
+                    popularPage = ProviderPage(listOf(sourceWallpaper("b1")), null),
+                )
+            val engine = FakeEngine(a, b)
+            engine.publish(extension("cloudimage.a"), extension("cloudimage.b"))
+            val preferences = newPreferences()
+            val sources = sources(engine, preferences)
+
+            preferences.setSourceEnabled("cloudimage.a", enabled = false)
+            sources.sources.first { list -> list?.none { it.id == "cloudimage.a" } == true }
+
+            val result = sources.search(WallpaperQuery(), page = 1) as NetworkResult.Success
+
+            assertEquals(
+                listOf("b1"),
+                result.value.page.wallpapers
+                    .map { it.id },
+            )
+            assertTrue(a.calls.isEmpty())
+            assertFalse(b.calls.isEmpty())
+        }
+
+    @Test
+    fun `sections skip a disabled source`() =
+        runTest {
+            val a = RecordingProvider(meta = meta("cloudimage.a"), capabilities = setOf(Capability.POPULAR))
+            val b = RecordingProvider(meta = meta("cloudimage.b"), capabilities = setOf(Capability.POPULAR))
+            val engine = FakeEngine(a, b)
+            engine.publish(extension("cloudimage.a"), extension("cloudimage.b"))
+            val preferences = newPreferences()
+            val sources = sources(engine, preferences)
+
+            preferences.setSourceEnabled("cloudimage.a", enabled = false)
+            sources.sources.first { list -> list?.none { it.id == "cloudimage.a" } == true }
+
+            val rows = (sources.sections(null) as NetworkResult.Success).value
+
+            assertEquals(listOf("cloudimage.b"), rows.map { it.sourceId })
+        }
+
+    @Test
+    fun `a pinned search on a disabled source fails honestly`() =
+        runTest {
+            val provider = RecordingProvider(meta = meta("cloudimage.wallhaven"), capabilities = setOf(Capability.POPULAR))
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val preferences = newPreferences()
+            val sources = sources(engine, preferences)
+
+            preferences.setSourceEnabled("cloudimage.wallhaven", enabled = false)
+            sources.sources.first { list -> list?.none { it.id == "cloudimage.wallhaven" } == true }
+
+            val result = sources.search(WallpaperQuery(), page = 1, sourceId = "cloudimage.wallhaven")
+
+            val error = (result as NetworkResult.Failure).error
+            assertTrue(error is NetworkError.Source)
+            assertTrue((error as NetworkError.Source).reason.contains("disabled"))
+        }
+
+    @Test
+    fun `pinned sections on a disabled source fails honestly`() =
+        runTest {
+            val provider = RecordingProvider(meta = meta("cloudimage.wallhaven"), capabilities = setOf(Capability.POPULAR))
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val preferences = newPreferences()
+            val sources = sources(engine, preferences)
+
+            preferences.setSourceEnabled("cloudimage.wallhaven", enabled = false)
+            sources.sources.first { list -> list?.none { it.id == "cloudimage.wallhaven" } == true }
+
+            val result = sources.sections("cloudimage.wallhaven")
+
+            val error = (result as NetworkResult.Failure).error
+            assertTrue(error is NetworkError.Source)
+            assertTrue((error as NetworkError.Source).reason.contains("disabled"))
+        }
+
+    @Test
+    fun `every source disabled says so in the failure reason`() =
+        runTest {
+            val provider = RecordingProvider(meta = meta("cloudimage.wallhaven"), capabilities = setOf(Capability.POPULAR))
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val preferences = newPreferences()
+            val sources = sources(engine, preferences)
+
+            preferences.setSourceEnabled("cloudimage.wallhaven", enabled = false)
+            sources.sources.first { list -> list?.none { it.id == "cloudimage.wallhaven" } == true }
+
+            val result = sources.search(WallpaperQuery(), page = 1)
+
+            val error = (result as NetworkResult.Failure).error
+            assertTrue(error is NetworkError.Source)
+            assertTrue((error as NetworkError.Source).reason.contains("disabled"))
+        }
+
+    @Test
+    fun `re-enabling restores the source`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.POPULAR),
+                    popularPage = ProviderPage(listOf(sourceWallpaper("w1")), null),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val preferences = newPreferences()
+            val sources = sources(engine, preferences)
+
+            preferences.setSourceEnabled("cloudimage.wallhaven", enabled = false)
+            sources.sources.first { list -> list?.none { it.id == "cloudimage.wallhaven" } == true }
+            preferences.setSourceEnabled("cloudimage.wallhaven", enabled = true)
+            sources.sources.first { list -> list?.any { it.id == "cloudimage.wallhaven" } == true }
+
+            val result = sources.search(WallpaperQuery(), page = 1)
+
+            assertEquals(
+                listOf("w1"),
+                (result as NetworkResult.Success)
+                    .value.page.wallpapers
+                    .map { it.id },
+            )
         }
 
     private fun meta(id: String): ProviderMeta =
