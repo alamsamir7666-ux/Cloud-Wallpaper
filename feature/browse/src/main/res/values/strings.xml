@@ -41,7 +41,6 @@
     <string name="browse_no_sources_title">No wallpaper sources</string>
     <string name="browse_no_sources_body">Install a provider from the Extensions tab to start browsing.</string>
     <string name="browse_source_all">All sources</string>
-    <string name="browse_source_switch">Switch wallpaper source</string>
     <string name="browse_source_manage">Manage extensions</string>
     <string name="browse_source_needs_key">This source needs an API key — add it in the Extensions tab</string>
     <string name="browse_api_key_title">API key required</string>
