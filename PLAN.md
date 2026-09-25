@@ -108,7 +108,7 @@ one release at the end.
       way back; 452 tests (+18), dex audit PASS — 5,543 host classes,
       wallhaven 27/32/0 unresolved; the extension repo re-published with
       the sections-capable wallhaven package.)
-- [ ] **Part 2 — Search UX (CloudStream search).** Debounced
+- [x] **Part 2 — Search UX (CloudStream search).** Debounced
       search-as-you-type (IME submit stays); persisted search history
       (capped, deduped, most-recent first, clear-all with confirm) shown
       while the field is focused and empty; tag suggestions while typing
@@ -118,6 +118,17 @@ one release at the end.
       a per-source failure summary chip with retry (built on the v1.0.2
       failure taxonomy). Pinned-mode empty results get a "try All
       sources" CTA.
+      (Delivered 2026-09-25, commit 1211e07: `suggestTags()` joins the
+      contract as the second additive default — ProviderApi.VERSION
+      stays 1, the demo fixture overrides it and the engine tests prove
+      both classloader directions; wallhaven serves its own /tags
+      endpoint when a key is stored and answers empty keyless —
+      suggestions come from the source the user is searching, or not
+      at all. Live debounced commits record no history — only explicit
+      ones (IME submit, chip tap, history tap) do. `search()` now
+      returns `SearchOutcome{page, sourceFailures}` so merged failures
+      surface as a summary chip with retry while survivors still show.
+      476 tests (+24), ktlint clean, dex audit 0 unresolved.)
 - [ ] **Part 3 — Extensions platform (CloudStream plugins).** Update
       detection: catalog `versionName` vs installed → Update state on
       the catalog row plus an update action (install-over); per-extension
@@ -350,3 +361,33 @@ Cloudimage), third-party web-search suggestions.
   (5,543 host classes, wallhaven 27 classes/32 external refs/0
   unresolved); the extension repo re-published with the
   sections-capable wallhaven package.
+- **2026-09-25 — v1.0.9 Part 2 done (search UX).** CloudStream's search
+  experience landed. Typing now searches by itself after a 450ms pause
+  (IME submit stays the instant fast path and cancels the debounce);
+  tag suggestions land at 200ms so chips are visible before the search
+  commits; clearing the text by pausing mirrors the blank submit and
+  returns to the home. Search history persists (10 entries, deduped,
+  most-recent first, clear-all behind an AlertDialog confirmation) and
+  records ONLY explicit commits — debounced live commits never pollute
+  it. Suggestions are TAGS-capability gated and come from the
+  provider's own API: `WallpaperProvider.suggestTags()` is the second
+  additive default method (VERSION stays 1 — the demo fixture overrides
+  it and the engine tests prove both classloader directions), wallhaven
+  calls its own `/tags?apikey&q=` endpoint when the user stored a key
+  and answers empty keyless (no doomed requests, no third-party suggest
+  API, ever — honesty + privacy). `search()` now returns
+  `SearchOutcome{page, sourceFailures}` (Muzei adapted mechanically):
+  a failing source in a merged search degrades to a skip that is now
+  NAMED — a summary chip under the search bar counts the failures with
+  a retry, while surviving results still show. The merged grid stamps
+  every card with its provider's name (CloudStream's per-result apiName
+  analog); a pinned search with no results offers a "Try all sources"
+  CTA. Cleanup riding along: wallhaven's `tags` field no longer
+  masquerades as its colors palette. Test-technique lesson: under
+  MainDispatcherRule the Main clock and the runTest clock are separate —
+  DataStore writes need both clocks driven to settle. 476 tests (+24),
+  0 failures; ktlint clean; dex audit PASS (5,568 host classes,
+  wallhaven 35 classes/32 external refs/0 unresolved — the new ABI
+  binds); one known lintVital OOM recovered by the usual
+  kill-daemon-and-rerun recipe; the extension repo re-published with
+  the TAGS-capable wallhaven package. CI green on 1211e07.
