@@ -46,7 +46,20 @@ private object PreferencesKeys {
 
     // Browse feed source pinning (v1.0.6). Empty string = merged feed.
     val BROWSE_SOURCE_ID = stringPreferencesKey("browse_source_id")
+
+    // Search history (v1.0.9): newline-joined, most recent first. The
+    // field is single-line so a query can never contain the separator.
+    val SEARCH_HISTORY = stringPreferencesKey("search_history")
 }
+
+/** How many past searches survive; the newest replace the oldest. */
+private const val SEARCH_HISTORY_LIMIT = 10
+
+/** A stored search longer than this is trimmed — the field stays one glance long. */
+private const val MAX_QUERY_LENGTH = 64
+
+/** Collapses every whitespace run inside a query to single spaces. */
+private val WHITESPACE = Regex("\\s+")
 
 private const val PREFERENCES_FILE = "user_preferences"
 private const val PROVIDER_KEY_PREFIX = "provider_key."
@@ -130,6 +143,59 @@ class UserPreferencesRepository
             dataStore.edit {
                 it[PreferencesKeys.BROWSE_SOURCE_ID] = sourceId.orEmpty()
             }
+        }
+
+        // ---- Search history (v1.0.9) ----
+
+        /**
+         * Past committed searches, most recent first, at
+         * [SEARCH_HISTORY_LIMIT] entries. Blank entries never appear.
+         */
+        val searchHistory: Flow<List<String>> =
+            dataStore.data
+                .catch { exception ->
+                    if (exception is IOException) {
+                        emit(emptyPreferences())
+                    } else {
+                        throw exception
+                    }
+                }.map { prefs ->
+                    prefs[PreferencesKeys.SEARCH_HISTORY]
+                        ?.split('\n')
+                        ?.filter { it.isNotBlank() }
+                        .orEmpty()
+                }
+
+        /**
+         * Records one committed search: moved to the front, deduplicated,
+         * capped. Recording only happens on explicit commits (IME submit,
+         * suggestion or history tap) — never per keystroke, so the history
+         * reads as searches the user chose, not prefixes they typed past.
+         */
+        suspend fun addSearchQuery(query: String) {
+            val normalized =
+                query
+                    .trim()
+                    .replace('\n', ' ')
+                    .replace(WHITESPACE, " ")
+                    .take(MAX_QUERY_LENGTH)
+            if (normalized.isEmpty()) return
+            dataStore.edit { prefs ->
+                val current =
+                    prefs[PreferencesKeys.SEARCH_HISTORY]
+                        ?.split('\n')
+                        ?.filter { it.isNotBlank() }
+                        .orEmpty()
+                prefs[PreferencesKeys.SEARCH_HISTORY] =
+                    (listOf(normalized) + current.filter { it != normalized })
+                        .take(SEARCH_HISTORY_LIMIT)
+                        .joinToString(separator = "\n")
+            }
+        }
+
+        /** Clears every stored search. */
+        suspend fun clearSearchHistory() {
+            dataStore.edit { it.remove(PreferencesKeys.SEARCH_HISTORY) }
         }
 
         // ---- Wallpaper auto-rotation (v1.0.3) ----

@@ -59,3 +59,18 @@ data class WallhavenMetaDto(
     val hasNextPage: Boolean
         get() = currentPage != null && lastPage != null && currentPage < lastPage
 }
+
+/**
+ * Tag lookup response (v1.0.9): Wallhaven's own tag endpoint, the honest
+ * suggestion source — no third-party suggest service is ever called.
+ */
+@Serializable
+data class WallhavenTagsResponseDto(
+    val data: List<WallhavenTagDto> = emptyList(),
+)
+
+@Serializable
+data class WallhavenTagDto(
+    val id: Long? = null,
+    val name: String = "",
+)

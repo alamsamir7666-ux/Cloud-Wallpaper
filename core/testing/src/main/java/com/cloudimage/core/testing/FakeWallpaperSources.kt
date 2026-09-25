@@ -1,5 +1,7 @@
 package com.cloudimage.core.testing
 
+import com.cloudimage.core.data.repository.SearchOutcome
+import com.cloudimage.core.data.repository.SourceFailure
 import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.SourceSection
 import com.cloudimage.core.data.repository.WallpaperSources
@@ -31,6 +33,15 @@ class FakeWallpaperSources : WallpaperSources {
 
     /** The sourceId every sections() call was called with, in order. */
     val sectionsCalls = mutableListOf<String?>()
+
+    /** Per-source failures attached to every successful search (v1.0.9). */
+    var scriptedSourceFailures: List<SourceFailure> = emptyList()
+
+    /** What suggestTags answers (v1.0.9); the raw queries land in [suggestCalls]. */
+    var scriptedSuggestions: List<String> = emptyList()
+
+    /** Every text suggestTags was called with, in order. */
+    val suggestCalls = mutableListOf<String>()
 
     private var scriptedSections: NetworkResult<List<SourceSection>> =
         NetworkResult.Success(emptyList())
@@ -71,11 +82,26 @@ class FakeWallpaperSources : WallpaperSources {
         query: WallpaperQuery,
         page: Int,
         sourceId: String?,
-    ): NetworkResult<Page> {
+    ): NetworkResult<SearchOutcome> {
         searchCalls += query to page
         searchSourceIds += sourceId
-        return scriptedSearches.removeFirstOrNull()
-            ?: NetworkResult.Success(Page.EMPTY)
+        return when (val scripted = scriptedSearches.removeFirstOrNull()) {
+            is NetworkResult.Success ->
+                NetworkResult.Success(
+                    SearchOutcome(page = scripted.value, sourceFailures = scriptedSourceFailures),
+                )
+
+            is NetworkResult.Failure -> scripted
+            null -> NetworkResult.Success(SearchOutcome(Page.EMPTY))
+        }
+    }
+
+    override suspend fun suggestTags(
+        query: String,
+        sourceId: String?,
+    ): List<String> {
+        suggestCalls += query
+        return scriptedSuggestions
     }
 
     override suspend fun sections(sourceId: String?): NetworkResult<List<SourceSection>> {

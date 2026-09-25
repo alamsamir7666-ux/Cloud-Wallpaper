@@ -198,6 +198,79 @@ class UserPreferencesRepositoryTest {
             assertEquals("", repository.preferences.first().browseSourceId)
         }
 
+    // ---- Search history (v1.0.9) ----
+
+    @Test
+    fun searchHistoryStartsEmptyAndRecordsMostRecentFirst() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            assertTrue(repository.searchHistory.first().isEmpty())
+
+            repository.addSearchQuery("nature")
+            repository.addSearchQuery("space")
+
+            assertEquals(listOf("space", "nature"), repository.searchHistory.first())
+        }
+
+    @Test
+    fun recordingTheSameSearchMovesItToTheFrontWithoutDuplicates() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+            repository.addSearchQuery("nature")
+            repository.addSearchQuery("space")
+
+            repository.addSearchQuery("nature")
+
+            assertEquals(listOf("nature", "space"), repository.searchHistory.first())
+        }
+
+    @Test
+    fun searchHistoryCapsAtTenDroppingTheOldest() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            (1..12).forEach { repository.addSearchQuery("query-$it") }
+
+            assertEquals(
+                (12 downTo 3).map { "query-$it" },
+                repository.searchHistory.first(),
+            )
+        }
+
+    @Test
+    fun blankAndWhitespaceSearchesAreNeverRecorded() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            repository.addSearchQuery("   ")
+            repository.addSearchQuery("")
+
+            assertTrue(repository.searchHistory.first().isEmpty())
+        }
+
+    @Test
+    fun recordedSearchesAreTrimmedAndCollapsedToOneLine() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+
+            repository.addSearchQuery("  mountain\tlake  ")
+
+            assertEquals(listOf("mountain lake"), repository.searchHistory.first())
+        }
+
+    @Test
+    fun clearingSearchHistoryRemovesEverything() =
+        runTest {
+            val repository = UserPreferencesRepository(newDataStore(backgroundScope))
+            repository.addSearchQuery("nature")
+            repository.addSearchQuery("space")
+
+            repository.clearSearchHistory()
+
+            assertTrue(repository.searchHistory.first().isEmpty())
+        }
+
     private fun newDataStore(scope: CoroutineScope) =
         PreferenceDataStoreFactory.create(
             // Caller-provided scope: cancelled automatically when the test ends.

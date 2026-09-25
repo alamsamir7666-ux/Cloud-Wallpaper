@@ -2,6 +2,7 @@ package com.cloudimage.core.data.repository
 
 import com.cloudimage.core.model.Page
 import com.cloudimage.core.model.WallpaperQuery
+import com.cloudimage.core.network.NetworkError
 import com.cloudimage.core.network.NetworkResult
 import kotlinx.coroutines.flow.StateFlow
 
@@ -15,6 +16,31 @@ data class SourceInfo(
     val id: String,
     val name: String,
     val requiresApiKey: Boolean,
+)
+
+/**
+ * One source that failed to answer a merged search (v1.0.9): who failed
+ * and why, in the shared failure taxonomy. The browse grid summarizes
+ * these into the per-source failure chip with a retry; a source that
+ * fails here degrades to being skipped, exactly as before — this only
+ * stops the skip from being silent.
+ */
+data class SourceFailure(
+    val sourceId: String,
+    val sourceName: String,
+    val error: NetworkError,
+)
+
+/**
+ * The outcome of a (possibly merged) search: the page plus the sources
+ * that failed while answering it (v1.0.9). Pinned searches never carry
+ * partial failures — a single source either answers or fails the whole
+ * call. A [SearchOutcome] with an empty page and no failures means every
+ * source simply had nothing for the query.
+ */
+data class SearchOutcome(
+    val page: Page,
+    val sourceFailures: List<SourceFailure> = emptyList(),
 )
 
 /**
@@ -73,13 +99,32 @@ interface WallpaperSources {
      *
      * [sourceId] pins the query to a single installed source (the v1.0.6
      * browse source switcher); null — the default — queries every ready
-     * source in parallel and merges the pages.
+     * source in parallel and merges the pages. Sources that fail in the
+     * merged mode are skipped and reported through
+     * [SearchOutcome.sourceFailures]; only every source failing at once
+     * fails the call.
      */
     suspend fun search(
         query: WallpaperQuery,
         page: Int,
         sourceId: String? = null,
-    ): NetworkResult<Page>
+    ): NetworkResult<SearchOutcome>
+
+    /**
+     * Tag suggestions for the search bar (v1.0.9), merged across the
+     * sources in scope that declare `Capability.TAGS` — never a
+     * third-party suggest service; suggestions come from the sources the
+     * user is already searching, or not at all.
+     *
+     * Best-effort by design: a failing source contributes nothing and the
+     * call never surfaces an error — the suggestion panel is guidance,
+     * not a promise. The list is deduped case-insensitively and capped;
+     * [sourceId] respects the browse pin the same way [search] does.
+     */
+    suspend fun suggestTags(
+        query: String,
+        sourceId: String? = null,
+    ): List<String>
 
     /**
      * The home-screen section rows (v1.0.9).

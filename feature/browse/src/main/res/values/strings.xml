@@ -51,4 +51,17 @@
     <string name="browse_see_all">See all in this section</string>
     <string name="browse_section_empty">Nothing here yet</string>
     <string name="browse_scope_close">Back to sections</string>
+
+    <string name="browse_suggestions_title">Suggested tags</string>
+    <string name="browse_history_title">Recent searches</string>
+    <string name="browse_history_clear">Clear</string>
+    <string name="browse_history_clear_title">Clear search history?</string>
+    <string name="browse_history_clear_body">Your recent searches will be removed from this device.</string>
+    <string name="browse_history_clear_confirm">Clear</string>
+    <string name="browse_history_clear_dismiss">Cancel</string>
+    <string name="browse_try_all_sources">Try all sources</string>
+    <plurals name="browse_source_failures">
+        <item quantity="one">%1$d source failed — some results may be missing</item>
+        <item quantity="other">%1$d sources failed — some results may be missing</item>
+    </plurals>
 </resources>

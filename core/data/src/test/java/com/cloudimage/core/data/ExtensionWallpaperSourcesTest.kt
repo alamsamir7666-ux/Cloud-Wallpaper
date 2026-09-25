@@ -47,6 +47,8 @@ class ExtensionWallpaperSourcesTest {
         private val error: Throwable? = null,
         private val sections: List<HomeSection>? = null,
         private val sectionsError: Throwable? = null,
+        private val tags: List<String>? = null,
+        private val tagsError: Throwable? = null,
     ) : WallpaperProvider {
         val calls = mutableListOf<String>()
 
@@ -71,6 +73,12 @@ class ExtensionWallpaperSourcesTest {
             calls += "sections"
             sectionsError?.let { throw it }
             return sections ?: listOf(HomeSection(id = HomeSection.DEFAULT_ID, title = "Popular"))
+        }
+
+        override suspend fun suggestTags(query: String): Result<List<String>> {
+            calls += "suggestTags:$query"
+            tagsError?.let { return Result.failure(it) }
+            return Result.success(tags.orEmpty())
         }
 
         override suspend fun details(id: String): Result<com.cloudimage.provider.api.WallpaperDetails> =
@@ -173,7 +181,12 @@ class ExtensionWallpaperSourcesTest {
 
             val result = sources.search(WallpaperQuery(), page = 2)
 
-            assertEquals(listOf("w1"), (result as NetworkResult.Success).value.wallpapers.map { it.id })
+            assertEquals(
+                listOf("w1"),
+                (result as NetworkResult.Success)
+                    .value.page.wallpapers
+                    .map { it.id },
+            )
             assertTrue(provider.calls.single().startsWith("popular:2:"))
             val filters = provider.calls.single().substringAfter("popular:2:")
             assertTrue(filters.contains("purity=[sfw]"))
@@ -238,8 +251,64 @@ class ExtensionWallpaperSourcesTest {
 
             val result = sources.search(WallpaperQuery(), page = 1) as NetworkResult.Success
 
-            assertEquals(listOf("a1"), result.value.wallpapers.map { it.id })
-            assertEquals(3, result.value.nextPage)
+            assertEquals(
+                listOf("a1"),
+                result.value.page.wallpapers
+                    .map { it.id },
+            )
+            assertEquals(3, result.value.page.nextPage)
+        }
+
+    @Test
+    fun `partial failures ride along with the merged page`() =
+        runTest {
+            val a =
+                RecordingProvider(
+                    meta = meta("cloudimage.a"),
+                    capabilities = setOf(Capability.POPULAR),
+                    popularPage = ProviderPage(listOf(sourceWallpaper("a1")), null),
+                )
+            val b =
+                RecordingProvider(
+                    meta = meta("cloudimage.b"),
+                    capabilities = setOf(Capability.POPULAR),
+                    error = ProviderTransportException(NetworkError.Timeout, "https://example.invalid"),
+                )
+            val engine = FakeEngine(a, b)
+            engine.publish(extension("cloudimage.a"), extension("cloudimage.b"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val result = sources.search(WallpaperQuery(), page = 1) as NetworkResult.Success
+
+            // The survivor still feeds the grid...
+            assertEquals(
+                listOf("a1"),
+                result.value.page.wallpapers
+                    .map { it.id },
+            )
+            // ...and the failure is named instead of silently skipped (v1.0.9).
+            val failure = result.value.sourceFailures.single()
+            assertEquals("cloudimage.b", failure.sourceId)
+            assertEquals("B", failure.sourceName)
+            assertTrue(failure.error is NetworkError.Timeout)
+        }
+
+    @Test
+    fun `a pinned search never carries partial failures`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.a"),
+                    capabilities = setOf(Capability.POPULAR),
+                    popularPage = ProviderPage(listOf(sourceWallpaper("a1")), null),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.a"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val result = sources.search(WallpaperQuery(), page = 1, sourceId = "cloudimage.a") as NetworkResult.Success
+
+            assertTrue(result.value.sourceFailures.isEmpty())
         }
 
     @Test
@@ -328,7 +397,11 @@ class ExtensionWallpaperSourcesTest {
                 sources.search(WallpaperQuery(contentRatings = setOf(ContentRating.SFW)), page = 1) as
                     NetworkResult.Success
 
-            assertEquals(listOf("safe"), result.value.wallpapers.map { it.id })
+            assertEquals(
+                listOf("safe"),
+                result.value.page.wallpapers
+                    .map { it.id },
+            )
         }
 
     @Test
@@ -418,7 +491,11 @@ class ExtensionWallpaperSourcesTest {
                 sources.search(WallpaperQuery(), page = 1, sourceId = "cloudimage.pexels") as
                     NetworkResult.Success
 
-            assertEquals(listOf("px1"), result.value.wallpapers.map { it.id })
+            assertEquals(
+                listOf("px1"),
+                result.value.page.wallpapers
+                    .map { it.id },
+            )
             assertTrue(pexels.calls.single().startsWith("popular:1:"))
             assertTrue(wallhaven.calls.isEmpty())
         }
@@ -437,6 +514,109 @@ class ExtensionWallpaperSourcesTest {
             val error = (result as NetworkResult.Failure).error
             assertTrue(error is NetworkError.Source)
             assertTrue((error as NetworkError.Source).reason.contains("cloudimage.gone"))
+        }
+
+    // ---- Tag suggestions (v1.0.9) ----
+
+    @Test
+    fun `suggestTags merges only TAGS sources and dedupes case-insensitively`() =
+        runTest {
+            val wallhaven =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.POPULAR, Capability.TAGS),
+                    tags = listOf("landscape", "Landscape", "anime"),
+                )
+            val pexels =
+                RecordingProvider(
+                    meta = meta("cloudimage.pexels"),
+                    capabilities = setOf(Capability.POPULAR), // no TAGS: never asked
+                    tags = listOf("should-not-appear"),
+                )
+            val unsplash =
+                RecordingProvider(
+                    meta = meta("cloudimage.unsplash"),
+                    capabilities = setOf(Capability.SEARCH, Capability.TAGS),
+                    tags = listOf("space", "Landscape"),
+                )
+            val engine = FakeEngine(wallhaven, pexels, unsplash)
+            engine.publish(extension("cloudimage.wallhaven"), extension("cloudimage.pexels"), extension("cloudimage.unsplash"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val tags = sources.suggestTags("land")
+
+            assertEquals(listOf("landscape", "anime", "space"), tags)
+            // Only the TAGS-declaring sources were asked.
+            assertTrue(wallhaven.calls.single().startsWith("suggestTags:land"))
+            assertTrue(unsplash.calls.single().startsWith("suggestTags:land"))
+            assertTrue(pexels.calls.none { it.startsWith("suggestTags") })
+        }
+
+    @Test
+    fun `a failing suggestion source contributes nothing`() =
+        runTest {
+            val a =
+                RecordingProvider(
+                    meta = meta("cloudimage.a"),
+                    capabilities = setOf(Capability.TAGS),
+                    tags = listOf("landscape"),
+                )
+            val broken =
+                RecordingProvider(
+                    meta = meta("cloudimage.broken"),
+                    capabilities = setOf(Capability.TAGS),
+                    tagsError = IllegalStateException("tag api down"),
+                )
+            val engine = FakeEngine(a, broken)
+            engine.publish(extension("cloudimage.a"), extension("cloudimage.broken"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val tags = sources.suggestTags("land")
+
+            // Guidance, not a promise: the failure degrades to nothing.
+            assertEquals(listOf("landscape"), tags)
+        }
+
+    @Test
+    fun `suggestTags respects the browse pin`() =
+        runTest {
+            val wallhaven =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.POPULAR, Capability.TAGS),
+                    tags = listOf("landscape"),
+                )
+            val pexels =
+                RecordingProvider(
+                    meta = meta("cloudimage.pexels"),
+                    capabilities = setOf(Capability.POPULAR), // pinned but cannot suggest
+                    tags = listOf("should-not-appear"),
+                )
+            val engine = FakeEngine(wallhaven, pexels)
+            engine.publish(extension("cloudimage.wallhaven"), extension("cloudimage.pexels"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            assertEquals(listOf("landscape"), sources.suggestTags("land", sourceId = "cloudimage.wallhaven"))
+            assertTrue(sources.suggestTags("land", sourceId = "cloudimage.pexels").isEmpty())
+            // The unpinned source was never asked while pinned elsewhere.
+            assertTrue(pexels.calls.none { it.startsWith("suggestTags") })
+        }
+
+    @Test
+    fun `suggestTags is blank-safe`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.TAGS),
+                    tags = listOf("landscape"),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            assertTrue(sources.suggestTags("   ").isEmpty())
+            assertTrue(provider.calls.none { it.startsWith("suggestTags") })
         }
 
     // ---- Home sections (v1.0.9) ----

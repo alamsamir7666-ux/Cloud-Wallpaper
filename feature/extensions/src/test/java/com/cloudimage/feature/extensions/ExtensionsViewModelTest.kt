@@ -1,6 +1,7 @@
 package com.cloudimage.feature.extensions
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import com.cloudimage.core.data.repository.SearchOutcome
 import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.SourceSection
 import com.cloudimage.core.data.repository.WallpaperSources
@@ -123,7 +124,12 @@ class ExtensionsViewModelTest {
             query: WallpaperQuery,
             page: Int,
             sourceId: String?,
-        ): NetworkResult<Page> = NetworkResult.Success(Page.EMPTY)
+        ): NetworkResult<SearchOutcome> = NetworkResult.Success(SearchOutcome(Page.EMPTY))
+
+        override suspend fun suggestTags(
+            query: String,
+            sourceId: String?,
+        ): List<String> = emptyList()
 
         override suspend fun sections(sourceId: String?): NetworkResult<List<SourceSection>> = NetworkResult.Success(emptyList())
     }

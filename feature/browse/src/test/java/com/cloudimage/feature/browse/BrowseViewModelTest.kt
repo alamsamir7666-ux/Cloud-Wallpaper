@@ -1,6 +1,7 @@
 package com.cloudimage.feature.browse
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import com.cloudimage.core.data.repository.SourceFailure
 import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.SourceSection
 import com.cloudimage.core.datastore.UserPreferencesRepository
@@ -15,6 +16,7 @@ import com.cloudimage.core.testing.MainDispatcherRule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -756,6 +758,234 @@ class BrowseViewModelTest {
                 }
 
             assertEquals(BrowseMode.SECTIONS, state.mode)
+        }
+
+    // ---- Search UX (v1.0.9) ----
+
+    /** Drives the Main dispatcher's clock past the debounce windows. */
+    private fun advanceMs(millis: Long) {
+        mainDispatcherRule.testDispatcher.scheduler.apply {
+            advanceTimeBy(millis)
+            runCurrent()
+        }
+    }
+
+    /**
+     * Lets a DataStore write land on both clocks: the test scheduler runs
+     * the write, the Main scheduler runs the ViewModel collector that
+     * receives it. They are separate clocks under MainDispatcherRule.
+     */
+    private fun TestScope.settle() {
+        advanceUntilIdle()
+        advanceMs(0)
+    }
+
+    @Test
+    fun `typing searches by itself after a pause without recording history`() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(listOf(section(sectionId = "trending", title = "Trending"))),
+            )
+            fake.enqueueSearch(page(ids = listOf("t1"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { !it.isFirstLoading }
+
+            fake.enqueueSearch(page(ids = listOf("nat1"), nextPage = null))
+            viewModel.onSearchTextChange("nature")
+            // Suggestions land first (200ms), the search at 450ms — the home
+            // is still up while the chips would show.
+            advanceMs(250)
+            assertEquals(BrowseMode.SECTIONS, viewModel.state.value.mode)
+            assertEquals(1, fake.searchCalls.size)
+            assertEquals(listOf("nature"), fake.suggestCalls)
+
+            advanceMs(250)
+
+            val state = viewModel.state.first { it.wallpapers.isNotEmpty() }
+            assertEquals(BrowseMode.GRID, state.mode)
+            assertEquals("nature", state.query.text)
+            assertEquals(
+                "nature",
+                fake.searchCalls
+                    .last()
+                    .first.text,
+            )
+            // Live search commits are NOT history — only explicit ones are.
+            assertTrue(state.history.isEmpty())
+        }
+
+    @Test
+    fun `clearing the text by pausing returns to the home`() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(listOf(section(sectionId = "trending", title = "Trending"))),
+            )
+            fake.enqueueSearch(page(ids = listOf("t1"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first {
+                it.sections
+                    .singleOrNull()
+                    ?.wallpapers
+                    ?.isNotEmpty() == true
+            }
+
+            fake.enqueueSearch(page(ids = listOf("s1"), nextPage = null))
+            viewModel.onSearchTextChange("nature")
+            advanceMs(600)
+            viewModel.state.first { it.mode == BrowseMode.GRID && it.wallpapers.isNotEmpty() }
+
+            viewModel.onSearchTextChange("")
+            advanceMs(600)
+
+            val home = viewModel.state.first { it.mode == BrowseMode.SECTIONS }
+            assertTrue(home.query.isDefault)
+        }
+
+    @Test
+    fun `submitting records the search and repeats do not duplicate it`() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { !it.isFirstLoading }
+
+            fake.enqueueSearch(page(ids = listOf("b"), nextPage = null))
+            viewModel.onSearchTextChange("nature")
+            viewModel.onSearchSubmit()
+            viewModel.state.first { it.wallpapers.map { it.id } == listOf("b") }
+            settle()
+
+            assertEquals(listOf("nature"), viewModel.state.value.history)
+
+            // The debounced commit was cancelled by the submit.
+            assertEquals(2, fake.searchCalls.size)
+
+            fake.enqueueSearch(page(ids = listOf("c"), nextPage = null))
+            viewModel.onSearchSubmit()
+            viewModel.state.first { it.wallpapers.map { it.id } == listOf("c") }
+            settle()
+
+            assertEquals(listOf("nature"), viewModel.state.value.history)
+        }
+
+    @Test
+    fun `tag suggestions land while typing and a chip commits the search`() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { !it.isFirstLoading }
+
+            fake.scriptedSuggestions = listOf("landscape", "land art")
+            viewModel.onSearchTextChange("land")
+            advanceMs(250)
+
+            assertEquals(listOf("landscape", "land art"), viewModel.state.value.suggestions)
+            assertEquals(listOf("land"), fake.suggestCalls)
+
+            fake.enqueueSearch(page(ids = listOf("s1"), nextPage = null))
+            viewModel.onSuggestionSelected("landscape")
+            val state = viewModel.state.first { it.wallpapers.isNotEmpty() }
+
+            assertEquals(BrowseMode.GRID, state.mode)
+            assertEquals("landscape", state.query.text)
+            assertTrue(state.suggestions.isEmpty())
+            settle()
+            assertEquals(listOf("landscape"), viewModel.state.value.history)
+        }
+
+    @Test
+    fun `a history row re-runs its search and records it as most recent`() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            val preferences = newPreferences()
+            preferences.addSearchQuery("nature")
+            preferences.addSearchQuery("space")
+            fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            viewModel.state.first { it.history == listOf("space", "nature") }
+
+            fake.enqueueSearch(page(ids = listOf("s1"), nextPage = null))
+            viewModel.onHistorySelected("nature")
+            viewModel.state.first { it.wallpapers.isNotEmpty() }
+            settle()
+
+            assertEquals("nature", viewModel.state.value.query.text)
+            assertEquals(listOf("nature", "space"), viewModel.state.value.history)
+        }
+
+    @Test
+    fun `the search panel follows focus and history`() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            val preferences = newPreferences()
+            preferences.addSearchQuery("nature")
+            fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            viewModel.state.first { it.history.isNotEmpty() }
+
+            viewModel.onSearchFocusChange(true)
+            assertTrue(viewModel.state.value.showSearchPanel)
+
+            viewModel.onSearchFocusChange(false)
+            assertFalse(viewModel.state.value.showSearchPanel)
+        }
+
+    @Test
+    fun `partial source failures surface in the grid state`() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo("cloudimage.a", "A", requiresApiKey = false),
+                SourceInfo("cloudimage.b", "B", requiresApiKey = false),
+            )
+            fake.scriptedSourceFailures = listOf(SourceFailure("cloudimage.b", "B", NetworkError.Timeout))
+            fake.enqueueSearch(page(ids = listOf("a1"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+
+            val state = viewModel.state.first { !it.isFirstLoading }
+
+            assertTrue(state.showSourceFailureChip)
+            assertEquals(listOf(FailedSource("B", BrowseError.TIMEOUT)), state.sourceFailures)
+            // The surviving results still show.
+            assertEquals(listOf("a1"), state.wallpapers.map { it.id })
+
+            // Retry re-runs the merged search and clears the chip when all answer.
+            fake.scriptedSourceFailures = emptyList()
+            fake.enqueueSearch(page(ids = listOf("a2"), nextPage = null))
+            viewModel.onRetrySearch()
+            val recovered = viewModel.state.first { it.wallpapers.map { it.id } == listOf("a2") }
+
+            assertFalse(recovered.showSourceFailureChip)
+        }
+
+    @Test
+    fun `a pinned search with no results offers the merged feed`() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo("cloudimage.a", "A", requiresApiKey = false),
+                SourceInfo("cloudimage.b", "B", requiresApiKey = false),
+            )
+            val preferences = newPreferences()
+            preferences.setBrowseSourceId("cloudimage.a")
+            fake.enqueueSearch(page(ids = emptyList(), nextPage = null))
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+
+            val state = viewModel.state.first { !it.isFirstLoading }
+
+            assertEquals("cloudimage.a", state.selectedSourceId)
+            assertTrue(state.showTryAllSourcesCta)
+
+            fake.enqueueSearch(page(ids = listOf("m1"), nextPage = null))
+            viewModel.onSourceSelected(null)
+            val merged = viewModel.state.first { it.wallpapers.isNotEmpty() }
+
+            assertFalse(merged.showTryAllSourcesCta)
         }
 
     private fun newViewModel(

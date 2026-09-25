@@ -146,6 +146,26 @@ interface WallpaperProvider {
     ): Result<Page>
 
     /**
+     * Tag suggestions for the search bar while the user types (v1.0.9).
+     *
+     * Additive default, exactly like [sections]: providers compiled against
+     * the V1 contract do not implement this method and answer nothing, so
+     * [ProviderApi.VERSION] stays 1 and old packages keep loading — the
+     * host simply gets no suggestions from them. A provider that CAN
+     * suggest real tags from its own first-party API overrides this; the
+     * host gates the affordance on [Capability.TAGS] and never calls a
+     * third-party suggest service — suggestions come from the source the
+     * user is already searching, or not at all.
+     *
+     * [query] is the raw field text, typically a word prefix. Return a
+     * short list of tag names — the host merges, dedupes and caps across
+     * sources. Providers without the data to answer (e.g. keyless when the
+     * tag API needs a key) should return an empty list rather than fire
+     * requests destined to fail.
+     */
+    suspend fun suggestTags(query: String): Result<List<String>> = Result.success(emptyList())
+
+    /**
      * The named feeds the home screen shows as section rows (v1.0.9).
      *
      * Additive default: providers compiled against the V1 contract do not

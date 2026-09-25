@@ -26,6 +26,7 @@ import java.net.URLEncoder
  */
 class WallhavenWallpaperProvider : WallpaperProvider {
     private var httpClient: ProviderHttpClient? = null
+    private var settings: ProviderSettings? = null
 
     override val meta =
         ProviderMeta(
@@ -38,13 +39,14 @@ class WallhavenWallpaperProvider : WallpaperProvider {
         )
 
     override val capabilities: Set<Capability> =
-        setOf(Capability.POPULAR, Capability.LATEST, Capability.SEARCH, Capability.RANDOM, Capability.FILTERS)
+        setOf(Capability.POPULAR, Capability.LATEST, Capability.SEARCH, Capability.RANDOM, Capability.FILTERS, Capability.TAGS)
 
     override fun configure(
         client: ProviderHttpClient,
         settings: ProviderSettings,
     ) {
         httpClient = client
+        this.settings = settings
     }
 
     override suspend fun popular(
@@ -57,6 +59,31 @@ class WallhavenWallpaperProvider : WallpaperProvider {
         page: Int,
         filters: Filters,
     ): Result<Page> = runCatching { fetchPage(query, filters, page) }
+
+    /**
+     * Tag suggestions from Wallhaven's own tag lookup (v1.0.9) — the honest
+     * way to suggest: the data comes from the source the user is already
+     * searching, never a third-party suggest service. Wallhaven's tag
+     * endpoint needs an API key, so a keyless install answers empty
+     * instead of firing requests destined to fail; the key is read per
+     * call through the settings object so edits take effect immediately.
+     */
+    override suspend fun suggestTags(query: String): Result<List<String>> =
+        runCatching {
+            val key = settings?.apiKey(ID) ?: return@runCatching emptyList<String>()
+            if (query.isBlank()) {
+                return@runCatching emptyList<String>()
+            }
+            val response = get("$BASE_URL/tags?apikey=${encode(key)}&q=${encode(query)}")
+            if (!response.isSuccessful) {
+                throw httpError(response.statusCode)
+            }
+            json
+                .decodeFromString(WallhavenTagsResponseDto.serializer(), response.bodyText)
+                .data
+                .map { it.name }
+                .filter { it.isNotBlank() }
+        }
 
     override suspend fun details(id: String): Result<WallpaperDetails> =
         runCatching {
@@ -175,7 +202,6 @@ class WallhavenWallpaperProvider : WallpaperProvider {
             title = null,
             width = dimensionX,
             height = dimensionY,
-            tags = colors,
             contentRating =
                 when (purity) {
                     "sketchy" -> ContentRating.SKETCHY

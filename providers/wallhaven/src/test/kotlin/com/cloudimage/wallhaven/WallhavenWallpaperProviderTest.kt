@@ -31,13 +31,16 @@ class WallhavenWallpaperProviderTest {
         }
     }
 
-    private fun clientWith(body: String): FakeClient =
+    private fun clientWith(
+        body: String,
+        apiKey: String? = null,
+    ): FakeClient =
         FakeClient().apply {
             responder = { ProviderHttpResponse(200, emptyMap(), body.toByteArray()) }
             provider.configure(
                 this,
                 com.cloudimage.provider.api
-                    .ProviderSettings { null },
+                    .ProviderSettings { apiKey },
             )
         }
 
@@ -112,6 +115,9 @@ class WallhavenWallpaperProviderTest {
             assertEquals("https://th.large/42wq8l.jpg", wallpaper.thumbUrl)
             assertEquals(1920, wallpaper.width)
             assertEquals(ContentRating.SFW, wallpaper.contentRating)
+            // Colors are NOT tags (v1.0.9): the palette must not masquerade
+            // as tag data now that tags mean something.
+            assertTrue(wallpaper.tags.isEmpty())
             assertEquals(2, page.nextPage)
             assertEquals(1, client.requests.size)
         }
@@ -164,6 +170,61 @@ class WallhavenWallpaperProviderTest {
             assertEquals(1048576L, details.fileSizeBytes)
             assertEquals("https://wallhaven.cc/w/42wq8l", details.sourceUrl)
             assertEquals("42wq8l", details.wallpaper.id)
+        }
+
+    @Test
+    fun `keyless tag suggestions answer empty without firing a request`() =
+        runTest {
+            clientWith("", apiKey = null)
+
+            val tags = provider.suggestTags("land").getOrThrow()
+
+            assertTrue(tags.isEmpty())
+        }
+
+    @Test
+    fun `blank tag suggestions never call the api`() =
+        runTest {
+            val client = clientWith("", apiKey = "user-key")
+
+            val tags = provider.suggestTags("   ").getOrThrow()
+
+            assertTrue(tags.isEmpty())
+            assertTrue(client.requests.isEmpty())
+        }
+
+    @Test
+    fun `tag suggestions come from wallhaven's own endpoint with the key`() =
+        runTest {
+            val client =
+                clientWith(
+                    """
+                    {"data": [{"id": 1, "name": "landscape"},
+                              {"id": 2, "name": "land art"},
+                              {"id": 3, "name": ""}]}
+                    """.trimIndent(),
+                    apiKey = "user-key",
+                )
+
+            val tags = provider.suggestTags("land").getOrThrow()
+
+            assertEquals(listOf("landscape", "land art"), tags)
+            assertEquals(
+                "https://wallhaven.cc/api/v1/tags?apikey=user-key&q=land",
+                client.requests.single(),
+            )
+        }
+
+    @Test
+    fun `a failing tag lookup degrades to a failed result`() =
+        runTest {
+            provider.configure(
+                FakeClient().apply { responder = { ProviderHttpResponse(503, emptyMap(), ByteArray(0)) } },
+                com.cloudimage.provider.api
+                    .ProviderSettings { "user-key" },
+            )
+
+            assertTrue(provider.suggestTags("land").isFailure)
         }
 
     @Test

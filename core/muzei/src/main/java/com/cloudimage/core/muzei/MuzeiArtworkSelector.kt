@@ -88,12 +88,12 @@ class FavoriteMuzeiArtworkSelector
             val page = userPreferencesRepository.muzeiFeedPage.first().coerceAtLeast(FIRST_PAGE)
             return when (val result = wallpaperSources.search(WallpaperQuery(contentRatings = allowed), page)) {
                 is NetworkResult.Success -> {
-                    val wallpapers = result.value.wallpapers
+                    val wallpapers = result.value.page.wallpapers
                     if (wallpapers.isEmpty()) {
                         userPreferencesRepository.setMuzeiFeedPage(FIRST_PAGE)
                         MuzeiBatch.Empty
                     } else {
-                        userPreferencesRepository.setMuzeiFeedPage(result.value.nextPage ?: FIRST_PAGE)
+                        userPreferencesRepository.setMuzeiFeedPage(result.value.page.nextPage ?: FIRST_PAGE)
                         MuzeiBatch.Artworks(wallpapers.take(MAX_ARTWORKS))
                     }
                 }

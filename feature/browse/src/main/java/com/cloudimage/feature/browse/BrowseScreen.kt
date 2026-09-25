@@ -5,6 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,6 +23,7 @@ import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -29,9 +32,13 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.FilterList
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
@@ -59,8 +66,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -93,6 +102,7 @@ fun BrowseScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     var showFilters by remember { mutableStateOf(false) }
     var showSourceSheet by remember { mutableStateOf(false) }
+    var showClearHistoryDialog by remember { mutableStateOf(false) }
 
     // Hoisted so the source FAB can react to the feed's scroll direction —
     // whichever list is on screen.
@@ -138,6 +148,7 @@ fun BrowseScreen(
                 searchText = state.searchText,
                 onSearchTextChange = viewModel::onSearchTextChange,
                 onSearchSubmit = viewModel::onSearchSubmit,
+                onSearchFocusChange = viewModel::onSearchFocusChange,
                 onOpenFilters = { showFilters = true },
                 filtersActive = state.filtersActive,
             )
@@ -151,6 +162,14 @@ fun BrowseScreen(
                         modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
                     )
                 }
+            }
+
+            if (state.showSourceFailureChip) {
+                SourceFailureChip(
+                    failures = state.sourceFailures,
+                    onRetry = viewModel::onRetrySearch,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
+                )
             }
 
             when {
@@ -175,7 +194,15 @@ fun BrowseScreen(
                 state.showFullscreenError ->
                     FullScreenError(error = state.error!!, onRetry = viewModel::onRetry)
 
-                state.wallpapers.isEmpty() -> EmptyResults()
+                state.wallpapers.isEmpty() ->
+                    EmptyResults(
+                        onTryAllSources =
+                            if (state.showTryAllSourcesCta) {
+                                { viewModel.onSourceSelected(null) }
+                            } else {
+                                null
+                            },
+                    )
 
                 else ->
                     BrowseGrid(
@@ -185,6 +212,32 @@ fun BrowseScreen(
                         onLoadMore = viewModel::loadMore,
                     )
             }
+        }
+
+        // The search panel (v1.0.9), CloudStream's search fragment condensed
+        // into a dropdown: tag chips while typing, history while empty. It
+        // only renders when it has something to offer — a hollow panel is
+        // noise, not guidance.
+        val historyMatches =
+            remember(state.history, state.searchText) {
+                if (state.searchText.isBlank()) {
+                    state.history
+                } else {
+                    state.history.filter { it.contains(state.searchText, ignoreCase = true) }
+                }
+            }
+        if (state.showSearchPanel && (state.suggestions.isNotEmpty() || historyMatches.isNotEmpty())) {
+            SearchPanel(
+                suggestions = state.suggestions,
+                historyRows = historyMatches,
+                onSuggestionSelected = viewModel::onSuggestionSelected,
+                onHistorySelected = viewModel::onHistorySelected,
+                onClearHistory = { showClearHistoryDialog = true },
+                modifier =
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(top = 72.dp, start = 16.dp, end = 16.dp),
+            )
         }
 
         // The CloudStream home FAB: names the active source, opens the
@@ -214,6 +267,29 @@ fun BrowseScreen(
         )
     }
 
+    if (showClearHistoryDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearHistoryDialog = false },
+            title = { Text(stringResource(R.string.browse_history_clear_title)) },
+            text = { Text(stringResource(R.string.browse_history_clear_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showClearHistoryDialog = false
+                        viewModel.onClearHistory()
+                    },
+                ) {
+                    Text(stringResource(R.string.browse_history_clear_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearHistoryDialog = false }) {
+                    Text(stringResource(R.string.browse_history_clear_dismiss))
+                }
+            },
+        )
+    }
+
     if (showFilters) {
         FilterSheet(
             query = state.query,
@@ -230,6 +306,7 @@ private fun SearchBarRow(
     searchText: String,
     onSearchTextChange: (String) -> Unit,
     onSearchSubmit: () -> Unit,
+    onSearchFocusChange: (Boolean) -> Unit,
     onOpenFilters: () -> Unit,
     filtersActive: Boolean,
     modifier: Modifier = Modifier,
@@ -258,7 +335,11 @@ private fun SearchBarRow(
             keyboardActions = KeyboardActions(onSearch = { onSearchSubmit() }),
             singleLine = true,
             shape = CircleShape,
-            modifier = Modifier.weight(1f).testTag("browse:search"),
+            modifier =
+                Modifier
+                    .weight(1f)
+                    .testTag("browse:search")
+                    .onFocusChanged { onSearchFocusChange(it.isFocused) },
         )
         BadgedBox(
             badge = {
@@ -307,6 +388,172 @@ private fun ScopeChipRow(
             },
             modifier = Modifier.testTag("browse:scope-chip"),
         )
+    }
+}
+
+/**
+ * The search panel (v1.0.9), CloudStream's search fragment condensed into
+ * a dropdown: tag chips while typing (from TAGS-capable sources, never a
+ * third-party suggest service) and the persisted history while the field
+ * is empty, with clear-all behind a confirmation — history is data, not
+ * decoration. Rendered only when it has something to offer.
+ */
+@Composable
+private fun SearchPanel(
+    suggestions: List<String>,
+    historyRows: List<String>,
+    onSuggestionSelected: (String) -> Unit,
+    onHistorySelected: (String) -> Unit,
+    onClearHistory: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        tonalElevation = 6.dp,
+        shadowElevation = 6.dp,
+        modifier = modifier.fillMaxWidth().testTag("browse:search-panel"),
+    ) {
+        Column(
+            modifier =
+                Modifier
+                    .heightIn(max = 328.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = 8.dp),
+        ) {
+            if (suggestions.isNotEmpty()) {
+                PanelHeader(text = stringResource(R.string.browse_suggestions_title))
+                SuggestionChipRow(
+                    suggestions = suggestions,
+                    onSuggestionSelected = onSuggestionSelected,
+                )
+            }
+            if (historyRows.isNotEmpty()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.browse_history_title),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onClearHistory) {
+                        Text(stringResource(R.string.browse_history_clear))
+                    }
+                }
+                historyRows.forEach { entry ->
+                    HistoryRow(
+                        query = entry,
+                        onHistorySelected = onHistorySelected,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PanelHeader(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp),
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SuggestionChipRow(
+    suggestions: List<String>,
+    onSuggestionSelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+    ) {
+        suggestions.forEach { tag ->
+            AssistChip(
+                onClick = { onSuggestionSelected(tag) },
+                label = { Text(tag) },
+                modifier = Modifier.testTag("browse:suggestion"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun HistoryRow(
+    query: String,
+    onHistorySelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .clickable { onHistorySelected(query) }
+                .heightIn(min = 44.dp)
+                .padding(horizontal = 16.dp, vertical = 2.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.History,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            text = query,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 12.dp),
+        )
+    }
+}
+
+/**
+ * The merged-search failure summary (v1.0.9): some sources failed while
+ * the survivors still show. One line that names the damage and offers
+ * the retry — honest taxonomy instead of a silent skip.
+ */
+@Composable
+private fun SourceFailureChip(
+    failures: List<FailedSource>,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.errorContainer,
+        modifier = modifier.testTag("browse:source-failures"),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.WarningAmber,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                text = pluralStringResource(R.plurals.browse_source_failures, failures.size, failures.size),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.padding(horizontal = 8.dp),
+            )
+            TextButton(onClick = onRetry) {
+                Text(stringResource(R.string.browse_retry))
+            }
+        }
     }
 }
 
@@ -499,6 +746,16 @@ private fun BrowseGrid(
         if (closeToTheEnd) onLoadMore()
     }
 
+    // In the merged feed every card carries its provider's name —
+    // CloudStream's per-result apiName analog — so provenance stays
+    // visible wherever the rows interleave. Pinned and scoped grids
+    // name their source at the top instead.
+    val providerNames =
+        remember(state.sources) {
+            state.sources.orEmpty().associate { it.id to it.name }
+        }
+    val showProviderLabels = state.scopeSourceId == null && state.selectedSourceId == null
+
     LazyVerticalStaggeredGrid(
         columns = StaggeredGridCells.Fixed(state.gridColumns),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
@@ -515,6 +772,12 @@ private fun BrowseGrid(
             WallpaperCard(
                 wallpaper = wallpaper,
                 onClick = { onWallpaperClick(wallpaper) },
+                providerLabel =
+                    if (showProviderLabels) {
+                        providerNames[wallpaper.providerId] ?: wallpaper.providerId.substringAfterLast('.')
+                    } else {
+                        null
+                    },
             )
         }
 
@@ -603,7 +866,10 @@ private fun FullScreenError(
 }
 
 @Composable
-private fun EmptyResults(modifier: Modifier = Modifier) {
+private fun EmptyResults(
+    onTryAllSources: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -625,6 +891,16 @@ private fun EmptyResults(modifier: Modifier = Modifier) {
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // A pinned search with nothing to show offers the merged feed as
+        // the next move (v1.0.9) — maybe the other sources have it.
+        if (onTryAllSources != null) {
+            FilledTonalButton(
+                onClick = onTryAllSources,
+                modifier = Modifier.padding(top = 8.dp).testTag("browse:try-all-sources"),
+            ) {
+                Text(stringResource(R.string.browse_try_all_sources))
+            }
+        }
     }
 }
 

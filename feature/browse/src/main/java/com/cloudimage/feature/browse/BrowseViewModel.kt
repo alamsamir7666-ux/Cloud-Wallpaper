@@ -2,6 +2,7 @@ package com.cloudimage.feature.browse
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.cloudimage.core.data.repository.SourceFailure
 import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.SourceSection
 import com.cloudimage.core.data.repository.WallpaperSources
@@ -16,6 +17,7 @@ import com.cloudimage.core.network.onFailure
 import com.cloudimage.core.network.onSuccess
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,6 +47,12 @@ enum class BrowseMode {
     SECTIONS,
     GRID,
 }
+
+/** One source that failed the last merged search, for the summary chip (v1.0.9). */
+data class FailedSource(
+    val sourceName: String,
+    val error: BrowseError,
+)
 
 /** One entry of the source bar: an installed source the feed can be pinned to. */
 data class BrowseSource(
@@ -103,9 +111,50 @@ data class BrowseUiState(
     val sourceBar: List<BrowseSource> = emptyList(),
     /** The pinned source needs an API key the user has not stored yet. */
     val showApiKeyPrompt: Boolean = false,
+    /** Past committed searches, most recent first (v1.0.9). */
+    val history: List<String> = emptyList(),
+    /** Tag suggestions for the text being typed, from TAGS-capable sources. */
+    val suggestions: List<String> = emptyList(),
+    /** True while the search field holds the keyboard focus. */
+    val searchFocused: Boolean = false,
+    /** Sources that failed the last merged grid search (v1.0.9). */
+    val sourceFailures: List<FailedSource> = emptyList(),
 ) {
     /** True when the filter sheet holds non-default choices. */
     val filtersActive: Boolean get() = !query.isDefault
+
+    /**
+     * The search panel (history + tag suggestions) shows while the field
+     * is focused and mid-edit: a blank field with history to offer, or
+     * text that differs from what the grid is already showing.
+     */
+    val showSearchPanel: Boolean
+        get() =
+            searchFocused &&
+                (searchText != query.text || (searchText.isBlank() && history.isNotEmpty()))
+
+    /**
+     * A pinned search with nothing to show offers the merged feed as the
+     * next move (v1.0.9): maybe the other sources have it.
+     */
+    val showTryAllSourcesCta: Boolean
+        get() =
+            mode == BrowseMode.GRID &&
+                scopeTitle == null &&
+                selectedSourceId != null &&
+                wallpapers.isEmpty() &&
+                !isFirstLoading &&
+                error == null &&
+                !showApiKeyPrompt
+
+    /** The merged-grid failure chip (v1.0.9): some sources failed while the results still show. */
+    val showSourceFailureChip: Boolean
+        get() =
+            mode == BrowseMode.GRID &&
+                scopeSourceId == null &&
+                selectedSourceId == null &&
+                sourceFailures.isNotEmpty() &&
+                !isFirstLoading
 
     /** Zero items + error -> full-screen error; otherwise a footer retry. */
     val showFullscreenError: Boolean
@@ -148,6 +197,15 @@ class BrowseViewModel
 
         /** The in-flight grid request; cancelled whenever a new search starts. */
         private var searchJob: Job? = null
+
+        /** Debounces as-you-type search; an explicit submit cancels it. */
+        private var searchDebounce: Job? = null
+
+        /** Debounces tag suggestions; faster than the search so chips land first. */
+        private var suggestDebounce: Job? = null
+
+        /** The in-flight tag suggestion request. */
+        private var suggestJob: Job? = null
 
         /** The in-flight sections-list request; cancelled on every restart. */
         private var sectionsJob: Job? = null
@@ -218,11 +276,100 @@ class BrowseViewModel
                     // Extensions tab — unprompt the feed immediately.
                     if (wasPrompting && !selectedNeedsApiKey()) restartFeed()
                 }.launchIn(viewModelScope)
+
+            userPreferencesRepository.searchHistory
+                .onEach { history -> _state.update { it.copy(history = history) } }
+                .launchIn(viewModelScope)
         }
 
-        /** Typing updates the field only — nothing loads until submit. */
+        /**
+         * Typing updates the field immediately and everything else after a
+         * debounce (v1.0.9): suggestions at [SUGGEST_DEBOUNCE_MS] — chips
+         * first, while the user is still deciding — and the search itself
+         * at [SEARCH_DEBOUNCE_MS], past the hesitation but under the
+         * keyless rate limits. An explicit submit cancels both and commits
+         * at once; the IME action stays the fast path.
+         */
         fun onSearchTextChange(text: String) {
             _state.update { it.copy(searchText = text) }
+            scheduleSearchDebounce()
+            scheduleSuggestDebounce()
+        }
+
+        private fun scheduleSearchDebounce() {
+            searchDebounce?.cancel()
+            searchDebounce =
+                viewModelScope.launch {
+                    delay(SEARCH_DEBOUNCE_MS)
+                    onDebouncedSearch()
+                }
+        }
+
+        private fun scheduleSuggestDebounce() {
+            suggestDebounce?.cancel()
+            suggestDebounce =
+                viewModelScope.launch {
+                    delay(SUGGEST_DEBOUNCE_MS)
+                    onDebouncedSuggest()
+                }
+        }
+
+        /**
+         * The paused-typing commit: search-as-you-type. Records NO history —
+         * only explicit commits (IME submit, suggestion tap, history tap)
+         * do, so the history reads as searches the user chose, not prefixes
+         * they typed past. A blank mirrors the blank submit: the home is
+         * the blank state.
+         */
+        private fun onDebouncedSearch() {
+            val text = _state.value.searchText
+            if (text.isBlank()) {
+                when {
+                    _state.value.mode == BrowseMode.GRID && homeIsAvailable() -> onBackToSections()
+                    _state.value.mode == BrowseMode.GRID -> {
+                        _state.update { it.copy(query = it.query.copy(text = "")) }
+                        startGrid()
+                    }
+                }
+                return
+            }
+            if (text == _state.value.query.text) return // the grid already shows it
+            _state.update {
+                it.copy(
+                    query = it.query.copy(text = text),
+                    scopeTitle = null,
+                    scopeSourceId = null,
+                    mode = BrowseMode.GRID,
+                )
+            }
+            startGrid()
+        }
+
+        /** Suggestions only ever chase the text being typed, never a committed query. */
+        private fun onDebouncedSuggest() {
+            val text = _state.value.searchText
+            if (text.isBlank() || text == _state.value.query.text) {
+                _state.update { it.copy(suggestions = emptyList()) }
+                return
+            }
+            suggestJob?.cancel()
+            suggestJob =
+                viewModelScope.launch {
+                    val tags =
+                        sources.suggestTags(
+                            text,
+                            sourceId = _state.value.scopeSourceId ?: _state.value.selectedSourceId,
+                        )
+                    // Only land if the user has not typed on since.
+                    if (_state.value.searchText == text) {
+                        _state.update { it.copy(suggestions = tags) }
+                    }
+                }
+        }
+
+        private fun cancelSearchDebounces() {
+            searchDebounce?.cancel()
+            suggestDebounce?.cancel()
         }
 
         /**
@@ -232,7 +379,9 @@ class BrowseViewModel
          * flat feed so the field and the query never disagree.
          */
         fun onSearchSubmit() {
-            if (_state.value.searchText.isBlank()) {
+            cancelSearchDebounces()
+            val text = _state.value.searchText
+            if (text.isBlank()) {
                 when {
                     _state.value.mode == BrowseMode.GRID && homeIsAvailable() -> onBackToSections()
                     _state.value.mode == BrowseMode.GRID -> {
@@ -244,13 +393,49 @@ class BrowseViewModel
             }
             _state.update {
                 it.copy(
-                    query = it.query.copy(text = it.searchText),
+                    query = it.query.copy(text = text),
                     scopeTitle = null,
                     scopeSourceId = null,
                     mode = BrowseMode.GRID,
+                    suggestions = emptyList(),
                 )
             }
+            recordSearch(text)
             startGrid()
+        }
+
+        /** Explicit commits only — IME submit, suggestion tap, history tap. */
+        private fun recordSearch(text: String) {
+            if (text.isBlank()) return
+            viewModelScope.launch { userPreferencesRepository.addSearchQuery(text) }
+        }
+
+        /** The field gained or lost the keyboard focus — drives the search panel. */
+        fun onSearchFocusChange(focused: Boolean) {
+            _state.update { it.copy(searchFocused = focused) }
+        }
+
+        /** A tag chip: the suggestion becomes the query, committed and recorded. */
+        fun onSuggestionSelected(tag: String) {
+            cancelSearchDebounces()
+            _state.update { it.copy(searchText = tag) }
+            onSearchSubmit()
+        }
+
+        /** A history row: re-runs that search, re-recorded as the most recent. */
+        fun onHistorySelected(query: String) {
+            _state.update { it.copy(searchText = query) }
+            onSearchSubmit()
+        }
+
+        /** Clears the stored search history (behind the confirm dialog). */
+        fun onClearHistory() {
+            viewModelScope.launch { userPreferencesRepository.clearSearchHistory() }
+        }
+
+        /** The failure chip's retry: re-runs the merged search under the committed query. */
+        fun onRetrySearch() {
+            restartFeed()
         }
 
         /** Commits a new filter set from the sheet and restarts the grid. */
@@ -288,7 +473,9 @@ class BrowseViewModel
                         .onSuccess { result ->
                             currentPage = page
                             _state.update { state ->
-                                state.appendPage(result)
+                                state
+                                    .appendPage(result.page)
+                                    .copy(sourceFailures = result.sourceFailures.map { it.toFailedSource() })
                             }
                         }.onFailure { error ->
                             _state.update { it.copy(isLoadingMore = false, error = error.toBrowseError()) }
@@ -318,9 +505,9 @@ class BrowseViewModel
                             sectionPages[key] = page
                             updateSection(key) { state ->
                                 state.copy(
-                                    wallpapers = state.wallpapers + result.wallpapers,
+                                    wallpapers = state.wallpapers + result.page.wallpapers,
                                     isLoadingMore = false,
-                                    endReached = !result.hasNext,
+                                    endReached = !result.page.hasNext,
                                     error = null,
                                 )
                             }
@@ -349,6 +536,7 @@ class BrowseViewModel
         fun onBackToSections() {
             if (!homeIsAvailable()) return
             searchJob?.cancel()
+            cancelSearchDebounces()
             _state.update {
                 it.copy(
                     mode = BrowseMode.SECTIONS,
@@ -360,6 +548,8 @@ class BrowseViewModel
                     isLoadingMore = false,
                     endReached = false,
                     error = null,
+                    suggestions = emptyList(),
+                    sourceFailures = emptyList(),
                 )
             }
         }
@@ -420,6 +610,8 @@ class BrowseViewModel
                     endReached = false,
                     error = null,
                     showApiKeyPrompt = needsKey,
+                    suggestions = emptyList(),
+                    sourceFailures = emptyList(),
                 )
             }
             if (needsKey) return
@@ -468,9 +660,9 @@ class BrowseViewModel
                         ).onSuccess { result ->
                             updateSection(section.key) { state ->
                                 state.copy(
-                                    wallpapers = result.wallpapers,
+                                    wallpapers = result.page.wallpapers,
                                     isFirstLoading = false,
-                                    endReached = !result.hasNext,
+                                    endReached = !result.page.hasNext,
                                     error = null,
                                 )
                             }
@@ -504,6 +696,7 @@ class BrowseViewModel
                     endReached = false,
                     error = null,
                     showApiKeyPrompt = needsKey,
+                    sourceFailures = emptyList(),
                 )
             }
             if (needsKey) return
@@ -515,10 +708,11 @@ class BrowseViewModel
                         .onSuccess { result ->
                             _state.update { state ->
                                 state.copy(
-                                    wallpapers = result.wallpapers,
+                                    wallpapers = result.page.wallpapers,
                                     isFirstLoading = false,
-                                    endReached = !result.hasNext,
+                                    endReached = !result.page.hasNext,
                                     error = null,
+                                    sourceFailures = result.sourceFailures.map { it.toFailedSource() },
                                 )
                             }
                         }.onFailure { error ->
@@ -638,6 +832,20 @@ class BrowseViewModel
                 endReached = !page.hasNext,
                 error = null,
             )
+
+        private fun SourceFailure.toFailedSource(): FailedSource =
+            FailedSource(
+                sourceName = sourceName,
+                error = error.toBrowseError(),
+            )
+
+        private companion object {
+            /** As-you-type search delay: past typing hesitation, under the keyless rate limits. */
+            const val SEARCH_DEBOUNCE_MS = 450L
+
+            /** Suggestions land before the search commits, so chips are visible while typing. */
+            const val SUGGEST_DEBOUNCE_MS = 200L
+        }
     }
 
 private fun NetworkError.toBrowseError(): BrowseError =

@@ -31,7 +31,7 @@ class DemoWallpaperProvider : WallpaperProvider {
             description = "Fixture provider used by the extension engine tests.",
         )
 
-    override val capabilities: Set<Capability> = setOf(Capability.POPULAR, Capability.SEARCH)
+    override val capabilities: Set<Capability> = setOf(Capability.POPULAR, Capability.SEARCH, Capability.TAGS)
 
     override fun configure(
         client: ProviderHttpClient,
@@ -90,6 +90,18 @@ class DemoWallpaperProvider : WallpaperProvider {
         listOf(
             HomeSection(id = "first", title = "Demo First"),
             HomeSection(id = "second", title = "Demo Second", filters = Filters.of("sorting" to "date")),
+        )
+
+    /**
+     * The other v1.0.9 default: a provider that answers tag suggestions
+     * from its own vocabulary, prefix-matched — proves the second additive
+     * method also binds across the classloader boundary in both directions.
+     */
+    override suspend fun suggestTags(query: String): Result<List<String>> =
+        Result.success(
+            listOf("demo", "demo walls", "sunset", "sample art").filter {
+                it.startsWith(query, ignoreCase = true)
+            },
         )
 
     private companion object {

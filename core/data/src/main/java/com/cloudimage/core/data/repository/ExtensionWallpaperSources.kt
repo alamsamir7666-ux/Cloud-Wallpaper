@@ -89,7 +89,7 @@ class ExtensionWallpaperSources
             query: WallpaperQuery,
             page: Int,
             sourceId: String?,
-        ): NetworkResult<Page> {
+        ): NetworkResult<SearchOutcome> {
             val providers = readyProviders()
             // A pinned source routes the whole query to that one provider.
             val routed =
@@ -120,22 +120,66 @@ class ExtensionWallpaperSources
                         .awaitAll()
 
                 val pages = results.mapNotNull { it.getOrNull() }
-                val firstFailure = results.firstOrNull { it.isFailure }
+                val sourceFailures =
+                    results
+                        .zip(routed) { result, (id, provider) ->
+                            result.exceptionOrNull()?.let { failure ->
+                                SourceFailure(
+                                    sourceId = id,
+                                    sourceName = provider.meta.name.ifBlank { id.substringAfterLast('.') },
+                                    error = failure.toNetworkError(),
+                                )
+                            }
+                        }.mapNotNull { it }
 
-                if (pages.isEmpty() && firstFailure != null) {
-                    NetworkResult.Failure((firstFailure.exceptionOrNull() ?: IllegalStateException()).toNetworkError())
+                if (pages.isEmpty() && sourceFailures.isNotEmpty()) {
+                    NetworkResult.Failure(sourceFailures.first().error)
                 } else {
                     NetworkResult.Success(
-                        Page(
-                            wallpapers =
-                                pages
-                                    .flatMap { it.wallpapers }
-                                    .filter { it.contentRating.toCore() in ratings }
-                                    .map { it.toCore() },
-                            nextPage = pages.mapNotNull { it.nextPage }.maxOrNull(),
+                        SearchOutcome(
+                            page =
+                                Page(
+                                    wallpapers =
+                                        pages
+                                            .flatMap { it.wallpapers }
+                                            .filter { it.contentRating.toCore() in ratings }
+                                            .map { it.toCore() },
+                                    nextPage = pages.mapNotNull { it.nextPage }.maxOrNull(),
+                                ),
+                            // Partial failures ride along: a merged search keeps
+                            // its surviving results and says exactly who failed.
+                            sourceFailures = sourceFailures,
                         ),
                     )
                 }
+            }
+        }
+
+        /**
+         * Suggestions only ever come from TAGS-declaring sources in scope —
+         * never a third-party suggest service. Failures degrade to nothing:
+         * the suggestion panel is guidance, not a promise.
+         */
+        override suspend fun suggestTags(
+            query: String,
+            sourceId: String?,
+        ): List<String> {
+            val trimmed = query.trim()
+            if (trimmed.isEmpty()) return emptyList()
+            val providers = readyProviders()
+            val routed =
+                sourceId
+                    ?.let { id -> providers.filter { it.first == id } }
+                    ?: providers
+            return coroutineScope {
+                routed
+                    .filter { (_, provider) -> Capability.TAGS in provider.capabilities }
+                    .map { (_, provider) -> async { runCatching { provider.suggestTags(trimmed) }.getOrNull() } }
+                    .awaitAll()
+                    .mapNotNull { it?.getOrNull() }
+                    .flatten()
+                    .distinctBy { it.lowercase() }
+                    .take(TAG_SUGGESTION_LIMIT)
             }
         }
 
@@ -357,3 +401,6 @@ class ExtensionWallpaperSources
                 contentRating = contentRating.toCore(),
             )
     }
+
+/** How many merged tag suggestions survive per lookup (v1.0.9). */
+private const val TAG_SUGGESTION_LIMIT = 8
