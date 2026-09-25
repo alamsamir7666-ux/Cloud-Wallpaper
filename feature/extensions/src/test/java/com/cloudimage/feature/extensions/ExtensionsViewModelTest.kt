@@ -2,6 +2,7 @@ package com.cloudimage.feature.extensions
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.cloudimage.core.data.repository.SourceInfo
+import com.cloudimage.core.data.repository.SourceSection
 import com.cloudimage.core.data.repository.WallpaperSources
 import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.Page
@@ -123,6 +124,8 @@ class ExtensionsViewModelTest {
             page: Int,
             sourceId: String?,
         ): NetworkResult<Page> = NetworkResult.Success(Page.EMPTY)
+
+        override suspend fun sections(sourceId: String?): NetworkResult<List<SourceSection>> = NetworkResult.Success(emptyList())
     }
 
     private fun row(id: String = "cloudimage.demo") =

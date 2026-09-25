@@ -1,6 +1,8 @@
 package com.cloudimage.fixture.demo
 
 import com.cloudimage.provider.api.Capability
+import com.cloudimage.provider.api.Filters
+import com.cloudimage.provider.api.HomeSection
 import com.cloudimage.provider.api.Page
 import com.cloudimage.provider.api.ProviderHttpClient
 import com.cloudimage.provider.api.ProviderMeta
@@ -77,6 +79,18 @@ class DemoWallpaperProvider : WallpaperProvider {
         Result.failure(UnsupportedOperationException("demo fixture has no details"))
 
     override suspend fun random(): Result<List<Wallpaper>> = Result.success(emptyList())
+
+    /**
+     * Exercises the v1.0.9 side of the contract across the classloader
+     * boundary: a provider that overrides the default with two named
+     * sections, one carrying a filter preset. The engine's tests load this
+     * fixture through a real classloader and assert what comes back.
+     */
+    override suspend fun sections(): List<HomeSection> =
+        listOf(
+            HomeSection(id = "first", title = "Demo First"),
+            HomeSection(id = "second", title = "Demo Second", filters = Filters.of("sorting" to "date")),
+        )
 
     private companion object {
         const val ID = "cloudimage.demo"

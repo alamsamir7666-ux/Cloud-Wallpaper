@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
@@ -40,6 +41,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -71,15 +73,15 @@ import com.cloudimage.core.designsystem.WallpaperCard
 import com.cloudimage.core.model.Wallpaper
 
 /**
- * The home feed: a staggered masonry grid over every installed source, with
- * search, filters, a CloudStream-style source switcher (v1.0.8) and infinite
- * scroll.
+ * The home feed (v1.0.9): a stack of titled section carousels per CloudStream's
+ * `mainPage` model, with the staggered grid for search, filters and See-all
+ * drill-downs, a CloudStream-style source switcher and infinite scroll on
+ * every list.
  *
  * The switcher mirrors CloudStream's home: an extended FAB pinned to the
  * bottom corner that names the active source and opens a bottom-sheet list
- * of every installed one. Paging is triggered by a prefetch buffer — when
- * the user scrolls within eight items of the end, the next page loads
- * before they hit it.
+ * of every installed one. Both the section list and the grid drive the
+ * FAB's shrink-on-scroll / extend-on-scroll-up behavior.
  */
 @Composable
 fun BrowseScreen(
@@ -92,18 +94,24 @@ fun BrowseScreen(
     var showFilters by remember { mutableStateOf(false) }
     var showSourceSheet by remember { mutableStateOf(false) }
 
-    // Hoisted so the source FAB can react to the feed's scroll direction.
+    // Hoisted so the source FAB can react to the feed's scroll direction —
+    // whichever list is on screen.
     val gridState = rememberLazyStaggeredGridState()
+    val sectionsState = rememberLazyListState()
 
     // Scrolling down the feed shrinks the FAB to its icon; scrolling back
     // up re-extends it — the CloudStream home behavior. The index/offset
     // sum stays monotonic across item swaps; the small threshold ignores
-    // sub-pixel jitter.
+    // sub-pixel jitter. Switching modes restarts the tracker fresh.
     var fabExpanded by remember { mutableStateOf(true) }
-    LaunchedEffect(gridState) {
+    LaunchedEffect(state.mode) {
         var lastPosition = 0
         snapshotFlow {
-            gridState.firstVisibleItemIndex * 1_000_000 + gridState.firstVisibleItemScrollOffset
+            if (state.mode == BrowseMode.GRID) {
+                gridState.firstVisibleItemIndex * 1_000_000 + gridState.firstVisibleItemScrollOffset
+            } else {
+                sectionsState.firstVisibleItemIndex * 1_000_000 + sectionsState.firstVisibleItemScrollOffset
+            }
         }.collect { position ->
             val delta = position - lastPosition
             if (delta > 0) {
@@ -134,6 +142,17 @@ fun BrowseScreen(
                 filtersActive = state.filtersActive,
             )
 
+            if (state.mode == BrowseMode.GRID && state.scopeTitle != null) {
+                val scopeTitle = state.scopeTitle
+                if (scopeTitle != null) {
+                    ScopeChipRow(
+                        title = scopeTitle,
+                        onClose = viewModel::onBackToSections,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
+                    )
+                }
+            }
+
             when {
                 state.isFirstLoading -> FullScreenLoading()
                 state.showApiKeyPrompt ->
@@ -142,10 +161,19 @@ fun BrowseScreen(
                         onOpenExtensions = onOpenExtensions,
                     )
 
+                state.showNoSources -> NoSources()
+
+                state.mode == BrowseMode.SECTIONS && state.sections.isNotEmpty() ->
+                    SectionsHome(
+                        sections = state.sections,
+                        listState = sectionsState,
+                        onWallpaperClick = onWallpaperClick,
+                        onSeeAll = viewModel::onSeeAll,
+                        onLoadMoreSection = viewModel::loadMoreSection,
+                    )
+
                 state.showFullscreenError ->
                     FullScreenError(error = state.error!!, onRetry = viewModel::onRetry)
-
-                state.showNoSources -> NoSources()
 
                 state.wallpapers.isEmpty() -> EmptyResults()
 
@@ -246,6 +274,39 @@ private fun SearchBarRow(
                 )
             }
         }
+    }
+}
+
+/**
+ * The See-all scope chip: names the section the grid is scoped to and is
+ * the way back to the sectioned home.
+ */
+@Composable
+private fun ScopeChipRow(
+    title: String,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier = modifier) {
+        InputChip(
+            selected = true,
+            onClick = onClose,
+            label = {
+                Text(
+                    text = title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            trailingIcon = {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = stringResource(R.string.browse_scope_close),
+                    modifier = Modifier.size(18.dp),
+                )
+            },
+            modifier = Modifier.testTag("browse:scope-chip"),
+        )
     }
 }
 

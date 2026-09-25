@@ -18,6 +18,29 @@ data class SourceInfo(
 )
 
 /**
+ * One home-screen section row (v1.0.9): a provider's named feed, resolved
+ * to the host query vocabulary so the browse pipeline can load it through
+ * the same [WallpaperSources.search] path as everything else.
+ */
+data class SourceSection(
+    /** The provider this row belongs to; rows always load pinned to it. */
+    val sourceId: String,
+    val sourceName: String,
+    /** The provider's own section id, e.g. "trending" or "popular". */
+    val sectionId: String,
+    /** The section's title as declared by the provider. */
+    val title: String,
+    /** The section's filter preset, translated to a host query. */
+    val query: WallpaperQuery,
+    /**
+     * True for the generic section every provider gets by default — the
+     * host uses it to know a row carries no provider-specific identity and
+     * can be labeled with the source name in the merged view.
+     */
+    val isDefault: Boolean = false,
+)
+
+/**
  * The browse pipeline over whatever providers are installed: the
  * replacement for the Part 3-era built-in Wallhaven repository. Every
  * ready extension is loaded through the engine and queried in parallel;
@@ -57,4 +80,16 @@ interface WallpaperSources {
         page: Int,
         sourceId: String? = null,
     ): NetworkResult<Page>
+
+    /**
+     * The home-screen section rows (v1.0.9).
+     *
+     * Pinned to [sourceId] (null = the merged view): the pinned source's
+     * full section list, or one primary section per ready source — each
+     * row loads through [search] pinned to its own source. A provider
+     * that fails (or declares nothing) contributes no row; every provider
+     * failing surfaces the first failure. Content ratings are
+     * deliberately NOT translated — the user's SFW setting owns them.
+     */
+    suspend fun sections(sourceId: String? = null): NetworkResult<List<SourceSection>>
 }

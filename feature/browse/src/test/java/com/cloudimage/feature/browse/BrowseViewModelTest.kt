@@ -2,6 +2,7 @@ package com.cloudimage.feature.browse
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.cloudimage.core.data.repository.SourceInfo
+import com.cloudimage.core.data.repository.SourceSection
 import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.ContentRating
 import com.cloudimage.core.model.Page
@@ -424,6 +425,302 @@ class BrowseViewModelTest {
             val state = viewModel.state.first { it.sourceBar.isNotEmpty() && !it.isFirstLoading }
 
             assertEquals(listOf(BrowseSource("wallhaven", "Wallhaven", needsApiKey = false)), state.sourceBar)
+        }
+
+    // ---- Home sections (v1.0.9) ----
+
+    private fun section(
+        sourceId: String = "wallhaven",
+        sectionId: String,
+        title: String,
+        query: WallpaperQuery = WallpaperQuery(),
+        isDefault: Boolean = false,
+    ): SourceSection =
+        SourceSection(
+            sourceId = sourceId,
+            sourceName = "Wallhaven",
+            sectionId = sectionId,
+            title = title,
+            query = query,
+            isDefault = isDefault,
+        )
+
+    @Test
+    fun initialLoadShowsSectionsWithFirstPagesPerRow() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(
+                    listOf(
+                        section(sectionId = "trending", title = "Trending", query = WallpaperQuery(sorting = WallpaperSorting.TOPLIST)),
+                        section(sectionId = "latest", title = "Latest", query = WallpaperQuery(sorting = WallpaperSorting.DATE)),
+                    ),
+                ),
+            )
+            fake.enqueueSearch(page(ids = listOf("t1"), nextPage = null))
+            fake.enqueueSearch(page(ids = listOf("l1"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+
+            val state = viewModel.state.first { !it.isFirstLoading }
+
+            assertEquals(BrowseMode.SECTIONS, state.mode)
+            assertEquals(listOf("wallhaven:trending", "wallhaven:latest"), state.sections.map { it.key })
+            assertEquals(listOf("Wallhaven · Trending", "Wallhaven · Latest"), state.sections.map { it.title })
+            val populated =
+                viewModel.state.first { it.sections.isNotEmpty() && it.sections.all { s -> !s.isFirstLoading } }
+            assertEquals(listOf("t1"), populated.sections[0].wallpapers.map { it.id })
+            assertEquals(listOf("l1"), populated.sections[1].wallpapers.map { it.id })
+            // Each row loads pinned to its own source with its own preset.
+            assertEquals(listOf("wallhaven", "wallhaven"), fake.searchSourceIds.take(2))
+            assertEquals(
+                listOf(WallpaperSorting.TOPLIST, WallpaperSorting.DATE),
+                fake.searchCalls.take(2).map { it.first.sorting },
+            )
+            assertEquals(listOf(1, 1), fake.searchCalls.take(2).map { it.second })
+        }
+
+    @Test
+    fun mergedViewTitlesDefaultRowsWithTheSourceName() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(
+                    listOf(section(sectionId = "popular", title = "Popular", isDefault = true)),
+                ),
+            )
+            fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+
+            val state = viewModel.state.first { !it.isFirstLoading }
+
+            // The default "Popular" row reads as the source itself — not a
+            // home full of identical "Popular" headers.
+            assertEquals(listOf("Wallhaven"), state.sections.map { it.title })
+        }
+
+    @Test
+    fun sectionPaginationAppendsAndStops() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(listOf(section(sectionId = "trending", title = "Trending"))),
+            )
+            fake.enqueueSearch(page(ids = listOf("t1"), nextPage = 2))
+            fake.enqueueSearch(page(ids = listOf("t2"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.isNotEmpty() == true }
+
+            viewModel.loadMoreSection("wallhaven:trending")
+            val done =
+                viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.size == 2 }
+
+            assertTrue(done.sections.single().endReached)
+            viewModel.loadMoreSection("wallhaven:trending")
+            assertEquals(2, fake.searchCalls.size)
+            assertEquals(listOf(1, 2), fake.searchCalls.map { it.second })
+            assertEquals(
+                listOf("t1", "t2"),
+                done.sections
+                    .single()
+                    .wallpapers
+                    .map { it.id },
+            )
+        }
+
+    @Test
+    fun sectionFirstPageFailureRetriesPageOne() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(listOf(section(sectionId = "trending", title = "Trending"))),
+            )
+            fake.enqueueSearch(NetworkResult.Failure(NetworkError.Timeout))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { it.sections.singleOrNull()?.error != null }
+
+            fake.enqueueSearch(page(ids = listOf("t1"), nextPage = null))
+            viewModel.loadMoreSection("wallhaven:trending")
+            val recovered =
+                viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.isNotEmpty() == true }
+
+            // A failed FIRST page retries page 1 — there is nothing to
+            // append onto, so advancing the cursor would skip content.
+            assertEquals(listOf(1, 1), fake.searchCalls.map { it.second })
+            assertNull(recovered.sections.single().error)
+        }
+
+    @Test
+    fun seeAllOpensTheGridScopedToTheSectionAndBackReturnsHome() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(
+                    listOf(
+                        section(
+                            sectionId = "trending",
+                            title = "Trending",
+                            query = WallpaperQuery(sorting = WallpaperSorting.TOPLIST),
+                        ),
+                    ),
+                ),
+            )
+            fake.enqueueSearch(page(ids = listOf("t1"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.isNotEmpty() == true }
+
+            fake.enqueueSearch(page(ids = listOf("g1", "g2"), nextPage = null))
+            viewModel.onSeeAll("wallhaven:trending")
+            val scoped = viewModel.state.first { it.wallpapers.isNotEmpty() }
+
+            assertEquals(BrowseMode.GRID, scoped.mode)
+            assertEquals("Wallhaven · Trending", scoped.scopeTitle)
+            assertEquals(WallpaperSorting.TOPLIST, scoped.query.sorting)
+            // The scoped grid loads pinned to the section's source with the
+            // section's preset, from page 1.
+            assertEquals("wallhaven", fake.searchSourceIds.last())
+            assertEquals(
+                WallpaperSorting.TOPLIST,
+                fake.searchCalls
+                    .last()
+                    .first.sorting,
+            )
+            assertEquals(1, fake.searchCalls.last().second)
+
+            viewModel.onBackToSections()
+            val home = viewModel.state.first { it.mode == BrowseMode.SECTIONS }
+
+            // Rows keep their state; the grid is cleared.
+            assertEquals(
+                listOf("t1"),
+                home.sections
+                    .single()
+                    .wallpapers
+                    .map { it.id },
+            )
+            assertTrue(home.wallpapers.isEmpty())
+            assertNull(home.scopeTitle)
+            assertTrue(home.query.isDefault)
+        }
+
+    @Test
+    fun searchLeavesTheHomeAndClearingItReturns() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(listOf(section(sectionId = "trending", title = "Trending"))),
+            )
+            fake.enqueueSearch(page(ids = listOf("t1"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.isNotEmpty() == true }
+
+            fake.enqueueSearch(page(ids = listOf("s1"), nextPage = null))
+            viewModel.onSearchTextChange("nature")
+            viewModel.onSearchSubmit()
+            val searching = viewModel.state.first { it.wallpapers.isNotEmpty() }
+
+            assertEquals(BrowseMode.GRID, searching.mode)
+            assertNull(searching.scopeTitle)
+
+            viewModel.onSearchTextChange("")
+            viewModel.onSearchSubmit()
+            val home = viewModel.state.first { it.mode == BrowseMode.SECTIONS }
+
+            assertEquals(
+                listOf("t1"),
+                home.sections
+                    .single()
+                    .wallpapers
+                    .map { it.id },
+            )
+        }
+
+    @Test
+    fun selectingASourceReloadsItsSections() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false),
+                SourceInfo("pexels", "Pexels", requiresApiKey = false),
+            )
+            fake.setSectionsResult(
+                NetworkResult.Success(
+                    listOf(
+                        section(sourceId = "wallhaven", sectionId = "trending", title = "Trending"),
+                    ),
+                ),
+            )
+            fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
+            val preferences = newPreferences()
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            viewModel.state.first {
+                it.sections.isNotEmpty() &&
+                    it.sections
+                        .single()
+                        .wallpapers
+                        .isNotEmpty()
+            }
+
+            fake.setSectionsResult(
+                NetworkResult.Success(
+                    listOf(
+                        section(sourceId = "pexels", sectionId = "curated", title = "Curated", isDefault = false),
+                    ),
+                ),
+            )
+            fake.enqueueSearch(page(ids = listOf("px1"), nextPage = null))
+            viewModel.onSourceSelected("pexels")
+            val pinned = viewModel.state.first { it.selectedSourceId == "pexels" && it.sections.isNotEmpty() }
+
+            // Pinned mode keeps the provider's own titles, not the merged
+            // "Source · Section" composition.
+            assertEquals(listOf("Curated"), pinned.sections.map { it.title })
+            assertEquals("pexels", fake.sectionsCalls.last())
+            assertEquals("pexels", fake.searchSourceIds.last())
+        }
+
+    @Test
+    fun degenerateEmptySectionsFallBackToTheFlatGrid() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.enqueueSearch(page(ids = listOf("f1"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+
+            // No sections declared anywhere: the v1.0.8 flat merged feed.
+            val state = viewModel.state.first { !it.isFirstLoading }
+
+            assertEquals(BrowseMode.GRID, state.mode)
+            assertEquals(listOf("f1"), state.wallpapers.map { it.id })
+        }
+
+    @Test
+    fun sfwFlipReloadsTheSections() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(listOf(section(sectionId = "trending", title = "Trending"))),
+            )
+            fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
+            val preferences = newPreferences()
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences)
+            viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.isNotEmpty() == true }
+
+            fake.setSectionsResult(
+                NetworkResult.Success(listOf(section(sectionId = "trending", title = "Trending"))),
+            )
+            fake.enqueueSearch(page(ids = listOf("b"), nextPage = null))
+            preferences.setSfwOnly(false)
+            val state =
+                viewModel.state.first { it.sections.singleOrNull()?.wallpapers?.map { it.id } == listOf("b") }
+
+            assertEquals(BrowseMode.SECTIONS, state.mode)
         }
 
     private fun newViewModel(

@@ -145,6 +145,23 @@ interface WallpaperProvider {
         filters: Filters = Filters.None,
     ): Result<Page>
 
+    /**
+     * The named feeds the home screen shows as section rows (v1.0.9).
+     *
+     * Additive default: providers compiled against the V1 contract do not
+     * implement this method, and the default below runs through the
+     * interface — [ProviderApi.VERSION] stays 1, old packages keep loading,
+     * and their home degrades to a single "Popular" row over [popular].
+     * Providers that want the CloudStream-style home override it with
+     * their own [HomeSection]s, each a titled query preset.
+     *
+     * Keep it cheap and offline: the host calls this on every feed start.
+     */
+    suspend fun sections(): List<HomeSection> =
+        listOf(
+            HomeSection(id = HomeSection.DEFAULT_ID, title = "Popular"),
+        )
+
     suspend fun details(id: String): Result<WallpaperDetails>
 
     suspend fun random(): Result<List<Wallpaper>>

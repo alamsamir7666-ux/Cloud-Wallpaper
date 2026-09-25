@@ -17,6 +17,7 @@ import com.cloudimage.extensions.core.LoadResult
 import com.cloudimage.extensions.core.ProviderTransportException
 import com.cloudimage.provider.api.Capability
 import com.cloudimage.provider.api.Filters
+import com.cloudimage.provider.api.HomeSection
 import com.cloudimage.provider.api.ProviderMeta
 import com.cloudimage.provider.api.WallpaperProvider
 import kotlinx.coroutines.CoroutineScope
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -43,6 +45,8 @@ class ExtensionWallpaperSourcesTest {
         private val popularPage: ProviderPage? = null,
         private val searchPage: ProviderPage? = null,
         private val error: Throwable? = null,
+        private val sections: List<HomeSection>? = null,
+        private val sectionsError: Throwable? = null,
     ) : WallpaperProvider {
         val calls = mutableListOf<String>()
 
@@ -61,6 +65,12 @@ class ExtensionWallpaperSourcesTest {
         ): Result<ProviderPage> {
             calls += "search:$query:$page:${describe(filters)}"
             return outcome(searchPage)
+        }
+
+        override suspend fun sections(): List<HomeSection> {
+            calls += "sections"
+            sectionsError?.let { throw it }
+            return sections ?: listOf(HomeSection(id = HomeSection.DEFAULT_ID, title = "Popular"))
         }
 
         override suspend fun details(id: String): Result<com.cloudimage.provider.api.WallpaperDetails> =
@@ -427,6 +437,166 @@ class ExtensionWallpaperSourcesTest {
             val error = (result as NetworkResult.Failure).error
             assertTrue(error is NetworkError.Source)
             assertTrue((error as NetworkError.Source).reason.contains("cloudimage.gone"))
+        }
+
+    // ---- Home sections (v1.0.9) ----
+
+    @Test
+    fun `a pinned source lists its full sections with translated queries`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.POPULAR),
+                    sections =
+                        listOf(
+                            HomeSection(id = "trending", title = "Trending", filters = Filters.of("sorting" to "toplist")),
+                            HomeSection(id = "anime", title = "Anime", filters = Filters.of("category" to "anime")),
+                            HomeSection(id = "latest", title = "Latest", filters = Filters.of("sorting" to "date")),
+                        ),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val rows = (sources.sections("cloudimage.wallhaven") as NetworkResult.Success).value
+
+            assertEquals(listOf("trending", "anime", "latest"), rows.map { it.sectionId })
+            assertEquals(WallpaperSorting.TOPLIST, rows[0].query.sorting)
+            assertEquals(setOf(WallpaperCategory.ANIME), rows[1].query.categories)
+            assertEquals(WallpaperSorting.DATE, rows[2].query.sorting)
+            // Content ratings stay the user's business — the section
+            // cannot smuggle a purity request past the SFW setting.
+            assertEquals(setOf(ContentRating.SFW), rows.map { it.query.contentRatings }.distinct().single())
+        }
+
+    @Test
+    fun `the merged view shows one primary section per source`() =
+        runTest {
+            val wallhaven =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.POPULAR),
+                    sections =
+                        listOf(
+                            HomeSection(id = "trending", title = "Trending"),
+                            HomeSection(id = "latest", title = "Latest", filters = Filters.of("sorting" to "date")),
+                        ),
+                )
+            // Does not override sections() — the default Popular row.
+            val unsplash = RecordingProvider(meta = meta("cloudimage.unsplash"), capabilities = setOf(Capability.POPULAR))
+            val engine = FakeEngine(wallhaven, unsplash)
+            engine.publish(extension("cloudimage.wallhaven"), extension("cloudimage.unsplash"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val rows = (sources.sections(null) as NetworkResult.Success).value
+
+            assertEquals(
+                listOf("cloudimage.wallhaven" to "trending", "cloudimage.unsplash" to "popular"),
+                rows.map { it.sourceId to it.sectionId },
+            )
+            // The provider-declared row keeps its identity; the default
+            // one is marked so the host can label it with the source name.
+            assertFalse(rows[0].isDefault)
+            assertTrue(rows[1].isDefault)
+        }
+
+    @Test
+    fun `a provider that fails sections is skipped when others answer`() =
+        runTest {
+            val healthy =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.POPULAR),
+                    sections = listOf(HomeSection(id = "trending", title = "Trending")),
+                )
+            val broken =
+                RecordingProvider(
+                    meta = meta("cloudimage.broken"),
+                    capabilities = setOf(Capability.POPULAR),
+                    sectionsError = IllegalStateException("sections exploded"),
+                )
+            val engine = FakeEngine(healthy, broken)
+            engine.publish(extension("cloudimage.wallhaven"), extension("cloudimage.broken"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val rows = (sources.sections(null) as NetworkResult.Success).value
+
+            assertEquals(listOf("cloudimage.wallhaven"), rows.map { it.sourceId })
+        }
+
+    @Test
+    fun `every provider failing sections surfaces a source error`() =
+        runTest {
+            val broken =
+                RecordingProvider(
+                    meta = meta("cloudimage.broken"),
+                    capabilities = setOf(Capability.POPULAR),
+                    sectionsError = IllegalStateException("sections exploded"),
+                )
+            val engine = FakeEngine(broken)
+            engine.publish(extension("cloudimage.broken"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val result = sources.sections(null)
+
+            val error = (result as NetworkResult.Failure).error
+            assertTrue(error is NetworkError.Source)
+            assertTrue((error as NetworkError.Source).reason.contains("sections exploded"))
+        }
+
+    @Test
+    fun `pinning sections to an uninstalled source fails honestly`() =
+        runTest {
+            val provider =
+                RecordingProvider(meta = meta("cloudimage.wallhaven"), capabilities = setOf(Capability.POPULAR))
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val result = sources.sections("cloudimage.gone")
+
+            val error = (result as NetworkResult.Failure).error
+            assertTrue(error is NetworkError.Source)
+            assertTrue((error as NetworkError.Source).reason.contains("cloudimage.gone"))
+        }
+
+    @Test
+    fun `no ready providers yields an empty section list not an error`() =
+        runTest {
+            val sources = ExtensionWallpaperSources(FakeEngine(), CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val result = sources.sections(null)
+
+            assertTrue(result is NetworkResult.Success)
+            assertTrue((result as NetworkResult.Success).value.isEmpty())
+        }
+
+    @Test
+    fun `unknown filter values are dropped and purity is never read`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.POPULAR),
+                    sections =
+                        listOf(
+                            HomeSection(
+                                id = "weird",
+                                title = "Weird",
+                                filters = Filters.of("category" to "spaceships", "purity" to "nsfw", "sorting" to "random"),
+                            ),
+                        ),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val sources = ExtensionWallpaperSources(engine, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+
+            val row = (sources.sections("cloudimage.wallhaven") as NetworkResult.Success).value.single()
+
+            assertEquals(WallpaperCategory.entries.toSet(), row.query.categories)
+            assertEquals(WallpaperSorting.RANDOM, row.query.sorting)
+            assertEquals(setOf(ContentRating.SFW), row.query.contentRatings)
         }
 
     private fun meta(id: String): ProviderMeta =

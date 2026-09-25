@@ -3,6 +3,7 @@ package com.cloudimage.feature.browse
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cloudimage.core.data.repository.SourceInfo
+import com.cloudimage.core.data.repository.SourceSection
 import com.cloudimage.core.data.repository.WallpaperSources
 import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.ContentRating
@@ -36,6 +37,15 @@ enum class BrowseError {
     SOURCE,
 }
 
+/**
+ * What the browse screen is showing: the sectioned home (v1.0.9, the
+ * CloudStream `mainPage` model) or the flat staggered grid.
+ */
+enum class BrowseMode {
+    SECTIONS,
+    GRID,
+}
+
 /** One entry of the source bar: an installed source the feed can be pinned to. */
 data class BrowseSource(
     val id: String,
@@ -44,12 +54,40 @@ data class BrowseSource(
     val needsApiKey: Boolean,
 )
 
+/**
+ * One section row of the home screen: a provider's named feed with its own
+ * pagination state. Rows always load pinned to [sourceId].
+ */
+data class BrowseSectionState(
+    /** "$sourceId:$sectionId" — the stable identity the UI addresses rows by. */
+    val key: String,
+    val sourceId: String,
+    val sourceName: String,
+    val sectionId: String,
+    /** The composed row title shown in the header. */
+    val title: String,
+    val query: WallpaperQuery,
+    val wallpapers: List<Wallpaper> = emptyList(),
+    val isFirstLoading: Boolean = true,
+    val isLoadingMore: Boolean = false,
+    val endReached: Boolean = false,
+    val error: BrowseError? = null,
+)
+
 /** Immutable snapshot of everything the browse screen renders. */
 data class BrowseUiState(
     /** Text currently sitting in the search field; not yet committed. */
     val searchText: String = "",
-    /** The committed query driving the feed. */
+    /** The committed query driving the grid. */
     val query: WallpaperQuery = WallpaperQuery(),
+    /** What the screen is showing — the sectioned home or the flat grid. */
+    val mode: BrowseMode = BrowseMode.SECTIONS,
+    /** The home rows; empty in the grid fallback (the v1.0.8 flat feed). */
+    val sections: List<BrowseSectionState> = emptyList(),
+    /** The section title when the grid was opened through See-all. */
+    val scopeTitle: String? = null,
+    /** The section's source when the grid is scoped; the search then runs pinned to it. */
+    val scopeSourceId: String? = null,
     val wallpapers: List<Wallpaper> = emptyList(),
     val gridColumns: Int = 2,
     val sfwOnly: Boolean = true,
@@ -75,18 +113,22 @@ data class BrowseUiState(
 
     /** Sources discovered, none usable -> install-a-source guidance. */
     val showNoSources: Boolean
-        get() = sources != null && sources.isEmpty() && wallpapers.isEmpty() && !isFirstLoading
+        get() = sources != null && sources.isEmpty() && wallpapers.isEmpty() && sections.isEmpty() && !isFirstLoading
 }
 
 /**
- * Drives the browse grid: owns search text, the committed query, and the
- * paging cursor. Preference changes (SFW-only, grid columns) flow in from
- * DataStore and re-shape the feed live; source installs flow in from the
- * extension engine and restart the feed only when they rescue it from
- * empty. The feed can be pinned to one source (v1.0.6 source switcher,
- * restyled as a CloudStream-style selector in v1.0.7); the pin is
- * persisted, survives process death, and falls back to the merged feed
- * when the pinned source is no longer installed.
+ * Drives the browse screen: the sectioned home (v1.0.9) with the flat grid
+ * for search, filter drill-downs and See-all. Preference changes (SFW-only,
+ * grid columns) flow in from DataStore and re-shape the feed live; source
+ * installs flow in from the extension engine and restart the feed only when
+ * they rescue it from empty. The feed can be pinned to one source (v1.0.6
+ * source switcher); the pin is persisted, survives process death, and falls
+ * back to the merged feed when the pinned source is no longer installed.
+ *
+ * The home loads sections-first: the pinned source's own section list, or
+ * one primary section per ready source. When no provider declares anything
+ * — a degenerate install — the feed degrades to the flat merged grid (the
+ * v1.0.8 home), so the screen is never empty for a structural reason.
  */
 @HiltViewModel
 class BrowseViewModel
@@ -98,14 +140,22 @@ class BrowseViewModel
         private val _state = MutableStateFlow(BrowseUiState())
         val state: StateFlow<BrowseUiState> = _state.asStateFlow()
 
-        /** Page cursor for the visible list; 1 after every restart. */
+        /** Page cursor for the grid; 1 after every restart. */
         private var currentPage = 1
 
-        /** Keeps a random sort stable across pages of one session. */
+        /** Keeps a random grid sort stable across pages of one session. */
         private var randomSeed: String? = null
 
-        /** The in-flight request; cancelled whenever a new search starts. */
+        /** The in-flight grid request; cancelled whenever a new search starts. */
         private var searchJob: Job? = null
+
+        /** The in-flight sections-list request; cancelled on every restart. */
+        private var sectionsJob: Job? = null
+
+        /** Per-row page cursors, random-sort seeds and jobs, by section key. */
+        private val sectionPages = mutableMapOf<String, Int>()
+        private val sectionSeeds = mutableMapOf<String, String>()
+        private val sectionJobs = mutableMapOf<String, Job>()
 
         /** Provider ids that have an API key stored; drives the key prompts. */
         private var storedApiKeyIds: Set<String> = emptySet()
@@ -129,7 +179,7 @@ class BrowseViewModel
                     // restart the feed because the purity parameter changes;
                     // a selection change restarts it because the provider set
                     // changed. Never both — one restart per cause.
-                    if (!preferencesSeen || sfwChanged || selectionChanged) restartSearch()
+                    if (!preferencesSeen || sfwChanged || selectionChanged) restartFeed()
                     preferencesSeen = true
                 }.launchIn(viewModelScope)
 
@@ -153,9 +203,9 @@ class BrowseViewModel
                     // request still in flight has an empty list too, and
                     // rescuing it would fire a duplicate restart.
                     val feedNeedsRetry =
-                        !_state.value.isFirstLoading && _state.value.wallpapers.isEmpty()
+                        !_state.value.isFirstLoading && feedIsEmpty()
                     val nowUsable = !available.orEmpty().isEmpty()
-                    if (feedNeedsRetry && nowUsable && sourcesSeen.orEmpty().isEmpty()) restartSearch()
+                    if (feedNeedsRetry && nowUsable && sourcesSeen.orEmpty().isEmpty()) restartFeed()
                     sourcesSeen = available
                 }.launchIn(viewModelScope)
 
@@ -166,7 +216,7 @@ class BrowseViewModel
                     rebuildSourceBar()
                     // The user may have just added the missing key from the
                     // Extensions tab — unprompt the feed immediately.
-                    if (wasPrompting && !selectedNeedsApiKey()) restartSearch()
+                    if (wasPrompting && !selectedNeedsApiKey()) restartFeed()
                 }.launchIn(viewModelScope)
         }
 
@@ -175,16 +225,38 @@ class BrowseViewModel
             _state.update { it.copy(searchText = text) }
         }
 
-        /** Commits the search field and restarts the feed from page 1. */
+        /**
+         * Commits the search field. A blank submit while the grid shows the
+         * default feed returns to the sectioned home (the search was a
+         * detour); a blank submit without a home to return to reloads the
+         * flat feed so the field and the query never disagree.
+         */
         fun onSearchSubmit() {
-            _state.update { it.copy(query = it.query.copy(text = it.searchText)) }
-            restartSearch()
+            if (_state.value.searchText.isBlank()) {
+                when {
+                    _state.value.mode == BrowseMode.GRID && homeIsAvailable() -> onBackToSections()
+                    _state.value.mode == BrowseMode.GRID -> {
+                        _state.update { it.copy(query = it.query.copy(text = "")) }
+                        startGrid()
+                    }
+                }
+                return
+            }
+            _state.update {
+                it.copy(
+                    query = it.query.copy(text = it.searchText),
+                    scopeTitle = null,
+                    scopeSourceId = null,
+                    mode = BrowseMode.GRID,
+                )
+            }
+            startGrid()
         }
 
-        /** Commits a new filter set from the sheet and restarts the feed. */
+        /** Commits a new filter set from the sheet and restarts the grid. */
         fun onQueryChange(query: WallpaperQuery) {
-            _state.update { it.copy(query = query.copy(text = it.query.text)) }
-            restartSearch()
+            _state.update { it.copy(query = query.copy(text = it.query.text), mode = BrowseMode.GRID, scopeTitle = null, scopeSourceId = null) }
+            startGrid()
         }
 
         /**
@@ -205,7 +277,7 @@ class BrowseViewModel
                 viewModelScope.launch {
                     _state.update { it.copy(isLoadingMore = true) }
                     sources
-                        .search(effectiveQuery(), page, sourceId = current.selectedSourceId)
+                        .search(effectiveGridQuery(), page, sourceId = current.scopeSourceId ?: current.selectedSourceId)
                         .onSuccess { result ->
                             currentPage = page
                             _state.update { state ->
@@ -217,18 +289,205 @@ class BrowseViewModel
                 }
         }
 
-        /** Retry from wherever the feed died: empty restarts, tail appends. */
-        fun onRetry() {
-            if (_state.value.wallpapers.isEmpty()) restartSearch() else loadMore()
+        /**
+         * Appends the next page when one section's carousel approaches its
+         * end. A row whose FIRST page failed retries page 1 — there is
+         * nothing to append onto.
+         */
+        fun loadMoreSection(key: String) {
+            val section = _state.value.sections.firstOrNull { it.key == key } ?: return
+            if (sectionJobs[key]?.isActive == true || section.endReached || section.isLoadingMore) return
+            if (section.wallpapers.isEmpty() && section.error != null) {
+                loadSectionFirstPage(section)
+                return
+            }
+            val page = (sectionPages[key] ?: 1) + 1
+            sectionJobs[key] =
+                viewModelScope.launch {
+                    updateSection(key) { it.copy(isLoadingMore = true) }
+                    sources
+                        .search(effectiveSectionQuery(section), page, sourceId = section.sourceId)
+                        .onSuccess { result ->
+                            sectionPages[key] = page
+                            updateSection(key) { state ->
+                                state.copy(
+                                    wallpapers = state.wallpapers + result.wallpapers,
+                                    isLoadingMore = false,
+                                    endReached = !result.hasNext,
+                                    error = null,
+                                )
+                            }
+                        }.onFailure { error ->
+                            updateSection(key) { it.copy(isLoadingMore = false, error = error.toBrowseError()) }
+                        }
+                }
         }
 
-        private fun restartSearch() {
+        /** Opens the flat grid scoped to one section — the See-all header. */
+        fun onSeeAll(key: String) {
+            val section = _state.value.sections.firstOrNull { it.key == key } ?: return
+            _state.update {
+                it.copy(
+                    mode = BrowseMode.GRID,
+                    scopeTitle = section.title,
+                    scopeSourceId = section.sourceId,
+                    query = section.query,
+                    searchText = "",
+                )
+            }
+            startGrid()
+        }
+
+        /** Returns from the grid to the sectioned home; rows keep their state. */
+        fun onBackToSections() {
+            if (!homeIsAvailable()) return
+            searchJob?.cancel()
+            _state.update {
+                it.copy(
+                    mode = BrowseMode.SECTIONS,
+                    scopeTitle = null,
+                    scopeSourceId = null,
+                    query = WallpaperQuery(),
+                    searchText = "",
+                    wallpapers = emptyList(),
+                    isLoadingMore = false,
+                    endReached = false,
+                    error = null,
+                )
+            }
+        }
+
+        /** Retry from wherever the feed died: empty restarts, tail appends. */
+        fun onRetry() {
+            val current = _state.value
+            when {
+                current.mode == BrowseMode.SECTIONS -> restartFeed()
+                current.wallpapers.isEmpty() -> restartFeed()
+                else -> loadMore()
+            }
+        }
+
+        /** True when the sectioned home exists to go back to. */
+        private fun homeIsAvailable(): Boolean = _state.value.sections.isNotEmpty()
+
+        /** True when neither the home rows nor the grid hold anything. */
+        private fun feedIsEmpty(): Boolean = _state.value.let { it.sections.isEmpty() && it.wallpapers.isEmpty() }
+
+        /**
+         * The one restart for feed-level causes (preferences, discovery,
+         * retries). A user-driven grid — live search text or filters —
+         * keeps its place and reloads under the new conditions; a scoped
+         * grid is reset (its filters belong to the previously pinned
+         * source); the sectioned home reloads its rows.
+         */
+        private fun restartFeed() {
+            val current = _state.value
+            if (current.mode == BrowseMode.GRID) {
+                if (current.scopeTitle != null) {
+                    _state.update { it.copy(query = WallpaperQuery(), scopeTitle = null, scopeSourceId = null) }
+                }
+                startGrid()
+                return
+            }
+            restartSections()
+        }
+
+        /**
+         * Reloads the home: the section list first, then each row's first
+         * page in parallel. A pinned source without its API key cannot
+         * answer anything — the prompt replaces the load instead of firing
+         * requests destined to fail (the honest-taxonomy principle).
+         */
+        private fun restartSections() {
+            sectionsJob?.cancel()
+            sectionJobs.values.forEach { it.cancel() }
+            sectionJobs.clear()
+            sectionPages.clear()
+            sectionSeeds.clear()
+            val needsKey = selectedNeedsApiKey()
+            _state.update {
+                it.copy(
+                    sections = emptyList(),
+                    isFirstLoading = !needsKey,
+                    isLoadingMore = false,
+                    endReached = false,
+                    error = null,
+                    showApiKeyPrompt = needsKey,
+                )
+            }
+            if (needsKey) return
+            sectionsJob =
+                viewModelScope.launch {
+                    sources
+                        .sections(_state.value.selectedSourceId)
+                        .onSuccess { result ->
+                            if (result.isEmpty()) {
+                                // Degenerate home: nothing declared sections.
+                                // Fall back to the flat merged grid (the
+                                // v1.0.8 home) instead of an empty screen.
+                                _state.update { it.copy(sections = emptyList(), isFirstLoading = false) }
+                                enterGridFallback()
+                            } else {
+                                val pinned = _state.value.selectedSourceId != null
+                                val rows = result.map { it.toSectionState(pinned) }
+                                _state.update {
+                                    it.copy(
+                                        sections = rows,
+                                        mode = BrowseMode.SECTIONS,
+                                        scopeTitle = null,
+                                        isFirstLoading = false,
+                                        error = null,
+                                    )
+                                }
+                                rows.forEach { loadSectionFirstPage(it) }
+                            }
+                        }.onFailure { error ->
+                            _state.update { it.copy(isFirstLoading = false, error = error.toBrowseError()) }
+                        }
+                }
+        }
+
+        /** Loads (or retries) one row's first page. */
+        private fun loadSectionFirstPage(section: BrowseSectionState) {
+            sectionPages[section.key] = 1
+            sectionJobs[section.key] =
+                viewModelScope.launch {
+                    updateSection(section.key) { it.copy(isFirstLoading = true, error = null) }
+                    sources
+                        .search(
+                            effectiveSectionQuery(section),
+                            page = 1,
+                            sourceId = section.sourceId,
+                        ).onSuccess { result ->
+                            updateSection(section.key) { state ->
+                                state.copy(
+                                    wallpapers = result.wallpapers,
+                                    isFirstLoading = false,
+                                    endReached = !result.hasNext,
+                                    error = null,
+                                )
+                            }
+                        }.onFailure { error ->
+                            updateSection(section.key) { it.copy(isFirstLoading = false, error = error.toBrowseError()) }
+                        }
+                }
+        }
+
+        /** The grid as the flat default feed, after the home came up empty. */
+        private fun enterGridFallback() {
+            _state.update { it.copy(mode = BrowseMode.GRID, scopeTitle = null, scopeSourceId = null, showApiKeyPrompt = false) }
+            startGrid()
+        }
+
+        /**
+         * (Re)loads the grid from page 1 under the committed query. The
+         * key guard mirrors the sections path: a pinned source without its
+         * key gets the prompt, not a doomed request.
+         */
+        private fun startGrid() {
             searchJob?.cancel()
             currentPage = 1
             randomSeed = null
-            // A pinned source without its API key cannot answer anything —
-            // say that instead of firing a request destined to fail with a
-            // misleading generic error (the honest-taxonomy principle).
             val needsKey = selectedNeedsApiKey()
             _state.update {
                 it.copy(
@@ -241,12 +500,11 @@ class BrowseViewModel
                 )
             }
             if (needsKey) return
-            val query = effectiveQuery()
-            randomSeed = query.seed
+            val query = effectiveGridQuery()
             searchJob =
                 viewModelScope.launch {
                     sources
-                        .search(query, page = 1, sourceId = _state.value.selectedSourceId)
+                        .search(query, page = 1, sourceId = _state.value.scopeSourceId ?: _state.value.selectedSourceId)
                         .onSuccess { result ->
                             _state.update { state ->
                                 state.copy(
@@ -296,25 +554,75 @@ class BrowseViewModel
         }
 
         /**
-         * Applies the SFW-only clamp on top of the user's query and keeps
-         * random sorts stable by fixing a seed for the whole session.
+         * The row a [SourceSection] becomes: the display title composes the
+         * source name into the merged view (every default "Popular" row
+         * would read the same otherwise) but keeps the provider's own title
+         * when the feed is pinned — CloudStream homes are titled by their
+         * lists.
          */
-        private fun effectiveQuery(): WallpaperQuery =
-            _state.value.query.let { query ->
-                val seed =
-                    if (query.sorting == WallpaperSorting.RANDOM) {
-                        randomSeed ?: UUID.randomUUID().toString().take(8)
-                    } else {
-                        null
-                    }
-                val ratings =
-                    if (_state.value.sfwOnly) {
-                        setOf(ContentRating.SFW)
-                    } else {
-                        query.contentRatings - ContentRating.NSFW
-                    }
-                query.copy(contentRatings = ratings.ifEmpty { setOf(ContentRating.SFW) }, seed = seed)
+        private fun SourceSection.toSectionState(pinned: Boolean): BrowseSectionState =
+            BrowseSectionState(
+                key = "$sourceId:$sectionId",
+                sourceId = sourceId,
+                sourceName = sourceName,
+                sectionId = sectionId,
+                title =
+                    when {
+                        pinned -> title
+                        isDefault -> sourceName
+                        else -> "$sourceName · $title"
+                    },
+                query = query,
+            )
+
+        private fun updateSection(
+            key: String,
+            transform: (BrowseSectionState) -> BrowseSectionState,
+        ) {
+            _state.update { state ->
+                state.copy(
+                    sections = state.sections.map { if (it.key == key) transform(it) else it },
+                )
             }
+        }
+
+        /**
+         * The grid query: the committed query with the SFW-only clamp and a
+         * session-stable seed for random sorts.
+         */
+        private fun effectiveGridQuery(): WallpaperQuery {
+            val query = _state.value.query
+            val seed =
+                if (query.sorting == WallpaperSorting.RANDOM) {
+                    randomSeed ?: UUID.randomUUID().toString().take(8)
+                } else {
+                    null
+                }
+            randomSeed = seed
+            return query.withClamp(seed)
+        }
+
+        /** A row's query: its preset with the same clamp and a per-row seed. */
+        private fun effectiveSectionQuery(section: BrowseSectionState): WallpaperQuery {
+            val query = section.query
+            val seed =
+                if (query.sorting == WallpaperSorting.RANDOM) {
+                    sectionSeeds.getOrPut(section.key) { UUID.randomUUID().toString().take(8) }
+                } else {
+                    null
+                }
+            return query.withClamp(seed)
+        }
+
+        private fun WallpaperQuery.withClamp(seed: String?): WallpaperQuery {
+            val ratings =
+                if (_state.value.sfwOnly) {
+                    setOf(ContentRating.SFW)
+                } else {
+                    contentRatings - ContentRating.NSFW
+                }
+            return copy(contentRatings = ratings.ifEmpty { setOf(ContentRating.SFW) }, seed = seed)
+        }
 
         private fun BrowseUiState.appendPage(page: Page): BrowseUiState =
             copy(

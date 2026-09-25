@@ -1,8 +1,16 @@
 package com.cloudimage.extensions.core
 
+import com.cloudimage.provider.api.Capability
+import com.cloudimage.provider.api.Filters
+import com.cloudimage.provider.api.HomeSection
+import com.cloudimage.provider.api.Page
 import com.cloudimage.provider.api.ProviderHttpClient
 import com.cloudimage.provider.api.ProviderHttpResponse
+import com.cloudimage.provider.api.ProviderMeta
 import com.cloudimage.provider.api.ProviderSettings
+import com.cloudimage.provider.api.Wallpaper
+import com.cloudimage.provider.api.WallpaperDetails
+import com.cloudimage.provider.api.WallpaperProvider
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -48,6 +56,62 @@ class ExtensionLoaderTest {
 
             assertEquals("demo-ok", page.wallpapers.single().id)
             assertEquals(listOf("demo://catalog/1"), httpClient.requestedUrls)
+        }
+
+    @Test
+    fun sectionsOverrideCrossesTheClassloaderBoundary() =
+        runTest {
+            // The fixture overrides the v1.0.9 default with two named
+            // sections — proving a provider compiled against the extended
+            // contract answers sections() through the package classloader.
+            val extension = readyRow(TestPackages.manifestJson())
+
+            val provider = (loader.load(extension) as LoadResult.Loaded).provider
+
+            val sections = provider.sections()
+
+            assertEquals(listOf("first", "second"), sections.map { it.id })
+            assertEquals("Demo First", sections.first().title)
+            assertTrue(sections[1].filters.isSelected("sorting", "date"))
+        }
+
+    @Test
+    fun defaultSectionsSurviveForProvidersThatDoNotOverride() =
+        runTest {
+            // A provider class that never mentions sections() still answers
+            // with the interface default — the binary-compatibility promise
+            // that keeps V1 packages loading under the V1.0.9 host.
+            val provider =
+                object : WallpaperProvider {
+                    override val meta =
+                        ProviderMeta(
+                            id = "cloudimage.legacy",
+                            name = "Legacy",
+                            versionName = "1.0.0",
+                        )
+
+                    override val capabilities: Set<Capability> = setOf(Capability.POPULAR)
+
+                    override suspend fun popular(
+                        page: Int,
+                        filters: Filters,
+                    ): Result<Page> = Result.success(Page(emptyList(), null))
+
+                    override suspend fun search(
+                        query: String,
+                        page: Int,
+                        filters: Filters,
+                    ): Result<Page> = Result.success(Page(emptyList(), null))
+
+                    override suspend fun details(id: String): Result<WallpaperDetails> = Result.failure(UnsupportedOperationException())
+
+                    override suspend fun random(): Result<List<Wallpaper>> = Result.success(emptyList())
+                }
+
+            val sections = provider.sections()
+
+            assertEquals(listOf(HomeSection.DEFAULT_ID), sections.map { it.id })
+            assertTrue(sections.single().filters.isEmpty)
         }
 
     @Test

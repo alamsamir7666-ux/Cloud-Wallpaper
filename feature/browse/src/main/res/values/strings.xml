@@ -47,4 +47,8 @@
     <string name="browse_api_key_body">This source needs an API key before it can show wallpapers. Add one from the Extensions tab, then come back.</string>
     <string name="browse_api_key_show_all">Show all sources</string>
     <string name="browse_api_key_open_extensions">Open Extensions</string>
+
+    <string name="browse_see_all">See all in this section</string>
+    <string name="browse_section_empty">Nothing here yet</string>
+    <string name="browse_scope_close">Back to sections</string>
 </resources>

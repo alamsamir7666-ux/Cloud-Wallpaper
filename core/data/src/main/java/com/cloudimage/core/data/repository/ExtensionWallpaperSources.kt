@@ -15,6 +15,7 @@ import com.cloudimage.extensions.core.ProviderTransportException
 import com.cloudimage.extensions.core.reason
 import com.cloudimage.provider.api.Capability
 import com.cloudimage.provider.api.Filters
+import com.cloudimage.provider.api.HomeSection
 import com.cloudimage.provider.api.ProviderHttpException
 import com.cloudimage.provider.api.WallpaperProvider
 import kotlinx.coroutines.CoroutineScope
@@ -153,6 +154,112 @@ class ExtensionWallpaperSources
             } else {
                 search(query.text, page, filters)
             }
+
+        /**
+         * The home-screen rows: the pinned source's full section list, or
+         * each ready source's primary section for the merged view.
+         *
+         * Providers keep their own order — it is part of their home design
+         * (Wallhaven leads with Trending, for instance). A provider whose
+         * [WallpaperProvider.sections] fails or comes back empty simply
+         * contributes no row, mirroring how a failing source degrades in
+         * [search]; only every provider failing at once is an error.
+         */
+        override suspend fun sections(sourceId: String?): NetworkResult<List<SourceSection>> {
+            val providers = readyProviders()
+            if (sourceId != null) {
+                val pinned = providers.filter { it.first == sourceId }
+                if (pinned.isEmpty()) {
+                    // Same honesty rule as search: the pin outlived its
+                    // package — say that, don't invent a connectivity error.
+                    return NetworkResult.Failure(
+                        NetworkError.Source("source '$sourceId' is not installed or not usable — see the Extensions tab"),
+                    )
+                }
+                return pinned
+                    .first()
+                    .let { (id, provider) ->
+                        runCatching { provider.sections() }.fold(
+                            { sections -> NetworkResult.Success(sections.map { it.toSourceSection(id, provider) }) },
+                            { failure -> NetworkResult.Failure(failure.toNetworkError()) },
+                        )
+                    }
+            }
+            if (providers.isEmpty()) {
+                // Not an error: discovery may still be running. The caller
+                // shows a loading state and the cold-start retry rescues.
+                return NetworkResult.Success(emptyList())
+            }
+            return coroutineScope {
+                val results =
+                    providers
+                        .map { (id, provider) ->
+                            async {
+                                runCatching {
+                                    provider.sections().firstOrNull()?.toSourceSection(id, provider)
+                                }
+                            }
+                        }.awaitAll()
+                val rows = results.mapNotNull { it.getOrNull() }
+                val firstFailure = results.firstOrNull { it.isFailure }
+                if (rows.isEmpty() && firstFailure != null) {
+                    NetworkResult.Failure(
+                        (firstFailure.exceptionOrNull() ?: IllegalStateException()).toNetworkError(),
+                    )
+                } else {
+                    NetworkResult.Success(rows)
+                }
+            }
+        }
+
+        /**
+         * Translates a provider section to the host query pipeline: the
+         * host-vocabulary keys of its [Filters] become typed query fields.
+         *
+         * `purity` is deliberately NOT read — the user's SFW setting owns
+         * content ratings, applied by the browse ViewModel on top of this
+         * query (the same rule [WallpaperSources.search] enforces per
+         * item). Values outside the host vocabulary are dropped, which is
+         * the documented Filters contract for keys a consumer cannot
+         * express.
+         */
+        private fun HomeSection.toSourceSection(
+            sourceId: String,
+            provider: WallpaperProvider,
+        ): SourceSection {
+            val categories =
+                filters
+                    .valuesFor("category")
+                    .mapNotNull { value ->
+                        when (value) {
+                            "general" -> WallpaperCategory.GENERAL
+                            "anime" -> WallpaperCategory.ANIME
+                            "people" -> WallpaperCategory.PEOPLE
+                            else -> null
+                        }
+                    }.toSet()
+            val sorting =
+                when (filters.valuesFor("sorting").firstOrNull()) {
+                    "date" -> WallpaperSorting.DATE
+                    "random" -> WallpaperSorting.RANDOM
+                    "relevance" -> WallpaperSorting.RELEVANCE
+                    else -> WallpaperSorting.TOPLIST
+                }
+            return SourceSection(
+                sourceId = sourceId,
+                sourceName = provider.meta.name.ifBlank { sourceId.substringAfterLast('.') },
+                sectionId = id,
+                title = title,
+                isDefault = id == HomeSection.DEFAULT_ID,
+                query =
+                    WallpaperQuery(
+                        categories = categories.ifEmpty { WallpaperCategory.entries.toSet() },
+                        sorting = sorting,
+                        descending = !filters.isSelected("order", "asc"),
+                        seed = filters.valuesFor("seed").firstOrNull(),
+                    ),
+            )
+        }
 
         /** Extension manifest id to its loaded provider, READY extensions only. */
         private suspend fun readyProviders(): List<Pair<String, WallpaperProvider>> =

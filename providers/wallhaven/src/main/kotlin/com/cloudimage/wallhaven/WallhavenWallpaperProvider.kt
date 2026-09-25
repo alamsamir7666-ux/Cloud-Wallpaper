@@ -3,6 +3,7 @@ package com.cloudimage.wallhaven
 import com.cloudimage.provider.api.Capability
 import com.cloudimage.provider.api.ContentRating
 import com.cloudimage.provider.api.Filters
+import com.cloudimage.provider.api.HomeSection
 import com.cloudimage.provider.api.Page
 import com.cloudimage.provider.api.ProviderHttpClient
 import com.cloudimage.provider.api.ProviderHttpResponse
@@ -70,6 +71,20 @@ class WallhavenWallpaperProvider : WallpaperProvider {
         runCatching {
             fetchPage(query = null, filters = Filters.of("sorting" to "random"), page = 1).wallpapers
         }
+
+    /**
+     * The Wallhaven home: four titled feeds, all served by the same
+     * /search endpoint through different filter presets. Order is part of
+     * the design — Trending leads, exactly like a CloudStream provider's
+     * `mainPage` ordering.
+     */
+    override suspend fun sections(): List<HomeSection> =
+        listOf(
+            HomeSection(id = "trending", title = "Trending", filters = Filters.of("sorting" to "toplist")),
+            HomeSection(id = "latest", title = "Latest", filters = Filters.of("sorting" to "date")),
+            HomeSection(id = "anime", title = "Anime", filters = Filters.of("category" to "anime")),
+            HomeSection(id = "people", title = "People", filters = Filters.of("category" to "people")),
+        )
 
     private suspend fun fetchPage(
         query: String?,
