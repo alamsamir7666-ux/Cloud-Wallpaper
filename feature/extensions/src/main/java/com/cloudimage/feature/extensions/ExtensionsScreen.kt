@@ -314,15 +314,17 @@ private fun ManagerList(
  * The proportional stats bar (v1.0.9 Part 3): how the install base splits
  * into enabled / disabled / available, one segment each. A bar with
  * nothing to show renders nothing — an empty device has nothing to say
- * here beyond the empty states below it.
+ * here beyond the empty states below it. Segments with zero members are
+ * absent, never zero-weighted: Compose's `weight()` throws on 0, which
+ * crashed this screen on entry until v1.0.10.
  */
 @Composable
 private fun StatsBar(state: ExtensionsUiState) {
     val enabled = state.enabledCount
     val disabled = state.disabledCount
     val available = state.availableCount
-    val total = enabled + disabled + available
-    if (total == 0) return
+    val segments = state.statsSegments()
+    if (segments.isEmpty()) return
     val enabledColor = MaterialTheme.colorScheme.primary
     val disabledColor = MaterialTheme.colorScheme.tertiary
     val availableColor = MaterialTheme.colorScheme.secondaryContainer
@@ -345,9 +347,15 @@ private fun StatsBar(state: ExtensionsUiState) {
                         .height(8.dp)
                         .clip(RoundedCornerShape(4.dp)),
             ) {
-                Box(Modifier.weight(enabled.coerceAtLeast(0).toFloat()).fillMaxSize().background(enabledColor))
-                Box(Modifier.weight(disabled.coerceAtLeast(0).toFloat()).fillMaxSize().background(disabledColor))
-                Box(Modifier.weight(available.coerceAtLeast(0).toFloat()).fillMaxSize().background(availableColor))
+                segments.forEach { segment ->
+                    val color =
+                        when (segment.kind) {
+                            ExtensionStatKind.ENABLED -> enabledColor
+                            ExtensionStatKind.DISABLED -> disabledColor
+                            ExtensionStatKind.AVAILABLE -> availableColor
+                        }
+                    Box(Modifier.weight(segment.count.toFloat()).fillMaxSize().background(color))
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 StatLegend(color = enabledColor, label = stringResource(R.string.extensions_stats_enabled, enabled))

@@ -542,6 +542,43 @@ class ExtensionsViewModelTest {
     }
 
     @Test
+    fun statsSegmentsDropEmptyPopulations() {
+        // The v1.0.9 crash: one installed extension, nothing disabled,
+        // nothing available — the bar asked Compose for weight(0f),
+        // which throws and took the screen down with it.
+        val state = ExtensionsUiState(extensions = listOf(manifestRow("cloudimage.wallhaven")))
+
+        val segments = state.statsSegments()
+
+        assertEquals(listOf(ExtensionStatSegment(ExtensionStatKind.ENABLED, 1)), segments)
+        segments.forEach { assertTrue(it.count > 0) }
+    }
+
+    @Test
+    fun statsSegmentsAreEmptyWhenThereIsNothingToCount() {
+        assertEquals(emptyList<ExtensionStatSegment>(), ExtensionsUiState().statsSegments())
+    }
+
+    @Test
+    fun statsSegmentsCoverEveryNonZeroPopulation() {
+        val state =
+            ExtensionsUiState(
+                extensions = listOf(manifestRow("cloudimage.wallhaven"), manifestRow("cloudimage.demo")),
+                disabledSources = setOf("cloudimage.demo"),
+                catalogs = mapOf("r1" to listOf(catalogEntry("cloudimage.unsplash"))),
+            )
+
+        assertEquals(
+            listOf(
+                ExtensionStatSegment(ExtensionStatKind.ENABLED, 1),
+                ExtensionStatSegment(ExtensionStatKind.DISABLED, 1),
+                ExtensionStatSegment(ExtensionStatKind.AVAILABLE, 1),
+            ),
+            state.statsSegments(),
+        )
+    }
+
+    @Test
     fun installOverAnInstalledEntryEmitsUpdated() =
         runTest {
             val repos =

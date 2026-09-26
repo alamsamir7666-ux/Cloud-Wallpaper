@@ -51,6 +51,19 @@ sealed interface ExtensionsEvent {
     ) : ExtensionsEvent
 }
 
+/** Which population a stats-bar segment represents. */
+enum class ExtensionStatKind {
+    ENABLED,
+    DISABLED,
+    AVAILABLE,
+}
+
+/** One proportional stats-bar segment — [count] is always > 0. */
+data class ExtensionStatSegment(
+    val kind: ExtensionStatKind,
+    val count: Int,
+)
+
 /**
  * Immutable snapshot of the extension manager screen.
  *
@@ -99,6 +112,20 @@ data class ExtensionsUiState(
                 .flatten()
                 .distinctBy { it.id }
                 .count { it.id !in installedManifests }
+
+    /**
+     * The stats bar's segments in draw order. Compose's `weight()` throws
+     * on zero, so empty populations are simply absent — the proportional
+     * row must never receive a zero weight (the shipped v1.0.9 bar did,
+     * crashing the screen on entry for anyone without one of each
+     * population). An empty list means the bar renders nothing at all.
+     */
+    fun statsSegments(): List<ExtensionStatSegment> =
+        buildList {
+            if (enabledCount > 0) add(ExtensionStatSegment(ExtensionStatKind.ENABLED, enabledCount))
+            if (disabledCount > 0) add(ExtensionStatSegment(ExtensionStatKind.DISABLED, disabledCount))
+            if (availableCount > 0) add(ExtensionStatSegment(ExtensionStatKind.AVAILABLE, availableCount))
+        }
 
     /**
      * True when [entry] advertises something other than what is
