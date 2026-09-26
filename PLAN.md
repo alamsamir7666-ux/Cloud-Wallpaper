@@ -191,6 +191,29 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-26 — v1.0.11 SHIPPED (tabbed home).** The home's stacked
+  carousels (Recently applied + every provider section) became a
+  horizontal tab bar at the top of the content area: the personal
+  Recently applied tab leads whenever it exists, then every declared
+  section (Trending, Latest, Anime, People on wallhaven). Tapping a tab
+  and swiping the HorizontalPager are one selection — both land in
+  `BrowseUiState.homeTabKey` via `onHomeTabSelected`, so the pill bar
+  (ScrollableTabRow, rounded secondaryContainer indicator that slides
+  between positions) and the pager can never disagree. Default active
+  tab on load: Recently applied whenever the user has applied anything,
+  else the first section; a vanished pick (source switch) degrades to
+  the bar's head, never a dead index. Each section page is a
+  two-column staggered grid fed by the section's own prefetch
+  pagination (skeleton placeholders, load-more footer, inline retry,
+  end-of-feed empty state); the Recently applied page is the same grid
+  without pagination. See-all is superseded by the tabs (each page IS
+  the full feed; the scoped-grid VM flow stays for tests). The FAB
+  scroll tracker watches the active page's grid via a hoisted
+  MutableState. Shipped as `e292de4`: ktlint clean, 519 tests green
+  (+4), assembleRelease 3.06MB, dex audit PASS (5,670 host classes);
+  CI green; tag `v1.0.11` → release green → signed
+  `Cloudimage-v1.0.11.apk` (2.93MB).
+
 - **2026-09-26 — v1.0.10 SHIPPED (hotfix).** The Extensions screen crashed
   on entry for most users: the Part 3 stats bar fed every population count
   straight into `Modifier.weight(count)`, and Compose's `weight()` throws
