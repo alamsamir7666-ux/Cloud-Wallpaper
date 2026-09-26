@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
@@ -107,7 +106,11 @@ fun BrowseScreen(
     // Hoisted so the source FAB can react to the feed's scroll direction —
     // whichever list is on screen.
     val gridState = rememberLazyStaggeredGridState()
-    val sectionsState = rememberLazyListState()
+
+    // The tabbed home (v1.0.10): each pager page owns its staggered-grid
+    // state; the page on screen publishes it here so the FAB tracker below
+    // can watch "the visible list" without caring which tab is active.
+    val homeGridState = remember { mutableStateOf<LazyStaggeredGridState?>(null) }
 
     // Scrolling down the feed shrinks the FAB to its icon; scrolling back
     // up re-extends it — the CloudStream home behavior. The index/offset
@@ -120,7 +123,8 @@ fun BrowseScreen(
             if (state.mode == BrowseMode.GRID) {
                 gridState.firstVisibleItemIndex * 1_000_000 + gridState.firstVisibleItemScrollOffset
             } else {
-                sectionsState.firstVisibleItemIndex * 1_000_000 + sectionsState.firstVisibleItemScrollOffset
+                val home = homeGridState.value
+                (home?.firstVisibleItemIndex ?: 0) * 1_000_000 + (home?.firstVisibleItemScrollOffset ?: 0)
             }
         }.collect { position ->
             val delta = position - lastPosition
@@ -186,9 +190,11 @@ fun BrowseScreen(
                     SectionsHome(
                         sections = state.sections,
                         recentlyApplied = state.recentlyApplied,
-                        listState = sectionsState,
+                        tabs = state.homeTabs,
+                        selectedTab = state.selectedHomeTab,
+                        onTabSelected = viewModel::onHomeTabSelected,
+                        activeGridState = homeGridState,
                         onWallpaperClick = onWallpaperClick,
-                        onSeeAll = viewModel::onSeeAll,
                         onLoadMoreSection = viewModel::loadMoreSection,
                     )
 

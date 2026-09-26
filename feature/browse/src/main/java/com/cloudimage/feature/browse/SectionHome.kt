@@ -1,216 +1,241 @@
 package com.cloudimage.feature.browse
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridScope
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.painter.ColorPainter
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import com.cloudimage.core.designsystem.WallpaperCard
 import com.cloudimage.core.model.Wallpaper
 
 /**
- * The sectioned home (v1.0.9) — CloudStream's `mainPage` model: a vertical
- * list of titled section rows, each a horizontally scrolling carousel with
- * its own pagination. Row headers carry a chevron that opens the staggered
- * grid scoped to the section (See all), mirroring CloudStream's
- * `home_child_more_info` header over its horizontal RecyclerView.
+ * The tabbed home (v1.0.10) — CloudStream's `mainPage` model, one tab per
+ * feed instead of one row per feed: the personal "Recently applied" tab
+ * leads the bar whenever it exists, followed by the provider's declared
+ * sections. The bar is a scrollable pill tab row; the pages swipe through a
+ * HorizontalPager, and every section page is a staggered grid fed by the
+ * section's own pagination — one feed at a time, nothing stacked.
  *
- * The personal "Recently applied" row (v1.0.9) leads the list when it
- * exists — CloudStream's bookmarks/continue-watching analog, tapping a
- * card reopens the detail screen.
+ * Tab selection lives in the ViewModel ([BrowseUiState.selectedHomeTab]):
+ * taps and settled swipes both land in [onTabSelected], so the bar and the
+ * pager can never disagree about which feed is active.
  */
 @Composable
 internal fun SectionsHome(
     sections: List<BrowseSectionState>,
     recentlyApplied: List<Wallpaper>,
-    listState: LazyListState,
+    tabs: List<HomeTab>,
+    selectedTab: HomeTab?,
+    onTabSelected: (String) -> Unit,
+    activeGridState: MutableState<LazyStaggeredGridState?>,
     onWallpaperClick: (Wallpaper) -> Unit,
-    onSeeAll: (String) -> Unit,
     onLoadMoreSection: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    LazyColumn(
-        state = listState,
-        contentPadding = PaddingValues(bottom = 96.dp),
+    if (tabs.isEmpty()) return
+    val selectedIndex = tabs.indexOf(selectedTab).takeIf { it >= 0 } ?: 0
+    val pagerState =
+        rememberPagerState(initialPage = selectedIndex, pageCount = { tabs.size })
+
+    // A tap on the bar moves the pager (animated); the state only ever
+    // names a tab that exists, so the index is always in bounds.
+    LaunchedEffect(selectedIndex, tabs.size) {
+        if (pagerState.settledPage != selectedIndex) {
+            pagerState.animateScrollToPage(selectedIndex)
+        }
+    }
+    // A swipe that settles on a page is a selection like any tap.
+    LaunchedEffect(pagerState.settledPage, tabs.size) {
+        val page = pagerState.settledPage
+        if (page in tabs.indices && page != selectedIndex) {
+            onTabSelected(tabs[page].key)
+        }
+    }
+
+    Column(
         modifier =
             modifier
                 .fillMaxSize()
                 .testTag("browse:sections"),
     ) {
-        if (recentlyApplied.isNotEmpty()) {
-            item(key = "recently-applied") {
-                RecentlyAppliedRow(
+        // One feed alone needs no bar — the tab would be a label, not a
+        // switch; the pager still renders the single page.
+        if (tabs.size > 1) {
+            HomeTabRow(
+                tabs = tabs,
+                selectedIndex = selectedIndex,
+                onSelect = { index -> onTabSelected(tabs[index].key) },
+            )
+        }
+        HorizontalPager(
+            state = pagerState,
+            beyondViewportPageCount = 1,
+            modifier = Modifier.fillMaxSize(),
+        ) { page ->
+            val tab = tabs[page]
+            val isCurrentPage = pagerState.settledPage == page
+            if (tab.key == RECENTLY_APPLIED_TAB_KEY) {
+                RecentlyAppliedGrid(
                     wallpapers = recentlyApplied,
+                    isCurrentPage = isCurrentPage,
+                    activeGridState = activeGridState,
                     onWallpaperClick = onWallpaperClick,
+                )
+            } else {
+                val section = sections.firstOrNull { it.key == tab.key } ?: return@HorizontalPager
+                SectionTabGrid(
+                    section = section,
+                    isCurrentPage = isCurrentPage,
+                    activeGridState = activeGridState,
+                    onWallpaperClick = onWallpaperClick,
+                    onLoadMore = { onLoadMoreSection(section.key) },
                 )
             }
         }
-        items(sections, key = { it.key }) { section ->
-            SectionRow(
-                section = section,
-                onWallpaperClick = onWallpaperClick,
-                onSeeAll = onSeeAll,
-                onLoadMoreSection = onLoadMoreSection,
+    }
+}
+
+/**
+ * The scrollable pill bar: the active tab sits in a rounded
+ * secondaryContainer pill that slides between positions; labels outside
+ * the pill mute to on-surface-variant.
+ */
+@Composable
+private fun HomeTabRow(
+    tabs: List<HomeTab>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    ScrollableTabRow(
+        selectedTabIndex = selectedIndex,
+        edgePadding = 16.dp,
+        containerColor = Color.Transparent,
+        divider = {},
+        indicator = { tabPositions ->
+            tabPositions.getOrNull(selectedIndex)?.let { position ->
+                Box(
+                    Modifier
+                        .tabIndicatorOffset(position)
+                        .padding(horizontal = 4.dp, vertical = 7.dp)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(MaterialTheme.colorScheme.secondaryContainer),
+                )
+            }
+        },
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .testTag("browse:home-tabs"),
+    ) {
+        tabs.forEachIndexed { index, tab ->
+            val selected = index == selectedIndex
+            Tab(
+                selected = selected,
+                onClick = { onSelect(index) },
+                text = {
+                    Text(
+                        text = tab.title ?: stringResource(R.string.browse_recently_applied),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                        maxLines = 1,
+                    )
+                },
+                selectedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("browse:home-tab:${tab.key}"),
             )
         }
     }
 }
 
 /**
- * The personal row: a titled carousel of the wallpapers the user actually
- * applied, newest first. No See-all chevron — the Library's history tab is
- * the full trail; this row is the shortcut.
+ * The personal page: the wallpapers the user actually applied, newest
+ * first — a flat staggered grid, no pagination (Library's history tab is
+ * the full trail; this page is the shortcut).
  */
 @Composable
-private fun RecentlyAppliedRow(
+private fun RecentlyAppliedGrid(
     wallpapers: List<Wallpaper>,
+    isCurrentPage: Boolean,
+    activeGridState: MutableState<LazyStaggeredGridState?>,
     onWallpaperClick: (Wallpaper) -> Unit,
 ) {
-    Column(
-        modifier =
-            Modifier
-                .padding(vertical = 8.dp)
-                .testTag("browse:recently-applied"),
-    ) {
-        Text(
-            text = stringResource(R.string.browse_recently_applied),
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-        )
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.heightIn(min = CARD_HEIGHT + 4.dp),
-        ) {
-            items(wallpapers, key = { "${it.providerId}:${it.id}" }) { wallpaper ->
-                SectionWallpaperCard(
-                    wallpaper = wallpaper,
-                    onClick = { onWallpaperClick(wallpaper) },
-                )
-            }
-        }
+    val gridState = rememberSaveable(saver = LazyStaggeredGridState.Saver) { LazyStaggeredGridState() }
+    LaunchedEffect(isCurrentPage) {
+        if (isCurrentPage) activeGridState.value = gridState
     }
-}
 
-/** One titled carousel: header row plus the horizontally paging feed. */
-@Composable
-private fun SectionRow(
-    section: BrowseSectionState,
-    onWallpaperClick: (Wallpaper) -> Unit,
-    onSeeAll: (String) -> Unit,
-    onLoadMoreSection: (String) -> Unit,
-) {
-    Column(modifier = Modifier.padding(vertical = 8.dp).testTag("browse:section:${section.key}")) {
-        SectionHeader(
-            title = section.title,
-            onSeeAll = { onSeeAll(section.key) },
-        )
-        SectionCarousel(
-            section = section,
-            onWallpaperClick = onWallpaperClick,
-            onLoadMore = { onLoadMoreSection(section.key) },
-        )
+    HomeStaggeredGrid(
+        state = gridState,
+        modifier = Modifier.testTag("browse:recently-applied"),
+    ) {
+        wallpaperItems(wallpapers, onWallpaperClick)
     }
 }
 
 /**
- * The row header — CloudStream's pattern: the whole header is the See-all
- * target, with a trailing chevron as the only hint. The a11y description
- * says what tapping does.
+ * One section page: the feed's own staggered grid with the same prefetch
+ * pagination the carousels had — the grid asks for the next page while
+ * the user is still a screen away from the end.
  */
 @Composable
-private fun SectionHeader(
-    title: String,
-    onSeeAll: () -> Unit,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onSeeAll)
-                .padding(horizontal = 16.dp, vertical = 12.dp)
-                .testTag("browse:see-all"),
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Icon(
-            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-            contentDescription = stringResource(R.string.browse_see_all),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-/**
- * The horizontal feed with prefetch pagination — the carousel asks for the
- * next page while the user is still six cards away from the end, exactly
- * like the staggered grid's buffer.
- */
-@Composable
-private fun SectionCarousel(
+private fun SectionTabGrid(
     section: BrowseSectionState,
+    isCurrentPage: Boolean,
+    activeGridState: MutableState<LazyStaggeredGridState?>,
     onWallpaperClick: (Wallpaper) -> Unit,
     onLoadMore: () -> Unit,
 ) {
-    val rowState = rememberLazyListState()
+    val gridState = rememberSaveable(saver = LazyStaggeredGridState.Saver) { LazyStaggeredGridState() }
+    LaunchedEffect(isCurrentPage) {
+        if (isCurrentPage) activeGridState.value = gridState
+    }
 
-    // True once the carousel scrolls within six cards of its end.
+    // True once the grid scrolls within eight cards of its end.
     val closeToTheEnd by remember {
         derivedStateOf {
-            val info = rowState.layoutInfo
+            val info = gridState.layoutInfo
             val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-            info.totalItemsCount > 0 && lastVisible >= info.totalItemsCount - SECTION_PREFETCH_BUFFER
+            info.totalItemsCount > 0 && lastVisible >= info.totalItemsCount - GRID_PREFETCH_BUFFER
         }
     }
 
@@ -223,75 +248,35 @@ private fun SectionCarousel(
         if (closeToTheEnd) onLoadMore()
     }
 
-    LazyRow(
-        state = rowState,
-        contentPadding = PaddingValues(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.heightIn(min = CARD_HEIGHT + 4.dp),
+    HomeStaggeredGrid(
+        state = gridState,
+        modifier = Modifier.testTag("browse:section-grid:${section.key}"),
     ) {
-        if (section.isFirstLoading) {
-            items(PLACEHOLDER_COUNT) { index ->
-                SectionCardPlaceholder(modifier = Modifier.testTag("browse:section-placeholder:$index"))
+        if (section.isFirstLoading && section.wallpapers.isEmpty()) {
+            items(count = PLACEHOLDER_COUNT, key = { "placeholder:$it" }) { index ->
+                GridCardPlaceholder(tall = index % 3 == 0)
             }
         } else {
-            items(
-                section.wallpapers,
-                key = { "${it.providerId}:${it.id}" },
-            ) { wallpaper ->
-                SectionWallpaperCard(
-                    wallpaper = wallpaper,
-                    onClick = { onWallpaperClick(wallpaper) },
-                )
-            }
+            wallpaperItems(section.wallpapers, onWallpaperClick)
 
-            if (section.isLoadingMore) {
-                item(key = "section-loading") {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier =
-                            Modifier
-                                .height(CARD_HEIGHT)
-                                .width(SHORT_CARD_WIDTH)
-                                .padding(horizontal = 4.dp),
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
-                    }
-                }
-            }
-
-            if (section.error != null && !section.endReached) {
-                item(key = "section-error") {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier =
-                            Modifier
-                                .height(CARD_HEIGHT)
-                                .width(SHORT_CARD_WIDTH)
-                                .padding(horizontal = 4.dp),
-                    ) {
-                        Column {
-                            Text(
-                                text = section.error.message(),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                            TextButton(onClick = onLoadMore) {
-                                Text(stringResource(R.string.browse_retry))
-                            }
-                        }
-                    }
+            if (section.isLoadingMore || (section.error != null && !section.endReached)) {
+                item(span = StaggeredGridItemSpan.FullLine, key = "footer") {
+                    SectionGridFooter(
+                        isLoadingMore = section.isLoadingMore,
+                        error = section.error,
+                        onRetry = onLoadMore,
+                    )
                 }
             }
 
             if (section.endReached && section.wallpapers.isEmpty()) {
-                item(key = "section-empty") {
+                item(span = StaggeredGridItemSpan.FullLine, key = "empty") {
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier =
                             Modifier
-                                .height(CARD_HEIGHT)
-                                .width(SHORT_CARD_WIDTH * 2)
-                                .padding(horizontal = 4.dp),
+                                .fillMaxWidth()
+                                .padding(top = 48.dp),
                     ) {
                         Text(
                             text = stringResource(R.string.browse_section_empty),
@@ -305,56 +290,88 @@ private fun SectionCarousel(
     }
 }
 
-/**
- * One carousel card: fixed height, width derived from the wallpaper's real
- * aspect ratio (clamped to the same band as the grid card, so a 21:9
- * panorama cannot dwarf the row and a 9:16 shot cannot become a sliver).
- */
+/** The two-column staggered grid both tab pages share. */
 @Composable
-private fun SectionWallpaperCard(
-    wallpaper: Wallpaper,
-    onClick: () -> Unit,
+private fun HomeStaggeredGrid(
+    state: LazyStaggeredGridState,
+    modifier: Modifier = Modifier,
+    content: LazyStaggeredGridScope.() -> Unit,
 ) {
-    Card(
-        onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        modifier =
-            Modifier
-                .height(CARD_HEIGHT)
-                .aspectRatio(
-                    wallpaper.aspectRatio?.coerceIn(minimumValue = 0.5f, maximumValue = 2.4f)
-                        ?: 1.4f,
-                ),
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            AsyncImage(
-                model =
-                    ImageRequest
-                        .Builder(LocalContext.current)
-                        .data(wallpaper.thumbUrl)
-                        .crossfade(durationMillis = 220)
-                        .build(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
-                error = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+    LazyVerticalStaggeredGrid(
+        columns = StaggeredGridCells.Fixed(HOME_GRID_COLUMNS),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalItemSpacing = 12.dp,
+        state = state,
+        modifier = modifier.fillMaxSize(),
+        content = content,
+    )
+}
+
+/** The feed cards — one per wallpaper, keyed by provider and id. */
+private fun LazyStaggeredGridScope.wallpaperItems(
+    wallpapers: List<Wallpaper>,
+    onWallpaperClick: (Wallpaper) -> Unit,
+) {
+    items(
+        wallpapers,
+        key = { "${it.providerId}:${it.id}" },
+    ) { wallpaper ->
+        WallpaperCard(
+            wallpaper = wallpaper,
+            onClick = { onWallpaperClick(wallpaper) },
+        )
     }
 }
 
-/** Skeleton card shown while the row's first page loads. */
+/** Skeleton card shown while a tab's first page loads. */
 @Composable
-private fun SectionCardPlaceholder(modifier: Modifier = Modifier) {
+private fun GridCardPlaceholder(tall: Boolean) {
     Box(
         modifier =
-            modifier
-                .height(CARD_HEIGHT)
-                .width(SHORT_CARD_WIDTH)
+            Modifier
+                .fillMaxWidth()
+                .height(if (tall) 240.dp else 180.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant),
     )
+}
+
+@Composable
+private fun SectionGridFooter(
+    isLoadingMore: Boolean,
+    error: BrowseError?,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    when {
+        isLoadingMore ->
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = modifier.fillMaxWidth().padding(16.dp),
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(28.dp))
+            }
+
+        error != null ->
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = modifier.fillMaxWidth().padding(16.dp),
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = error.message(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    TextButton(onClick = onRetry) {
+                        Text(stringResource(R.string.browse_retry))
+                    }
+                }
+            }
+
+        else -> Unit
+    }
 }
 
 @Composable
@@ -367,7 +384,6 @@ private fun BrowseError.message(): String =
         BrowseError.SOURCE -> stringResource(R.string.browse_error_source)
     }
 
-private val CARD_HEIGHT = 200.dp
-private val SHORT_CARD_WIDTH = 140.dp
-private const val SECTION_PREFETCH_BUFFER = 6
-private const val PLACEHOLDER_COUNT = 3
+private const val GRID_PREFETCH_BUFFER = 8
+private const val PLACEHOLDER_COUNT = 8
+private const val HOME_GRID_COLUMNS = 2

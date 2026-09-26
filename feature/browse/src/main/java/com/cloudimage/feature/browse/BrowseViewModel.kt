@@ -64,6 +64,19 @@ data class BrowseSource(
     val needsApiKey: Boolean,
 )
 
+/** The tab key of the personal "Recently applied" home tab. */
+const val RECENTLY_APPLIED_TAB_KEY = "recently-applied"
+
+/**
+ * One home tab (v1.0.10): the personal Recently-applied feed or a provider
+ * section. [title] is null on the personal tab — the UI owns its localized
+ * string; section tabs carry the composed row title.
+ */
+data class HomeTab(
+    val key: String,
+    val title: String?,
+)
+
 /**
  * One section row of the home screen: a provider's named feed with its own
  * pagination state. Rows always load pinned to [sourceId].
@@ -96,10 +109,16 @@ data class BrowseUiState(
     val sections: List<BrowseSectionState> = emptyList(),
     /**
      * Recently applied wallpapers, most recent first (v1.0.9) — the
-     * personal row that leads the home when it exists. Empty hides it:
-     * a fresh install shows no ghost row.
+     * personal feed that leads the home tabs when it exists. Empty hides
+     * its tab: a fresh install shows no ghost tab.
      */
     val recentlyApplied: List<Wallpaper> = emptyList(),
+    /**
+     * The user's home-tab pick (v1.0.10); null means untouched — the bar
+     * then defaults to its first tab (Recently applied when present, else
+     * the first section).
+     */
+    val homeTabKey: String? = null,
     /** The section title when the grid was opened through See-all. */
     val scopeTitle: String? = null,
     /** The section's source when the grid is scoped; the search then runs pinned to it. */
@@ -130,6 +149,26 @@ data class BrowseUiState(
 ) {
     /** True when the filter sheet holds non-default choices. */
     val filtersActive: Boolean get() = !query.isDefault
+
+    /**
+     * The home tab bar's entries in order (v1.0.10): the personal feed
+     * first when it exists, then every declared section.
+     */
+    val homeTabs: List<HomeTab>
+        get() =
+            buildList {
+                if (recentlyApplied.isNotEmpty()) add(HomeTab(RECENTLY_APPLIED_TAB_KEY, null))
+                sections.forEach { add(HomeTab(it.key, it.title)) }
+            }
+
+    /**
+     * The active home tab: the user's pick while it still exists, else the
+     * bar's first tab — so the default is Recently applied whenever the
+     * user has applied anything, and a vanished pick (source switched,
+     * sections re-declared) degrades to the head instead of a dead index.
+     */
+    val selectedHomeTab: HomeTab?
+        get() = homeTabs.firstOrNull { it.key == homeTabKey } ?: homeTabs.firstOrNull()
 
     /**
      * The search panel (history + tag suggestions) shows while the field
@@ -554,6 +593,16 @@ class BrowseViewModel
                 )
             }
             startGrid()
+        }
+
+        /**
+         * The user picked a home tab (v1.0.10) — a tap or a settled swipe.
+         * No-op on an unknown key or a repeat of the current pick.
+         */
+        fun onHomeTabSelected(key: String) {
+            if (_state.value.homeTabKey == key) return
+            if (_state.value.homeTabs.none { it.key == key }) return
+            _state.update { it.copy(homeTabKey = key) }
         }
 
         /** Returns from the grid to the sectioned home; rows keep their state. */

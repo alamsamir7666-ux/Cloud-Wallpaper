@@ -700,6 +700,141 @@ class BrowseViewModelTest {
             assertTrue(home.query.isDefault)
         }
 
+    // ---- Home tab bar (v1.0.10) ----
+
+    @Test
+    fun homeTabsLeadWithThePersonalTabAndDefaultToIt() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(
+                    listOf(
+                        section(sectionId = "trending", title = "Trending"),
+                        section(sectionId = "latest", title = "Latest"),
+                    ),
+                ),
+            )
+            fake.enqueueSearch(page(ids = listOf("t1"), nextPage = null))
+            fake.enqueueSearch(page(ids = listOf("l1"), nextPage = null))
+            history.setEntries(
+                listOf(HistoryEntry(fakeWallpaper("a1"), HistoryAction.APPLIED, atMillis = 1L)),
+            )
+            val viewModel = newViewModel(fake, backgroundScope)
+
+            val state =
+                viewModel.state.first {
+                    it.sections.isNotEmpty() && it.recentlyApplied.isNotEmpty()
+                }
+
+            assertEquals(
+                listOf(RECENTLY_APPLIED_TAB_KEY, "wallhaven:trending", "wallhaven:latest"),
+                state.homeTabs.map { it.key },
+            )
+            // The personal tab carries no title — the UI owns its localized
+            // string; section tabs carry the composed row titles.
+            assertNull(state.homeTabs.first().title)
+            assertEquals(
+                listOf("Wallhaven · Trending", "Wallhaven · Latest"),
+                state.homeTabs.drop(1).map { it.title },
+            )
+            // The default active tab on load is Recently applied.
+            assertEquals(RECENTLY_APPLIED_TAB_KEY, state.selectedHomeTab?.key)
+        }
+
+    @Test
+    fun homeTabsSkipThePersonalTabWithoutAppliesAndDefaultToTheFirstSection() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(
+                    listOf(section(sectionId = "trending", title = "Trending")),
+                ),
+            )
+            fake.enqueueSearch(page(ids = listOf("t1"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+
+            val state = viewModel.state.first { it.sections.isNotEmpty() }
+
+            assertEquals(listOf("wallhaven:trending"), state.homeTabs.map { it.key })
+            assertEquals("wallhaven:trending", state.selectedHomeTab?.key)
+        }
+
+    @Test
+    fun selectingAHomeTabMovesTheSelectionAndIgnoresUnknownKeys() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(
+                    listOf(
+                        section(sectionId = "trending", title = "Trending"),
+                        section(sectionId = "latest", title = "Latest"),
+                    ),
+                ),
+            )
+            fake.enqueueSearch(page(ids = listOf("t1"), nextPage = null))
+            fake.enqueueSearch(page(ids = listOf("l1"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { it.sections.isNotEmpty() }
+
+            viewModel.onHomeTabSelected("wallhaven:latest")
+
+            val selection = viewModel.state.value.selectedHomeTab
+            assertEquals("wallhaven:latest", selection?.key)
+            assertEquals("wallhaven:latest", viewModel.state.value.homeTabKey)
+
+            // Unknown keys cannot aim the bar at a ghost tab.
+            viewModel.onHomeTabSelected("wallhaven:ghost")
+            val afterGhost = viewModel.state.value.selectedHomeTab
+            assertEquals("wallhaven:latest", afterGhost?.key)
+
+            // A repeat of the current pick is a no-op, not a state churn.
+            viewModel.onHomeTabSelected("wallhaven:latest")
+            val afterRepeat = viewModel.state.value.selectedHomeTab
+            assertEquals("wallhaven:latest", afterRepeat?.key)
+        }
+
+    @Test
+    fun vanishedHomeTabSelectionFallsBackToTheHead() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false),
+                SourceInfo("pexels", "Pexels", requiresApiKey = false),
+            )
+            fake.setSectionsResult(
+                NetworkResult.Success(
+                    listOf(
+                        section(sourceId = "wallhaven", sectionId = "trending", title = "Trending"),
+                        section(sourceId = "wallhaven", sectionId = "latest", title = "Latest"),
+                    ),
+                ),
+            )
+            fake.enqueueSearch(page(ids = listOf("t1"), nextPage = null))
+            fake.enqueueSearch(page(ids = listOf("l1"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { it.sections.isNotEmpty() }
+
+            viewModel.onHomeTabSelected("wallhaven:latest")
+            val picked = viewModel.state.value.selectedHomeTab
+            assertEquals("wallhaven:latest", picked?.key)
+
+            // The sections re-declare without the picked one (a source
+            // switch): the pick degrades to the bar's head, not a dead index.
+            fake.setSectionsResult(
+                NetworkResult.Success(
+                    listOf(section(sourceId = "pexels", sectionId = "curated", title = "Curated")),
+                ),
+            )
+            fake.enqueueSearch(page(ids = listOf("px1"), nextPage = null))
+            viewModel.onSourceSelected("pexels")
+            val pinned = viewModel.state.first { it.selectedSourceId == "pexels" && it.sections.isNotEmpty() }
+
+            assertEquals("pexels:curated", pinned.selectedHomeTab?.key)
+        }
+
     @Test
     fun searchLeavesTheHomeAndClearingItReturns() =
         runTest {
