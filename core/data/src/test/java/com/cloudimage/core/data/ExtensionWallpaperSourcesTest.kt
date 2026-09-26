@@ -745,6 +745,41 @@ class ExtensionWallpaperSourcesTest {
         }
 
     @Test
+    fun `a section query preset becomes the row's search text`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallpaperflare"),
+                    capabilities = setOf(Capability.POPULAR, Capability.SEARCH),
+                    popularPage = ProviderPage(emptyList(), null),
+                    searchPage = ProviderPage(emptyList(), null),
+                    sections =
+                        listOf(
+                            HomeSection(id = HomeSection.DEFAULT_ID, title = "Popular"),
+                            HomeSection(id = "nature", title = "Nature", filters = Filters.of("query" to "nature")),
+                            HomeSection(id = "cars", title = "Cars", filters = Filters.of("query" to "cars", "sorting" to "relevance")),
+                        ),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallpaperflare"))
+            val sources = sources(engine)
+
+            val rows = (sources.sections("cloudimage.wallpaperflare") as NetworkResult.Success).value
+
+            // The preset rides as query text (v1.0.15) — nothing for the
+            // default feed, the term itself for the tag-style rows.
+            assertEquals(listOf("", "nature", "cars"), rows.map { it.query.text })
+            // The preset composes with the rest of the vocabulary.
+            assertEquals(WallpaperSorting.RELEVANCE, rows[2].query.sorting)
+            // And the routing follows the standard dispatch: blank text
+            // feeds popular, a preset term feeds search with that term.
+            sources.search(rows[0].query, page = 1, sourceId = "cloudimage.wallpaperflare")
+            sources.search(rows[1].query, page = 1, sourceId = "cloudimage.wallpaperflare")
+            assertTrue(provider.calls.any { it.startsWith("popular:1:") })
+            assertTrue(provider.calls.any { it.startsWith("search:nature:1:") })
+        }
+
+    @Test
     fun `the merged view shows one primary section per source`() =
         runTest {
             val wallhaven =

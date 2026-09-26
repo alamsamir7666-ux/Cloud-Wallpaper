@@ -1,8 +1,10 @@
 package com.cloudimage.core.network
 
+import android.content.Context
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -52,10 +54,32 @@ internal object NetworkModule {
             explicitNulls = false
         }
 
+    /**
+     * The WebView machinery behind the Cloudflare bypass — the one piece of
+     * the HTTP stack that needs an Android [Context]. Kept behind the
+     * [CloudflareSolver] interface so the bypasser's state machine stays
+     * unit-testable on the JVM.
+     */
+    @Provides
+    @Singleton
+    fun provideCloudflareSolver(
+        @ApplicationContext context: Context,
+    ): CloudflareSolver = WebViewCloudflareSolver(context)
+
+    @Provides
+    @Singleton
+    fun provideCloudflareBypasser(solver: CloudflareSolver): CloudflareBypasser = CloudflareBypasser(solver)
+
     @Provides
     @Singleton
     fun provideCloudimageHttpClient(
         okHttpClient: OkHttpClient,
         json: Json,
-    ): CloudimageHttpClient = CloudimageHttpClient(okHttpClient = okHttpClient, json = json)
+        cloudflare: CloudflareBypasser,
+    ): CloudimageHttpClient =
+        CloudimageHttpClient(
+            okHttpClient = okHttpClient,
+            json = json,
+            cloudflare = cloudflare,
+        )
 }

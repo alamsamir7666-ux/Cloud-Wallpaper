@@ -44,7 +44,9 @@ class HttpPayload(
  * Responsibilities:
  * - identify the app to servers with a stable [User-Agent][USER_AGENT],
  * - turn every failure mode into a typed [NetworkResult], never an exception,
- * - parse JSON bodies through the shared, forgiving [Json] configuration.
+ * - parse JSON bodies through the shared, forgiving [Json] configuration,
+ * - solve Cloudflare challenges on the app's side: a challenged request is
+ *   replayed once under a WebView-earned clearance (see [cloudflare]).
  */
 @Singleton
 class CloudimageHttpClient
@@ -52,37 +54,42 @@ class CloudimageHttpClient
     constructor(
         private val okHttpClient: OkHttpClient,
         private val json: Json,
+        private val cloudflare: CloudflareBypasser = CloudflareBypasser.DISABLED,
     ) {
         /**
          * Performs a GET and returns the full raw exchange — status, headers
          * and body — whatever the status code is. This is the seam behind the
          * provider facade; transport failures surface as
          * [NetworkResult.Failure] like everywhere else.
+         *
+         * A Cloudflare challenge answer no longer ends the exchange: the
+         * client asks [cloudflare] for a clearance — a headless WebView runs
+         * the challenge for real, the mechanism a pure-JVM plugin cannot
+         * carry — and replays the request once under the earned cookies and
+         * User-Agent. A clearance already on file for the host is attached
+         * before the first attempt, so a solved host stays solved. When no
+         * clearance can be earned, the challenge response itself is returned
+         * like any other non-2xx: per the facade contract, providers decide
+         * how to treat it, and their readable failures travel the app's
+         * source-failure banner as before.
          */
         suspend fun getRaw(
             url: String,
             extraHeaders: Map<String, String> = emptyMap(),
         ): NetworkResult<HttpPayload> =
             withContext(Dispatchers.IO) {
-                val request =
-                    Request
-                        .Builder()
-                        .url(url)
-                        .header(HEADER_USER_AGENT, USER_AGENT)
-                        .apply {
-                            for ((name, value) in extraHeaders) {
-                                header(name, value)
-                            }
-                        }.build()
                 try {
-                    okHttpClient.newCall(request).await().use { response ->
-                        Success(
-                            HttpPayload(
-                                statusCode = response.code,
-                                headers = response.headers.toMultimap(),
-                                body = response.body?.bytes() ?: ByteArray(0),
-                            ),
-                        )
+                    val state = cloudflare.bypassStateFor(url)
+                    val first = execute(url, extraHeaders, state)
+                    if (!CloudflareChallenge.isChallenge(first)) {
+                        Success(first)
+                    } else {
+                        val bypass = cloudflare.solve(url, staleState = state)
+                        if (bypass == null) {
+                            Success(first)
+                        } else {
+                            Success(execute(url, extraHeaders, bypass))
+                        }
                     }
                 } catch (e: SocketTimeoutException) {
                     Failure(NetworkError.Timeout)
@@ -90,6 +97,42 @@ class CloudimageHttpClient
                     Failure(NetworkError.Io(e))
                 }
             }
+
+        /**
+         * Runs one GET and buffers the exchange. [bypass] — the clearance a
+         * request carries when the host has one on file, or a freshly earned
+         * one on the replay — is applied LAST: a clearance is bound to the
+         * User-Agent that earned it, so it overrides both the host agent and
+         * any provider browser UA for that host, and its cookies ride the
+         * same request.
+         */
+        private suspend fun execute(
+            url: String,
+            extraHeaders: Map<String, String>,
+            bypass: CloudflareBypass?,
+        ): HttpPayload {
+            val request =
+                Request
+                    .Builder()
+                    .url(url)
+                    .header(HEADER_USER_AGENT, USER_AGENT)
+                    .apply {
+                        for ((name, value) in extraHeaders) {
+                            header(name, value)
+                        }
+                        if (bypass != null) {
+                            header(HEADER_USER_AGENT, bypass.userAgent)
+                            header(HEADER_COOKIE, bypass.cookieHeader)
+                        }
+                    }.build()
+            return okHttpClient.newCall(request).await().use { response ->
+                HttpPayload(
+                    statusCode = response.code,
+                    headers = response.headers.toMultimap(),
+                    body = response.body?.bytes() ?: ByteArray(0),
+                )
+            }
+        }
 
         /**
          * Performs a GET and returns the body, failing on non-2xx statuses.
@@ -151,6 +194,8 @@ class CloudimageHttpClient
 
         companion object {
             private const val HEADER_USER_AGENT = "User-Agent"
+
+            private const val HEADER_COOKIE = "Cookie"
 
             /** Sent with every request; some public APIs require identification. */
             internal const val USER_AGENT =

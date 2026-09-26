@@ -191,6 +191,48 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-26 — v1.0.15 SHIPPED (app-side Cloudflare bypass + section
+  query presets).** The wallpaperflare endgame, attacking both halves of
+  the v1.0.14 diagnosis at once. Half one: a provider can never beat a
+  Cloudflare challenge alone — it is pure JVM code with no UI toolkit,
+  so it cannot run the challenge's JavaScript, and the 0.4.0
+  browser-UA fix only helped where the zone wasn't challenging. The app
+  can: `:core:network` now ships the bypass the plugin cannot carry.
+  `CloudimageHttpClient.getRaw` detects challenge responses
+  (`CloudflareChallenge`: the `cf-mitigated: challenge` header plus
+  interstitial markers, status-gated so a 200 page that merely mentions
+  the copy never wakes the machinery — and the "Attention Required"
+  hard-block page deliberately does NOT count, because a WebView cannot
+  lift an IP block), asks `CloudflareBypasser` for a clearance and
+  replays the request once under it. `CloudflareBypasser` is the state
+  machine: per-host serialization (the home fires a dozen section rows
+  at one origin — one WebView run clears the whole host), warm starts
+  from the WebView cookie jar across launches (clearance cookies survive
+  process death; the default WebView User-Agent is reconstructed to
+  match, since Cloudflare binds `cf_clearance` to the earning agent),
+  stale-state replacement (a clearance that stopped passing is
+  re-solved by identity, not re-served), and a 60 s failure cooldown so
+  a stubborn zone can't spawn a WebView per grid tile. The engine
+  itself is `WebViewCloudflareSolver`: headless WebView, JS + DOM
+  storage on, network images off, poll for `cf_clearance`, flush the
+  jar, report the cookie header + the earning agent as an inseparable
+  pair — the client applies that pair LAST so it overrides both the
+  host agent and any provider browser UA for the replay. Unsolved
+  challenges pass through as ordinary non-2xx per the facade contract,
+  so providers keep their honest failure surface. Half two: home
+  sections could only speak category/sorting/order/seed — a tag-first
+  source like wallpaperflare browses by term, so
+  `ExtensionWallpaperSources.toSourceSection` now honors the documented
+  `query` host-vocabulary key as a section's free-text preset (routed
+  through the standard blank-vs-text dispatch into the provider's own
+  search; `Filters` KDoc updated). Companion release: wallpaperflare
+  extension 0.5.0 adds the 12-row home (Popular + Nature, Anime, Space,
+  Cars, Gaming, Abstract, Minimalist, Architecture, Animals, Fantasy,
+  People presets) on top of this host. Shipped: ktlint clean, 402 tests
+  green (+23: 10 detector, 7 state machine, 5 client replay, 1 section
+  preset), assembleDebug dex-verified (Cloudflare classes present, Hilt
+  graph green); CI green; tag `v1.0.15`.
+
 - **2026-09-26 — v1.0.14 SHIPPED (source-failure reason surfaced).** The
   wallpaperflare follow-up: after adding the third-party repository and
   switching browse to it, the feed showed "A wallpaper source failed to

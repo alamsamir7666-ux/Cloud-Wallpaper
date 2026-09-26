@@ -18,7 +18,10 @@ package com.cloudimage.provider.api
  * rendering (V2 territory):
  *
  * - `"query"` — free text; also mirrored into the [WallpaperProvider.search]
- *   `query` parameter, so this key is rarely needed inside filters,
+ *   `query` parameter, so this key is rarely needed inside filters — except
+ *   by [HomeSection]s (v1.0.15): a section declaring `"query"` under its
+ *   filters declares a tag-style feed, and the host routes its row through
+ *   the provider's own search with that term,
  * - `"category"` — `"general"` / `"anime"` / `"people"` (multi-select),
  * - `"purity"` — `"sfw"` / `"sketchy"` (multi-select; the host never
  *   requests `"nsfw"` in V1 — it drops that value before calling),

@@ -300,6 +300,15 @@ class ExtensionWallpaperSources
          * Translates a provider section to the host query pipeline: the
          * host-vocabulary keys of its [Filters] become typed query fields.
          *
+         * `query` (v1.0.15) is the section's free-text preset — the same
+         * host-vocabulary key the filter sheet mirrors into search text. A
+         * tag-style feed ("Nature", "Cars", …) declares it and its row
+         * routes through the provider's own search with that term, which is
+         * exactly how tag-first sources like Wallpaperflare are browsed on
+         * the site itself. The term rides as query text, so the standard
+         * blank-vs-text dispatch in [dispatch] does the routing with no
+         * new pipeline of its own.
+         *
          * `purity` is deliberately NOT read — the user's SFW setting owns
          * content ratings, applied by the browse ViewModel on top of this
          * query (the same rule [WallpaperSources.search] enforces per
@@ -329,6 +338,11 @@ class ExtensionWallpaperSources
                     "relevance" -> WallpaperSorting.RELEVANCE
                     else -> WallpaperSorting.TOPLIST
                 }
+            val text =
+                filters
+                    .valuesFor("query")
+                    .firstOrNull()
+                    .orEmpty()
             return SourceSection(
                 sourceId = sourceId,
                 sourceName = provider.meta.name.ifBlank { sourceId.substringAfterLast('.') },
@@ -337,6 +351,7 @@ class ExtensionWallpaperSources
                 isDefault = id == HomeSection.DEFAULT_ID,
                 query =
                     WallpaperQuery(
+                        text = text,
                         categories = categories.ifEmpty { WallpaperCategory.entries.toSet() },
                         sorting = sorting,
                         descending = !filters.isSelected("order", "asc"),
