@@ -324,6 +324,63 @@ class BrowseViewModelTest {
         }
 
     @Test
+    fun sourceFailureReasonSurfacesNextToTheError() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            // The wallpaperflare case (v1.0.14): the fetch failed, and the
+            // generic banner alone could not say WHY — the reason rides
+            // along instead of being thrown away at the taxonomy mapping.
+            val reason = "wallpaperflare answered HTTP 403 for https://wallpaperflare.com/"
+            fake.enqueueSearch(NetworkResult.Failure(NetworkError.Source(reason)))
+            val viewModel = newViewModel(fake, backgroundScope)
+            val failed = viewModel.state.first { !it.isFirstLoading }
+
+            assertEquals(BrowseError.SOURCE, failed.error)
+            assertEquals(reason, failed.errorDetail)
+
+            fake.enqueueSearch(page(ids = listOf("fixed"), nextPage = null))
+            viewModel.onRetry()
+            val recovered = viewModel.state.first { it.wallpapers.isNotEmpty() }
+
+            assertNull(recovered.error)
+            assertNull(recovered.errorDetail)
+        }
+
+    @Test
+    fun sectionSourceFailureCarriesItsReasonAndRetryClearsIt() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(listOf(section(sectionId = "popular", title = "Popular", isDefault = true))),
+            )
+            val reason = "wallpaperflare answered HTTP 403 for https://wallpaperflare.com/"
+            fake.enqueueSearch(NetworkResult.Failure(NetworkError.Source(reason)))
+            val viewModel = newViewModel(fake, backgroundScope)
+
+            val failed =
+                viewModel.state.first {
+                    it.sections.singleOrNull()?.let { s -> !s.isFirstLoading } == true
+                }
+
+            assertEquals(BrowseError.SOURCE, failed.sections.single().error)
+            assertEquals(reason, failed.sections.single().errorDetail)
+
+            fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
+            viewModel.loadMoreSection(failed.sections.single().key)
+            val recovered =
+                viewModel.state.first {
+                    it.sections
+                        .single()
+                        .wallpapers
+                        .isNotEmpty()
+                }
+
+            assertNull(recovered.sections.single().error)
+            assertNull(recovered.sections.single().errorDetail)
+        }
+
+    @Test
     fun loadMoreFailureKeepsListAndRetryAppends() =
         runTest {
             val fake = FakeWallpaperSources()

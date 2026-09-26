@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.cloudimage.core.designsystem.WallpaperCard
 import com.cloudimage.core.model.Wallpaper
@@ -270,6 +271,7 @@ private fun SectionTabGrid(
                     SectionGridFooter(
                         isLoadingMore = section.isLoadingMore,
                         error = section.error,
+                        errorDetail = section.errorDetail,
                         onRetry = onLoadMore,
                     )
                 }
@@ -347,6 +349,7 @@ private fun GridCardPlaceholder(tall: Boolean) {
 private fun SectionGridFooter(
     isLoadingMore: Boolean,
     error: BrowseError?,
+    errorDetail: String?,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -370,6 +373,15 @@ private fun SectionGridFooter(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
+                    errorDetail?.let { detail ->
+                        Text(
+                            text = detail,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                        )
+                    }
                     TextButton(onClick = onRetry) {
                         Text(stringResource(R.string.browse_retry))
                     }

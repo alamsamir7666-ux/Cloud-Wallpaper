@@ -95,6 +95,8 @@ data class BrowseSectionState(
     val isLoadingMore: Boolean = false,
     val endReached: Boolean = false,
     val error: BrowseError? = null,
+    /** The source's own failure reason, shown under the banner (v1.0.14). */
+    val errorDetail: String? = null,
 )
 
 /** Immutable snapshot of everything the browse screen renders. */
@@ -130,6 +132,8 @@ data class BrowseUiState(
     val isLoadingMore: Boolean = false,
     val endReached: Boolean = false,
     val error: BrowseError? = null,
+    /** The failing source's own reason, shown under the banner (v1.0.14). */
+    val errorDetail: String? = null,
     /** The usable sources, or null while they are being discovered. */
     val sources: List<SourceInfo>? = null,
     /** The source the feed is pinned to; null means the merged feed of all sources. */
@@ -541,7 +545,9 @@ class BrowseViewModel
                                     .copy(sourceFailures = result.sourceFailures.map { it.toFailedSource() })
                             }
                         }.onFailure { error ->
-                            _state.update { it.copy(isLoadingMore = false, error = error.toBrowseError()) }
+                            _state.update {
+                                it.copy(isLoadingMore = false, error = error.toBrowseError(), errorDetail = error.failureDetail())
+                            }
                         }
                 }
         }
@@ -572,10 +578,13 @@ class BrowseViewModel
                                     isLoadingMore = false,
                                     endReached = !result.page.hasNext,
                                     error = null,
+                                    errorDetail = null,
                                 )
                             }
                         }.onFailure { error ->
-                            updateSection(key) { it.copy(isLoadingMore = false, error = error.toBrowseError()) }
+                            updateSection(key) {
+                                it.copy(isLoadingMore = false, error = error.toBrowseError(), errorDetail = error.failureDetail())
+                            }
                         }
                 }
         }
@@ -621,6 +630,7 @@ class BrowseViewModel
                     isLoadingMore = false,
                     endReached = false,
                     error = null,
+                    errorDetail = null,
                     suggestions = emptyList(),
                     sourceFailures = emptyList(),
                 )
@@ -682,6 +692,7 @@ class BrowseViewModel
                     isLoadingMore = false,
                     endReached = false,
                     error = null,
+                    errorDetail = null,
                     showApiKeyPrompt = needsKey,
                     suggestions = emptyList(),
                     sourceFailures = emptyList(),
@@ -709,12 +720,15 @@ class BrowseViewModel
                                         scopeTitle = null,
                                         isFirstLoading = false,
                                         error = null,
+                                        errorDetail = null,
                                     )
                                 }
                                 rows.forEach { loadSectionFirstPage(it) }
                             }
                         }.onFailure { error ->
-                            _state.update { it.copy(isFirstLoading = false, error = error.toBrowseError()) }
+                            _state.update {
+                                it.copy(isFirstLoading = false, error = error.toBrowseError(), errorDetail = error.failureDetail())
+                            }
                         }
                 }
         }
@@ -724,7 +738,7 @@ class BrowseViewModel
             sectionPages[section.key] = 1
             sectionJobs[section.key] =
                 viewModelScope.launch {
-                    updateSection(section.key) { it.copy(isFirstLoading = true, error = null) }
+                    updateSection(section.key) { it.copy(isFirstLoading = true, error = null, errorDetail = null) }
                     sources
                         .search(
                             effectiveSectionQuery(section),
@@ -737,10 +751,13 @@ class BrowseViewModel
                                     isFirstLoading = false,
                                     endReached = !result.page.hasNext,
                                     error = null,
+                                    errorDetail = null,
                                 )
                             }
                         }.onFailure { error ->
-                            updateSection(section.key) { it.copy(isFirstLoading = false, error = error.toBrowseError()) }
+                            updateSection(section.key) {
+                                it.copy(isFirstLoading = false, error = error.toBrowseError(), errorDetail = error.failureDetail())
+                            }
                         }
                 }
         }
@@ -768,6 +785,7 @@ class BrowseViewModel
                     isLoadingMore = false,
                     endReached = false,
                     error = null,
+                    errorDetail = null,
                     showApiKeyPrompt = needsKey,
                     sourceFailures = emptyList(),
                 )
@@ -785,11 +803,14 @@ class BrowseViewModel
                                     isFirstLoading = false,
                                     endReached = !result.page.hasNext,
                                     error = null,
+                                    errorDetail = null,
                                     sourceFailures = result.sourceFailures.map { it.toFailedSource() },
                                 )
                             }
                         }.onFailure { error ->
-                            _state.update { it.copy(isFirstLoading = false, error = error.toBrowseError()) }
+                            _state.update {
+                                it.copy(isFirstLoading = false, error = error.toBrowseError(), errorDetail = error.failureDetail())
+                            }
                         }
                 }
         }
@@ -904,6 +925,7 @@ class BrowseViewModel
                 isLoadingMore = false,
                 endReached = !page.hasNext,
                 error = null,
+                errorDetail = null,
             )
 
         private fun SourceFailure.toFailedSource(): FailedSource =
@@ -926,6 +948,15 @@ class BrowseViewModel
             const val RECENTLY_APPLIED_LIMIT = 10
         }
     }
+
+/**
+ * The reason a SOURCE error happened, verbatim — "wallpaperflare answered
+ * HTTP 403 for …", "source 'x' is disabled — …". The other taxonomy
+ * entries already say what they mean in their banner string; only SOURCE
+ * hid its cause behind a generic message the Extensions tab could not
+ * back up (v1.0.14).
+ */
+private fun NetworkError.failureDetail(): String? = (this as? NetworkError.Source)?.reason
 
 private fun NetworkError.toBrowseError(): BrowseError =
     when (this) {

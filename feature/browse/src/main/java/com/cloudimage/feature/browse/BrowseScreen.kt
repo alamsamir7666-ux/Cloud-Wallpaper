@@ -199,7 +199,7 @@ fun BrowseScreen(
                     )
 
                 state.showFullscreenError ->
-                    FullScreenError(error = state.error!!, onRetry = viewModel::onRetry)
+                    FullScreenError(error = state.error!!, errorDetail = state.errorDetail, onRetry = viewModel::onRetry)
 
                 state.wallpapers.isEmpty() ->
                     EmptyResults(
@@ -793,6 +793,7 @@ private fun BrowseGrid(
                 BrowseGridFooter(
                     isLoadingMore = state.isLoadingMore,
                     error = state.error,
+                    errorDetail = state.errorDetail,
                     onRetry = onLoadMore,
                 )
             }
@@ -804,6 +805,7 @@ private fun BrowseGrid(
 private fun BrowseGridFooter(
     isLoadingMore: Boolean,
     error: BrowseError?,
+    errorDetail: String?,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -819,13 +821,26 @@ private fun BrowseGridFooter(
                 horizontalArrangement = Arrangement.Center,
                 modifier = modifier.fillMaxWidth().padding(vertical = 4.dp),
             ) {
-                Text(
-                    text = error.message(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center,
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.weight(1f, fill = false),
-                )
+                ) {
+                    Text(
+                        text = error.message(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                    )
+                    errorDetail?.let { detail ->
+                        Text(
+                            text = detail,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 8.dp),
+                        )
+                    }
+                }
                 TextButton(onClick = onRetry) {
                     Text(stringResource(R.string.browse_retry))
                 }
@@ -843,6 +858,7 @@ private fun FullScreenLoading(modifier: Modifier = Modifier) {
 @Composable
 private fun FullScreenError(
     error: BrowseError,
+    errorDetail: String?,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -866,6 +882,14 @@ private fun FullScreenError(
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        errorDetail?.let { detail ->
+            Text(
+                text = detail,
+                style = MaterialTheme.typography.labelMedium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         TextButton(onClick = onRetry) {
             Text(stringResource(R.string.browse_retry))
         }
