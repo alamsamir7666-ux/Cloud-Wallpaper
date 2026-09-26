@@ -191,6 +191,20 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-26 — v1.0.10 SHIPPED (hotfix).** The Extensions screen crashed
+  on entry for most users: the Part 3 stats bar fed every population count
+  straight into `Modifier.weight(count)`, and Compose's `weight()` throws
+  `IllegalArgumentException` on 0 — one enabled extension with nothing
+  disabled and nothing available (every fresh install) took the screen
+  down. Fix on `8ca7905`: segments now come from
+  `ExtensionsUiState.statsSegments()`, which drops empty populations by
+  construction; three regression tests lock the invariant. Local gate
+  ktlint clean, 515 tests green (+3), dex audit PASS; CI green; tag
+  `v1.0.10` → release green → GitHub Release with signed
+  `Cloudimage-v1.0.10.apk` (2.9MB). Lesson: derived UI weights are
+  invariants, not formatting — a zero segment is a crash, so the segment
+  list is built where it can be tested.
+
 - **2026-09-26 — v1.0.9 SHIPPED.** Release gate complete on `638766b`
   (versionCode 10 / versionName "1.0.9"): local gate — ktlint clean,
   512 unit tests green (312 debug + 156 release + 44 plain-JVM;
