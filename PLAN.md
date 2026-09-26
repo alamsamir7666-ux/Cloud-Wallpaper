@@ -191,6 +191,34 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-26 — v1.0.14 SHIPPED (source-failure reason surfaced).** The
+  wallpaperflare follow-up: after adding the third-party repository and
+  switching browse to it, the feed showed "A wallpaper source failed to
+  load — check the Extensions tab for details." — but the Extensions tab
+  only lists LOAD failures; a FETCH failure (the provider's HTTP call,
+  e.g. wallpaperflare.com's Cloudflare zone answering 403) was flattened
+  into `BrowseError.SOURCE` with its reason thrown away at the taxonomy
+  mapping, and the tab showed nothing wrong. A dead-end generic banner
+  with no way to tell "stale extension version" from "site blocking the
+  client". Diagnosis established the chain end-to-end: the user's
+  published 0.4.0 package is sha256-verified and ABI-clean, the app loads
+  it READY (that's why the switcher offers it), and the failure is the
+  runtime fetch — probes confirm the site challenges both app and
+  browser UAs from datacenter IPs, so only a residential verdict counts
+  (the 0.4.0 browser-UA fix targets exactly that). Fix:
+  `NetworkError.Source.reason` now rides along as
+  `BrowseUiState.errorDetail` / `BrowseSectionState.errorDetail`
+  (populated at all five failure sites, cleared at every success/reset
+  site so it can never go stale), rendered as a caption line under the
+  banner in `SectionGridFooter`, `BrowseGridFooter` and
+  `FullScreenError` — "wallpaperflare answered HTTP 403 for …" is now
+  readable right where the error is. Shipped as `eac06c9`: ktlint clean,
+  524 tests green (+2 reason-preservation/clearing), assembleRelease
+  3.06MB, dex audit PASS; CI green; tag `v1.0.14` → release green →
+  signed `Cloudimage-v1.0.14.apk` (2.93MB). Companion user guidance:
+  if the installed row reads v0.3.0, tap the catalog row's Update
+  affordance (host has offered update-installs since v1.0.9).
+
 - **2026-09-26 — v1.0.13 SHIPPED (repo add fixes).** Adding a repository
   by its GitHub page URL — the address users copy from the browser
   (`github.com/{owner}/{repo}[.git]`) — 404ed, because `normalizeUrl`
