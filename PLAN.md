@@ -173,9 +173,16 @@ one release at the end.
       5 features. 352 tests green (+12; the Part 3 "301" undercounted —
       it missed the plain-JVM `test`-task modules: providers ×4,
       provider/api), ktlint clean, dex audit PASS.)
-- [ ] **Release — v1.0.9.** versionCode 10 / versionName "1.0.9", full
+- [x] **Release — v1.0.9.** versionCode 10 / versionName "1.0.9", full
       ritual: ktlint, unit tests, assembleRelease, dex audit, push, CI
       green, tag v1.0.9 + signed APK Release, PLAN/handoff/worklog.
+      (Shipped as `638766b`: local gate ktlint clean, 512 unit tests
+      green — 312 debug + 156 release + 44 plain-JVM, CI-comparable 356
+      — assembleRelease 3.03MB, dex audit PASS: 5,600 host classes,
+      wallhaven zip 36 classes / 32 external refs / 0 unresolved; CI
+      build green on `638766b`; tag `v1.0.9` → release run green →
+      GitHub Release v1.0.9 published with signed
+      `Cloudimage-v1.0.9.apk`, 2.9MB.)
 
 Not ported (deliberate): video-oriented surfaces (player, subtitles,
 download queue, Chromecast), accounts/sync, TV layout (stays v1.1
@@ -183,6 +190,18 @@ backlog), extension language / TvType filters (no such dimensions in
 Cloudimage), third-party web-search suggestions.
 
 ## Status log
+
+- **2026-09-26 — v1.0.9 SHIPPED.** Release gate complete on `638766b`
+  (versionCode 10 / versionName "1.0.9"): local gate — ktlint clean,
+  512 unit tests green (312 debug + 156 release + 44 plain-JVM;
+  CI-comparable 356), assembleRelease 3.03MB, dex audit PASS
+  (5,600 host classes; wallhaven zip 36 classes, 32 external refs,
+  0 unresolved); CI build green; tag `v1.0.9` → release run green →
+  GitHub Release v1.0.9 with signed `Cloudimage-v1.0.9.apk` (2.9MB).
+  The four-part CloudStream-grade UX roadmap is fully closed out.
+  Environment note: sandbox was wiped again before the gate — Azul's
+  zulu17.52.17 CDN URL is now dead; recovery used Temurin 17.0.20.1
+  via the Adoptium API (`api.adoptium.net/v3/binary/latest/17/ga/...`).
 
 - **2026-09-26 — v1.0.9 Part 4 done.** More like this + Recently applied +
   housekeeping on main (`34a2965`), CI green. Details in the Part 4 entry
