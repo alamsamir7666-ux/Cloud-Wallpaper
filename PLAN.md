@@ -191,6 +191,27 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-26 — v1.0.13 SHIPPED (repo add fixes).** Adding a repository
+  by its GitHub page URL — the address users copy from the browser
+  (`github.com/{owner}/{repo}[.git]`) — 404ed, because `normalizeUrl`
+  blindly appended `index.json` to the landing page. The ecosystem
+  publishes extension repositories to the repo's `gh-pages` branch, so
+  that URL form now resolves to
+  `raw.githubusercontent.com/{owner}/{repo}/gh-pages/index.json` (deeper
+  github paths keep the default handling). The add-repo dialog also
+  closed itself on confirm before the fetch resolved, so a failure left
+  no visible trace; it now lives until the add resolves — `RepoAdded`
+  closes it, a failure keeps it open with the error under the field,
+  and dismissing clears the stale error. Found via the user's own
+  wallpaperflare repository (a third-party extension repo,
+  `alamsamir7666-ux/WallpaperExtension`): its gh-pages index and
+  package are fully ABI-clean against the host dex (verified with the
+  new `scripts/audit_remote_plugin.py`: 39 classes, 28 external refs,
+  0 unresolved) — only the pasted URL form stood between it and install.
+  Shipped as `66c9f0f`: ktlint clean, 522 tests green (+3 GitHub-URL
+  normalization), assembleRelease 3.06MB, dex audit PASS; CI green; tag
+  `v1.0.13` → release green → signed `Cloudimage-v1.0.13.apk` (2.93MB).
+
 - **2026-09-26 — v1.0.12 SHIPPED (UI hotfix).** Two user-reported
   regressions. (1) The v1.0.11 home tab bar drew its full-height
   secondaryContainer pill in `ScrollableTabRow`'s indicator slot, which
