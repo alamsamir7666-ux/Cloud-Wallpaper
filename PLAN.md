@@ -191,6 +191,25 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-26 — v1.0.12 SHIPPED (UI hotfix).** Two user-reported
+  regressions. (1) The v1.0.11 home tab bar drew its full-height
+  secondaryContainer pill in `ScrollableTabRow`'s indicator slot, which
+  material3 renders ON TOP of the tab content — the active tab's label
+  vanished behind its own pill. The pill is now the `Tab`'s own background
+  (inset padding, `clip(RoundedCornerShape(50%))`,
+  `animateColorAsState(secondaryContainer <-> Transparent)`), the
+  indicator slot stays empty; the label always draws on top, and the
+  highlight fades with selection instead of sliding between positions.
+  (2) The Extensions screen's status chips could stack their label one
+  syllable per line when the chips row ran out of width (the trailing
+  `Disabled` chip was measured with the squeezed remainder):
+  `LabelChip` is single-line by construction (`maxLines = 1`,
+  `softWrap = false`) and the row is a `FlowRow`, so overflow chips wrap
+  as whole chips to the next line. Shipped as `a811aad`: ktlint clean,
+  519 tests green, assembleRelease 3.06MB, dex audit PASS (5,668 host
+  classes); CI green; tag `v1.0.12` → release green → signed
+  `Cloudimage-v1.0.12.apk` (2.93MB).
+
 - **2026-09-26 — v1.0.11 SHIPPED (tabbed home).** The home's stacked
   carousels (Recently applied + every provider section) became a
   horizontal tab bar at the top of the content area: the personal
