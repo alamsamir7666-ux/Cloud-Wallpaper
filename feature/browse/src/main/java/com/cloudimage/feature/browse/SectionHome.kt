@@ -1,11 +1,11 @@
 package com.cloudimage.feature.browse
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,7 +24,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -134,8 +133,12 @@ internal fun SectionsHome(
 
 /**
  * The scrollable pill bar: the active tab sits in a rounded
- * secondaryContainer pill that slides between positions; labels outside
- * the pill mute to on-surface-variant.
+ * secondaryContainer pill, labels outside the pill mute to
+ * on-surface-variant. The pill is the tab's own background (v1.0.12 fix):
+ * material3 draws the TabRow indicator slot ON TOP of the tab content, so
+ * the full-height pill placed there covered the active label entirely —
+ * as a background it always sits behind the text, and it fades in/out
+ * with the selection instead of sliding between positions.
  */
 @Composable
 private fun HomeTabRow(
@@ -149,18 +152,7 @@ private fun HomeTabRow(
         edgePadding = 16.dp,
         containerColor = Color.Transparent,
         divider = {},
-        indicator = { tabPositions ->
-            tabPositions.getOrNull(selectedIndex)?.let { position ->
-                Box(
-                    Modifier
-                        .tabIndicatorOffset(position)
-                        .padding(horizontal = 4.dp, vertical = 7.dp)
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(percent = 50))
-                        .background(MaterialTheme.colorScheme.secondaryContainer),
-                )
-            }
-        },
+        indicator = {},
         modifier =
             modifier
                 .fillMaxWidth()
@@ -168,6 +160,15 @@ private fun HomeTabRow(
     ) {
         tabs.forEachIndexed { index, tab ->
             val selected = index == selectedIndex
+            val pillColor by animateColorAsState(
+                targetValue =
+                    if (selected) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        Color.Transparent
+                    },
+                label = "home-tab-pill",
+            )
             Tab(
                 selected = selected,
                 onClick = { onSelect(index) },
@@ -181,7 +182,12 @@ private fun HomeTabRow(
                 },
                 selectedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                 unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.testTag("browse:home-tab:${tab.key}"),
+                modifier =
+                    Modifier
+                        .padding(horizontal = 4.dp, vertical = 7.dp)
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(pillColor)
+                        .testTag("browse:home-tab:${tab.key}"),
             )
         }
     }

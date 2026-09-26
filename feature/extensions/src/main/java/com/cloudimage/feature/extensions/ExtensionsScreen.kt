@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -403,6 +405,7 @@ private fun SectionLabel(text: String) {
  * source's enablement; a disabled row dims so the off state reads at
  * a glance even before the thumb position registers.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ExtensionRow(
     extension: InstalledExtension,
@@ -446,7 +449,10 @@ private fun ExtensionRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     StatusChip(status = extension.status)
                     manifest?.let { LabelChip(text = stringResource(R.string.extensions_api_version, it.apiVersion)) }
                     if (disabled) {
@@ -704,6 +710,11 @@ private fun StatusChip(status: ExtensionStatus) {
     }
 }
 
+/** A compact status label. The text never wraps (v1.0.12 fix): when the
+ *  chips row ran out of width, a squeezed chip stacked its label one
+ *  syllable per line — a chip is always a single line, and overflow chips
+ *  wrap as whole chips in the FlowRow instead.
+ */
 @Composable
 private fun LabelChip(
     text: String,
@@ -718,6 +729,8 @@ private fun LabelChip(
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
         )
     }
