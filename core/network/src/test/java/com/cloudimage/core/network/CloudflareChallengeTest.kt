@@ -18,6 +18,14 @@ import org.junit.Test
  *   the "Attention Required" hard block page (an IP block cannot be
  *   solved), and 2xx pages that merely mention the interstitial copy
  *   (a blog post about Cloudflare is not a challenge).
+ *
+ * v1.0.16 additions: the block-page tests use the LIVE page shape — a real
+ * "Attention Required!" response captured from wallpaperflare.com carries
+ * a `challenge-platform` script for its ray-ID copy button, so the v1.0.15
+ * marker-only rule misclassified blocks as challenges and burned a
+ * 20-second WebView solve on hopeless IPs. Block copy now vetoes the
+ * markers; the header still outranks everything (an answer that says
+ * `cf-mitigated: challenge` is one, whatever else it says).
  */
 class CloudflareChallengeTest {
     private val challengeStatuses = listOf(403, 429, 503)
@@ -90,6 +98,60 @@ class CloudflareChallengeTest {
             """.trimIndent()
 
         assertFalse(CloudflareChallenge.isChallenge(403, emptyMap(), body))
+    }
+
+    @Test
+    fun liveHardBlockPageIsNotAChallenge() {
+        // The REAL block page, shape captured from wallpaperflare.com: the
+        // ray-ID copy button loads a challenge-platform script, so the
+        // v1.0.15 marker-only rule woke a solve on a page no solve can ever
+        // pass. The block copy must veto the marker.
+        val body =
+            """
+            <!DOCTYPE html><html lang="en-US"><head>
+            <title>Attention Required! | Cloudflare</title>
+            <meta name="robots" content="noindex, nofollow" />
+            <script type="text/javascript" src="/cdn-cgi/challenge-platform/h/b/orchestrate/jschlm"></script>
+            </head><body><div class="cf-error-details">Sorry, you have been blocked</div>
+            <div>You are unable to access wallpaperflare.com</div></body></html>
+            """.trimIndent()
+
+        assertFalse(CloudflareChallenge.isChallenge(403, emptyMap(), body))
+    }
+
+    @Test
+    fun wafCustomRuleBlockIsNotAChallenge() {
+        // "error code: 1020" is a WAF custom rule deny — same story as the
+        // IP block: not solvable by a WebView.
+        val body =
+            """
+            <html><head><title>Access denied | Cloudflare</title></head>
+            <body>error code: 1020</body></html>
+            """.trimIndent()
+
+        assertFalse(CloudflareChallenge.isChallenge(403, emptyMap(), body))
+    }
+
+    @Test
+    fun blockCopyVetoesInterstitialMarkers() {
+        // A body carrying BOTH block copy and an interstitial marker is a
+        // block page — real pages never mix, but the precedence must be
+        // pinned so a marker can never smuggle a block past the veto.
+        val body = "Attention Required — Just a moment while challenge-platform loads"
+
+        assertFalse(CloudflareChallenge.isChallenge(403, emptyMap(), body))
+    }
+
+    @Test
+    fun mitigatedHeaderOutranksBlockCopy() {
+        // The header is authoritative: when Cloudflare itself says the
+        // response is a challenge, block-shaped copy in the body cannot
+        // overrule it.
+        val body = "Attention Required! Sorry, you have been blocked."
+
+        assertTrue(
+            CloudflareChallenge.isChallenge(403, mapOf("cf-mitigated" to listOf("challenge")), body),
+        )
     }
 
     @Test

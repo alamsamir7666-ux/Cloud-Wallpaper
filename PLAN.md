@@ -191,6 +191,50 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-26 — v1.0.16 SHIPPED (Cloudflare solves attach to a real
+  window).** The v1.0.15 field report: a wallpaperflare install on a real
+  phone still surfaced "source failed: wallpaperflare answered HTTP 403".
+  Diagnosis from the artifacts, not guesswork — the published
+  `Cloudimage-v1.0.15.apk` was pulled and its dex audited: every bypass
+  constant present, so the shipped app did carry the machinery; the
+  failing half was the solve itself. Two defects found. Defect one, the
+  decisive one: `WebViewCloudflareSolver` created its WebView off-window,
+  and Cloudflare's challenge scripts refuse to settle there —
+  `document.visibilityState` reads "hidden" and the challenge's
+  animation-frame work has no surface, so every solve parked until the
+  20 s timeout and the raw 403 rode through (the same headless wall the
+  recon sandbox hit with a full Chrome). CloudStream's battle-tested
+  `CloudflareKiller` attaches its WebView to a dialog window; that is
+  what this needed. The solver now runs the challenge inside a
+  borderless full-screen `Dialog` over the resumed activity — the page
+  gets a real viewport, a visible document, and, if Cloudflare escalates
+  to an interactive challenge, the user's own finger (nothing headless
+  can fake that; the dialog is honest UI for exactly as long as the
+  solve takes). The resumed activity reaches the solver through the new
+  `ForegroundActivityTracker` (`ActivityLifecycleCallbacks`, registered
+  in the application; identity-checked pause clearing, volatile read
+  from any thread) injected alongside the app context in `NetworkModule`
+  — when no window exists (Muzei refresh in the background) the detached
+  WebView remains the best-effort path, and a dialog that cannot be
+  shown (activity dying mid-handoff) falls back to it instead of null.
+  A stalled challenge also gets exactly one reload after 6 s — parked
+  orchestrations usually run properly on a second load — with the
+  heuristic running before the cookie poll's `continue` so an empty jar
+  cannot starve it. Defect two, found while probing the live zone: the
+  REAL "Attention Required!" block page carries a `challenge-platform`
+  script (the ray-ID copy button), so the v1.0.15 marker-only rule
+  misclassified hard blocks as challenges and burned a 20 s solve plus
+  the 60 s cooldown on IPs no solve can ever save — the detector's own
+  KDoc had promised otherwise. `CloudflareChallenge` now consults
+  `BLOCK_MARKERS` ("Attention Required", "Sorry, you have been blocked",
+  "You are unable to access", "error code: 1020") between the header and
+  the interstitial markers; the `cf-mitigated: challenge` header stays
+  authoritative over everything. Shipped: ktlint clean, 406 tests green
+  (+4 classifier cases: the live block-page shape, the WAF 1020 deny,
+  block-copy veto over markers, header outranking block copy),
+  assembleDebug green with the new constants dex-verified; CI green; tag
+  `v1.0.16`.
+
 - **2026-09-26 — v1.0.15 SHIPPED (app-side Cloudflare bypass + section
   query presets).** The wallpaperflare endgame, attacking both halves of
   the v1.0.14 diagnosis at once. Half one: a provider can never beat a

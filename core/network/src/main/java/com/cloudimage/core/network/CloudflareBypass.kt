@@ -25,7 +25,7 @@ data class CloudflareBypass(
  *
  * A challenge is one of:
  * - a 403/429/503 carrying the modern `cf-mitigated: challenge` response
- *   header, or
+ *   header (the strongest signal, checked first), or
  * - a 403/429/503 whose body carries an interstitial marker (the
  *   `cdn-cgi/challenge-platform` scripts every current page loads, the
  *   interstitial title, or the legacy `jschl` forms).
@@ -36,6 +36,16 @@ data class CloudflareBypass(
  * ordinary non-2xx responses and sources surface their own readable
  * errors, exactly as they did before the bypass existed. Only challenges
  * that JavaScript in a real WebView can settle are worth waking it for.
+ *
+ * Telling the two apart needs more than the interstitial markers: the LIVE
+ * block page also loads a `challenge-platform` script (its ray-ID copy
+ * button), so markers alone misclassify blocks as challenges — verified
+ * against a real "Attention Required!" response captured from
+ * wallpaperflare.com. The block page's own copy is what separates it, so
+ * [BLOCK_MARKERS] are consulted between the header and the interstitial
+ * markers, and a body carrying block copy is never a challenge no matter
+ * which scripts it loads. The header stays authoritative: an answer that
+ * explicitly says `cf-mitigated: challenge` is one.
  */
 object CloudflareChallenge {
     private val CHALLENGE_STATUSES = setOf(403, 429, 503)
@@ -59,6 +69,23 @@ object CloudflareChallenge {
             "jschl",
         )
 
+    /**
+     * Body copy that identifies Cloudflare's BLOCK pages — IP blocks and
+     * WAF denies. A WebView cannot lift these; matching copy means the
+     * response must fall through as the ordinary error it is.
+     */
+    private val BLOCK_MARKERS =
+        listOf(
+            // The block page title, every variant since the classic page.
+            "Attention Required",
+            // The block body's apology line.
+            "Sorry, you have been blocked",
+            // The block body's access-denied line.
+            "You are unable to access",
+            // WAF custom-rule (ACL) denies.
+            "error code: 1020",
+        )
+
     /** Whether a completed exchange [payload] is a Cloudflare challenge page. */
     fun isChallenge(payload: HttpPayload): Boolean = isChallenge(payload.statusCode, payload.headers, payload.bodyText)
 
@@ -66,7 +93,9 @@ object CloudflareChallenge {
      * The detection rule on raw parts — status gate first (a challenge is
      * never a 2xx, and a 200 page that merely mentions the interstitial
      * copy, a blog post about Cloudflare say, must not wake the bypass),
-     * then the header (the strongest signal), then the body markers.
+     * then the header (the strongest signal), then the block copy (an
+     * unsolvable page must not burn a solve), then the interstitial
+     * markers.
      */
     fun isChallenge(
         statusCode: Int,
@@ -76,6 +105,7 @@ object CloudflareChallenge {
         if (statusCode !in CHALLENGE_STATUSES) return false
         if (headers.headerValue(HEADER_CF_MITIGATED)?.equals("challenge", ignoreCase = true) == true) return true
         if (bodyText.isEmpty()) return false
+        if (BLOCK_MARKERS.any(bodyText::contains)) return false
         return MARKERS.any(bodyText::contains)
     }
 

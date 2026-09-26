@@ -59,12 +59,17 @@ internal object NetworkModule {
      * the HTTP stack that needs an Android [Context]. Kept behind the
      * [CloudflareSolver] interface so the bypasser's state machine stays
      * unit-testable on the JVM.
+     *
+     * The solver also needs the resumed activity to attach its challenge
+     * dialog to a real window (v1.0.16 — detached WebViews never settle);
+     * the [ForegroundActivityTracker] is that window's source of truth.
      */
     @Provides
     @Singleton
     fun provideCloudflareSolver(
         @ApplicationContext context: Context,
-    ): CloudflareSolver = WebViewCloudflareSolver(context)
+        tracker: ForegroundActivityTracker,
+    ): CloudflareSolver = WebViewCloudflareSolver(context) { tracker.current() }
 
     @Provides
     @Singleton
