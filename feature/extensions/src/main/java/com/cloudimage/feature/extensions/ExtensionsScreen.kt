@@ -89,7 +89,10 @@ fun ExtensionsScreen(
     LaunchedEffect(Unit) {
         viewModel.events.collectLatest { event ->
             when (event) {
-                is ExtensionsEvent.RepoAdded -> snackbarHostState.showSnackbar(addedMessage)
+                is ExtensionsEvent.RepoAdded -> {
+                    showAddRepo = false
+                    snackbarHostState.showSnackbar(addedMessage)
+                }
                 is ExtensionsEvent.Installed ->
                     snackbarHostState.showSnackbar(installedMessage.format(event.name))
                 is ExtensionsEvent.Updated ->
@@ -177,14 +180,18 @@ fun ExtensionsScreen(
     }
 
     if (showAddRepo) {
+        // v1.0.13: the dialog lives until the add resolves — closing on
+        // confirm hid the failure (nothing appeared to happen). Success
+        // closes it via the RepoAdded event; a failure keeps it open so
+        // the error shows where the user is looking.
         AddRepoDialog(
             adding = state.addingRepo,
             error = state.repoError,
-            onConfirm = {
-                viewModel.addRepo(it)
+            onConfirm = viewModel::addRepo,
+            onDismiss = {
+                viewModel.clearRepoError()
                 showAddRepo = false
             },
-            onDismiss = { showAddRepo = false },
         )
     }
 }

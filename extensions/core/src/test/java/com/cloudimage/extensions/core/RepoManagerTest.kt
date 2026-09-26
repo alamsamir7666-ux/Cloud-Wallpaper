@@ -78,6 +78,36 @@ class RepoManagerTest {
         assertNull(manager.normalizeUrl("   "))
     }
 
+    @Test
+    fun `github repository url maps to the gh-pages index`() {
+        assertEquals(
+            "https://raw.githubusercontent.com/alamsamir7666-ux/WallpaperExtension/gh-pages/index.json",
+            manager.normalizeUrl("https://github.com/alamsamir7666-ux/WallpaperExtension.git"),
+        )
+    }
+
+    @Test
+    fun `github repository url variants map to the same index`() {
+        val expected =
+            "https://raw.githubusercontent.com/alamsamir7666-ux/WallpaperExtension/gh-pages/index.json"
+        assertEquals(expected, manager.normalizeUrl("https://github.com/alamsamir7666-ux/WallpaperExtension"))
+        assertEquals(expected, manager.normalizeUrl("https://github.com/alamsamir7666-ux/WallpaperExtension/"))
+        assertEquals(expected, manager.normalizeUrl("https://www.github.com/alamsamir7666-ux/WallpaperExtension"))
+        assertEquals(expected, manager.normalizeUrl("http://github.com/alamsamir7666-ux/WallpaperExtension.git"))
+    }
+
+    @Test
+    fun `github urls deeper than the repo root keep the default handling`() {
+        assertEquals(
+            "https://github.com/alamsamir7666-ux/WallpaperExtension/tree/main/index.json",
+            manager.normalizeUrl("https://github.com/alamsamir7666-ux/WallpaperExtension/tree/main"),
+        )
+        assertEquals(
+            "https://github.com/alamsamir7666-ux/index.json",
+            manager.normalizeUrl("https://github.com/alamsamir7666-ux"),
+        )
+    }
+
     // --- add ---------------------------------------------------------------
 
     @Test

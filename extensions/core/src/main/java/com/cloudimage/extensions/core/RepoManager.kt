@@ -34,9 +34,11 @@ sealed interface AddRepoResult {
  */
 interface RepoManager {
     /**
-     * Normalizes user input into an index URL: keeps a `.json` URL as-is,
-     * otherwise appends `index.json` to the path. Adds no scheme magic —
-     * garbage stays garbage and fails as [RepoError.InvalidUrl].
+     * Normalizes user input into an index URL: a GitHub repository page
+     * URL maps to the repo's published `gh-pages` index, a `.json` URL
+     * stays as-is, anything else gains `index.json` appended to the path.
+     * Adds no scheme magic — garbage stays garbage and fails as
+     * [RepoError.InvalidUrl].
      */
     fun normalizeUrl(input: String): String?
 
@@ -79,6 +81,7 @@ class DefaultRepoManager
             if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
                 return null
             }
+            githubRepositoryIndexUrl(trimmed)?.let { return it }
             return if (trimmed.substringAfterLast('/').endsWith(".json")) {
                 trimmed
             } else if (trimmed.endsWith("/")) {
@@ -86,6 +89,22 @@ class DefaultRepoManager
             } else {
                 "$trimmed/$INDEX_FILE"
             }
+        }
+
+        /**
+         * A GitHub repository page (`github.com/{owner}/{repo}`, optional
+         * `.git` suffix and/or trailing slash, optional `www.`) is what users
+         * copy from the browser's address bar — but it serves the repo's
+         * landing page, not a published index. The app's ecosystem publishes
+         * extension repositories to the repo's `gh-pages` branch (the official
+         * repository and third-party ones share the same publish workflow),
+         * so that is where the index is resolved from. Anything deeper than
+         * the repo root is left to the default handling.
+         */
+        private fun githubRepositoryIndexUrl(url: String): String? {
+            val match = GITHUB_REPOSITORY.find(url) ?: return null
+            val (owner, repository) = match.destructured
+            return "https://raw.githubusercontent.com/$owner/$repository/gh-pages/$INDEX_FILE"
         }
 
         override suspend fun add(inputUrl: String): AddRepoResult {
@@ -166,6 +185,9 @@ class DefaultRepoManager
 
         private companion object {
             const val INDEX_FILE = "index.json"
+
+            private val GITHUB_REPOSITORY =
+                Regex("""^https?://(?:www\.)?github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?/?\z""")
 
             private val json = Json { ignoreUnknownKeys = true }
         }

@@ -16,7 +16,7 @@
 
     <string name="extensions_add_repo">Add repository</string>
     <string name="extensions_add_repo_title">Add repository</string>
-    <string name="extensions_add_repo_body">Paste the URL of an extension repository (its location or its index.json).</string>
+    <string name="extensions_add_repo_body">Paste the URL of an extension repository (its location, a GitHub repository, or its index.json).</string>
     <string name="extensions_add_repo_label">Repository URL</string>
     <string name="extensions_add_repo_confirm">Add</string>
     <string name="extensions_add_repo_cancel">Cancel</string>
