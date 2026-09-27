@@ -10,8 +10,8 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
-import kotlin.math.min
 import org.junit.Test
+import kotlin.math.min
 
 /**
  * [ImageProgressRegistry] byte accounting, exercised against a real
