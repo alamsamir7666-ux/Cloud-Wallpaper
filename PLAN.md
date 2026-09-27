@@ -191,6 +191,45 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-27 — v1.0.19 SHIPPED (suggestion panel that stays).** The
+  user's field report: whenever an extension supplies search
+  suggestions, the suggestion UI "appears and disappears immediately".
+  The assumption checked out against the code, and the root cause was a
+  timing flaw baked into v1.0.9: the panel is only visible mid-edit
+  (`searchText != query.text`), and search-as-you-type commits at
+  450ms — while suggestions fire at a 200ms debounce plus a real network
+  round trip, so the tags land right around or after the commit. On a
+  fast connection the chips flash for a frame before the commit hides
+  the panel; on a normal one they never render at all. The v1.0.9
+  comment "suggestions land before the search commits" was true only of
+  the debounce order, never of the network. The fix re-frames the
+  session: the panel stays while the field is focused and has anything
+  to offer — text the grid is not showing yet, chips that landed, a
+  request still in flight (new `suggestLoading` flag, generation-guarded
+  so a superseded request can never clear its successor's flag), or a
+  blank field with history. Only a submit (IME action, chip tap,
+  history tap) or losing the focus ends the session; the debounced
+  commit just refreshes the grid behind the panel. An explicit submit
+  now also cancels the in-flight suggestion request (via
+  `cancelSearchDebounces`), so a late landing can never pop the panel
+  back open after the user committed; and re-typing a committed text
+  refreshes its chips instead of discarding them (the old guard
+  cleared suggestions whenever the typed text equaled the committed
+  query). The panel itself gained the dropdown contract it was missing:
+  an `AnimatedVisibility` fade/slide, a tap-away scrim below the search
+  bar that drops focus (and with it the keyboard) — the search bar
+  itself stays tappable so refining is never blocked — and a light
+  "Finding tags…" progress row (16dp spinner) that holds the suggestions
+  slot while the request is in flight so the panel never flashes
+  hollow. Three new ViewModel tests pin the behavior (chips survive the
+  commit, re-typed text refreshes, a submit cancels in-flight), the
+  third behind a `SlowSuggestSources` delegating fake that adds a
+  600ms RTT so the race is real, not simulated (570 total). Gates:
+  ktlint clean, 570/0 tests, assembleRelease green after the usual one
+  daemon-OOM retry, dex audit PASS with 5,943 host classes and the
+  wallhaven plugin ABI intact; CI green; tag `v1.0.19`;
+  `Cloudimage-v1.0.19.apk`, 3.16MB.
+
 - **2026-09-27 — v1.0.18 SHIPPED (swipe-synced pill tabs + compact
   switches).** The user's field report, in four parts: the active tab
   pill looked stretched around its label; the pill should move with
