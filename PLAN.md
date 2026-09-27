@@ -191,6 +191,39 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-27 — v1.0.21 SHIPPED (two keyless scrapers + honest
+  detail info).** Two halves shipped under one version. **(a) Two new
+  official keyless providers** in the app tree as buildable
+  `:providers:*` modules, packaged by the publish-repo workflow into
+  the official gh-pages repository: **WallpaperCave 1.2.0** (13-tab
+  browse bar, `wallpapercave.com`) and **HDQWalls 1.0.1**
+  (14 shelves, hdqwalls.com, "dimension-honest" — its grid publishes
+  only a uniform 602x339 card crop, so it never reports the crop as
+  the wallpaper's resolution). Both declare keyless scrapers with
+  full offline test suites plus live-check tests that skip without
+  network. **(b) The detail info sheet tells the truth about
+  resolution and size** — new `WallpaperSources.details()` facade
+  routes to the owning provider; `DetailViewModel` fetches the
+  definitive record once per preview, ONLY when the listing lacks
+  dimensions (API-keyed sources keep their quota; failures degrade
+  silently); the sheet falls back to the record's resolution and
+  gains a File-size row with KB/MB/GB formatting, and the record's
+  page URL lights up the open-on-provider-site row. **Release
+  interruption, diagnosed and completed by the follow-up session:**
+  the feature session pushed both commits and CI went green but
+  stopped before the ritual's tag step — no `v1.0.21` tag meant the
+  tag-triggered release workflow never fired, so no APK existed.
+  This session re-ran every gate from scratch on a recovered
+  environment (ktlint clean; **654/0 tests, +73**: the two scraper
+  suites, 3 facade-routing + 3 ViewModel detail tests;
+  assembleRelease 3,182,775 bytes unsigned after the usual daemon-OOM
+  pkill+retry; dex audit PASS 5,960 host classes, wallhaven ABI
+  intact), tagged `v1.0.21`, release green, `Cloudimage-v1.0.21.apk`
+  3,195,063 bytes signed & cert-verified. The official repo index
+  re-published with all six providers (the two scrapers carry empty
+  categories — a cosmetic follow-up candidate, they just don't sort
+  under any category chip).
+
 - **2026-09-27 — v1.0.20 SHIPPED (Cloudstream-style extension system).**
   The user asked for the Extensions tab to match Cloudstream's
   extension system in structure and functionality, with their repo as
