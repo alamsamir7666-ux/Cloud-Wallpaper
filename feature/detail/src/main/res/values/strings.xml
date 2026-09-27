@@ -5,7 +5,6 @@
     <string name="detail_back">Back</string>
     <string name="detail_add_favorite">Add to favorites</string>
     <string name="detail_remove_favorite">Remove from favorites</string>
-    <string name="detail_info">Wallpaper info</string>
     <string name="detail_set_wallpaper">Set wallpaper</string>
     <string name="detail_save">Save to gallery</string>
     <string name="detail_share">Share</string>
@@ -25,6 +24,8 @@
     <string name="detail_target_both_hint">Home and lock screen together</string>
 
     <string name="detail_info_title">Wallpaper info</string>
+    <string name="detail_info_hint">Swipe up for details</string>
+    <string name="detail_info_tags">Tags</string>
     <string name="detail_info_resolution">Resolution</string>
     <string name="detail_info_provider">Provider</string>
     <string name="detail_info_rating">Content rating</string>
@@ -42,4 +43,6 @@
     <string name="detail_error_unsupported">not supported on this device</string>
     <string name="detail_error_storage">storage error</string>
     <string name="detail_more_like_this">More like this</string>
+    <string name="detail_loading_image">Loading image</string>
+    <string name="detail_loading_image_percent">Loading image, %1$d%%</string>
 </resources>

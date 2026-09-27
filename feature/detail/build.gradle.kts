@@ -21,6 +21,10 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.hilt.lifecycle.viewmodel.compose)
     implementation(libs.coil.compose)
+    implementation(libs.coil)
+    implementation(libs.telephoto.zoomable.image.coil)
+    implementation(libs.telephoto.flick)
+    implementation(project(":core:network"))
     implementation(libs.kotlinx.serialization.json)
 
     testImplementation(project(":core:testing"))

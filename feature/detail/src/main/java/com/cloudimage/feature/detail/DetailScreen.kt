@@ -4,11 +4,24 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,6 +35,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -36,7 +50,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Wallpaper
@@ -52,21 +66,28 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -79,15 +100,20 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.cloudimage.core.data.repository.ApplyTarget
 import com.cloudimage.core.model.Wallpaper
+import me.saket.telephoto.zoomable.ZoomSpec
+import me.saket.telephoto.zoomable.rememberZoomableImageState
+import me.saket.telephoto.zoomable.rememberZoomableState
 import java.io.File
 
 /**
- * Fullscreen preview + apply screen: zoomable image, favorite toggle, an info
- * sheet, set-as-wallpaper (home / lock / both), save-to-gallery and share.
- * One-shot results (snackbars, share intents) arrive through the event flow.
- * When the source declared SEARCH + TAGS and the item carries tags, a
- * same-provider "More like this" carousel rides above the action bar
- * (v1.0.9) — tapping a card reopens detail for that wallpaper.
+ * Fullscreen preview + apply screen (v1.0.17): a gallery-grade zoomable
+ * image that stays crisp at any zoom, a blurred-thumbnail backdrop with
+ * byte-accurate loading progress while the original downloads, and a
+ * bottom "swipe up for details" handle replacing the old info icon. The
+ * same-provider "More like this" carousel steps aside while zoomed so
+ * nothing competes with pixel inspection. Favorite toggle, set-as-wallpaper
+ * (home / lock / both), save-to-gallery and share ride as before; one-shot
+ * results (snackbars, share intents) arrive through the event flow.
  */
 @Composable
 fun DetailScreen(
@@ -102,6 +128,14 @@ fun DetailScreen(
     var showTargetSheet by remember { mutableStateOf(false) }
     var showInfoSheet by remember { mutableStateOf(false) }
     val wallpaper = state.wallpaper
+
+    // The preview drives this state; this screen reacts to it (hiding the
+    // carousel while zoomed).
+    val zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = MAX_ZOOM))
+    val imageState = rememberZoomableImageState(zoomableState)
+    val zoomed by remember {
+        derivedStateOf { (zoomableState.zoomFraction ?: 0f) > ZOOMED_FRACTION }
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
@@ -124,34 +158,34 @@ fun DetailScreen(
         if (wallpaper == null) {
             InvalidDestination(onBack = onBack)
         } else {
-            ZoomableWallpaperPreview(wallpaper = wallpaper)
+            ZoomableWallpaperPreview(
+                wallpaper = wallpaper,
+                imageState = imageState,
+                onDismiss = onBack,
+            )
             DetailTopBar(
                 isFavorite = state.isFavorite,
                 onBack = onBack,
                 onToggleFavorite = viewModel::onToggleFavorite,
-                onOpenInfo = { showInfoSheet = true },
             )
-            DetailBottomBar(
+            DetailBottomActions(
+                zoomed = zoomed,
                 applyBusy = state.applyOp is OperationState.Running,
                 saveBusy = state.saveOp is OperationState.Running,
                 shareBusy = state.shareOp is OperationState.Running,
+                moreLikeThis = state.moreLikeThis,
+                onOpenWallpaper = onOpenWallpaper,
+                onOpenInfo = { showInfoSheet = true },
                 onSetWallpaper = { showTargetSheet = true },
                 onSave = viewModel::onSave,
                 onShare = viewModel::onShare,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
-            if (state.moreLikeThis.isNotEmpty()) {
-                MoreLikeThisRow(
-                    wallpapers = state.moreLikeThis,
-                    onOpenWallpaper = onOpenWallpaper,
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                )
-            }
         }
 
         SnackbarHost(
             hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 96.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 128.dp),
         )
     }
 
@@ -177,7 +211,6 @@ private fun DetailTopBar(
     isFavorite: Boolean,
     onBack: () -> Unit,
     onToggleFavorite: () -> Unit,
-    onOpenInfo: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -190,22 +223,15 @@ private fun DetailTopBar(
             contentDescription = stringResource(R.string.detail_back),
             onClick = onBack,
         )
-        Row {
-            ScrimIconButton(
-                imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                contentDescription =
-                    stringResource(
-                        if (isFavorite) R.string.detail_remove_favorite else R.string.detail_add_favorite,
-                    ),
-                tint = if (isFavorite) HeartRed else Color.White,
-                onClick = onToggleFavorite,
-            )
-            ScrimIconButton(
-                imageVector = Icons.Rounded.Info,
-                contentDescription = stringResource(R.string.detail_info),
-                onClick = onOpenInfo,
-            )
-        }
+        ScrimIconButton(
+            imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+            contentDescription =
+                stringResource(
+                    if (isFavorite) R.string.detail_remove_favorite else R.string.detail_add_favorite,
+                ),
+            tint = if (isFavorite) HeartRed else Color.White,
+            onClick = onToggleFavorite,
+        )
     }
 }
 
@@ -226,6 +252,128 @@ private fun ScrimIconButton(
     }
 }
 
+/**
+ * The viewer's bottom furniture, stacked bottom-up: the action bar, the
+ * swipe-up affordance for the info sheet, and the same-provider carousel —
+ * which steps aside while the image is zoomed so nothing competes with
+ * pixel inspection (v1.0.17).
+ */
+@Composable
+private fun DetailBottomActions(
+    zoomed: Boolean,
+    applyBusy: Boolean,
+    saveBusy: Boolean,
+    shareBusy: Boolean,
+    moreLikeThis: List<Wallpaper>,
+    onOpenWallpaper: (Wallpaper) -> Unit,
+    onOpenInfo: () -> Unit,
+    onSetWallpaper: () -> Unit,
+    onSave: () -> Unit,
+    onShare: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth().navigationBarsPadding()) {
+        AnimatedVisibility(
+            visible = moreLikeThis.isNotEmpty() && !zoomed,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            MoreLikeThisRow(
+                wallpapers = moreLikeThis,
+                onOpenWallpaper = onOpenWallpaper,
+            )
+        }
+        InfoHandleRow(onOpenInfo = onOpenInfo)
+        DetailBottomBar(
+            applyBusy = applyBusy,
+            saveBusy = saveBusy,
+            shareBusy = shareBusy,
+            onSetWallpaper = onSetWallpaper,
+            onSave = onSave,
+            onShare = onShare,
+        )
+    }
+}
+
+/**
+ * "Swipe up for details" (v1.0.17): the pill follows an upward drag at
+ * half speed and springs back on release; crossing the threshold or
+ * flinging up opens the info sheet with a light haptic tick. A plain tap
+ * works too — the gesture is a bonus, never the only way in.
+ */
+@Composable
+private fun InfoHandleRow(
+    onOpenInfo: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val haptics = LocalHapticFeedback.current
+    var dragPx by remember { mutableFloatStateOf(0f) }
+    val nudgePx by animateFloatAsState(
+        targetValue = dragPx,
+        animationSpec =
+            spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessMediumLow,
+            ),
+        label = "info-handle-nudge",
+    )
+    val openThresholdPx = with(density) { INFO_OPEN_THRESHOLD.toPx() }
+    val maxDragPx = with(density) { INFO_HANDLE_MAX_DRAG.toPx() }
+    val flingVelocityPx = with(density) { INFO_FLING_VELOCITY.toPx() }
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .height(INFO_HANDLE_HEIGHT)
+                .draggable(
+                    state =
+                        rememberDraggableState { delta ->
+                            // Upward movement (negative delta) accumulates distance.
+                            dragPx = (dragPx - delta).coerceIn(0f, maxDragPx)
+                        },
+                    orientation = Orientation.Vertical,
+                    onDragStarted = { },
+                    onDragStopped = { velocity ->
+                        if (dragPx >= openThresholdPx || velocity <= -flingVelocityPx) {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onOpenInfo()
+                        }
+                        dragPx = 0f
+                    },
+                ).clickable(onClick = onOpenInfo),
+    ) {
+        Surface(
+            color = Color.White.copy(alpha = 0.12f),
+            shape = RoundedCornerShape(50),
+            modifier =
+                Modifier.graphicsLayer {
+                    translationY = -nudgePx / INFO_HANDLE_FOLLOW_FACTOR
+                },
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.KeyboardArrowUp,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = stringResource(R.string.detail_info_hint),
+                    color = Color.White.copy(alpha = 0.9f),
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(start = 4.dp),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun DetailBottomBar(
     applyBusy: Boolean,
@@ -239,7 +387,7 @@ private fun DetailBottomBar(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp, vertical = 16.dp),
+        modifier = modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
     ) {
         Button(onClick = onSetWallpaper, enabled = !applyBusy) {
             if (applyBusy) {
@@ -288,9 +436,9 @@ private fun ActionIconButton(
 
 /**
  * The "More like this" carousel (v1.0.9): compact same-provider lookalikes
- * riding above the action bar, mirroring the home carousels' card metrics
- * at a smaller scale so the fullscreen image stays the hero. It only
- * exists when the ViewModel found something — empty means hidden.
+ * mirroring the home carousels' card metrics at a smaller scale so the
+ * fullscreen image stays the hero. It only exists when the ViewModel
+ * found something — empty means hidden — and it slides away while zoomed.
  */
 @Composable
 private fun MoreLikeThisRow(
@@ -303,8 +451,6 @@ private fun MoreLikeThisRow(
         modifier =
             modifier
                 .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(bottom = 104.dp)
                 .testTag("detail:more-like-this"),
     ) {
         Text(
@@ -402,7 +548,7 @@ private fun TargetSheet(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun InfoSheet(
     wallpaper: Wallpaper,
@@ -428,6 +574,37 @@ private fun InfoSheet(
             value = wallpaper.contentRating.name.lowercase(),
         )
         InfoRow(label = stringResource(R.string.detail_info_id), value = wallpaper.id)
+        if (wallpaper.tags.isNotEmpty()) {
+            Text(
+                text = stringResource(R.string.detail_info_tags),
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(horizontal = 24.dp),
+            ) {
+                wallpaper.tags.take(MAX_INFO_TAG_CHIPS).forEach { tag ->
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                    ) {
+                        Text(
+                            text = tag,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier =
+                                Modifier
+                                    .widthIn(max = 220.dp)
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+            }
+        }
         if (wallpaper.sourceUrl != null) {
             ListItem(
                 headlineContent = { Text(stringResource(R.string.detail_info_source)) },
@@ -515,6 +692,19 @@ private val HeartRed = Color(0xFFEF6C74)
 
 /** Height of one "More like this" card. */
 private val LOOKALIKE_HEIGHT = 128.dp
+
+/** Zoom ceiling for the preview, relative to the image's native size. */
+private const val MAX_ZOOM = 5f
+
+/** The swipe-up handle: row height, drag gating, and feedback tuning. */
+private val INFO_HANDLE_HEIGHT = 48.dp
+private val INFO_OPEN_THRESHOLD = 48.dp
+private val INFO_HANDLE_MAX_DRAG = 120.dp
+private val INFO_FLING_VELOCITY = 800.dp
+private const val INFO_HANDLE_FOLLOW_FACTOR = 2f
+
+/** Tags shown in the info sheet before the list is cut. */
+private const val MAX_INFO_TAG_CHIPS = 12
 
 /** Fires the system share sheet with a FileProvider-backed image uri. */
 private fun shareWallpaper(
