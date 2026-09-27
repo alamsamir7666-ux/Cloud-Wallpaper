@@ -22,7 +22,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -37,6 +36,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.cloudimage.app.R
+import com.cloudimage.core.designsystem.CompactSwitch
 
 /**
  * First-run welcome: a one-screen introduction with the one decision that
@@ -136,7 +136,7 @@ fun OnboardingScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Switch(checked = sfwOnly, onCheckedChange = { sfwOnly = it })
+                CompactSwitch(checked = sfwOnly, onCheckedChange = { sfwOnly = it })
             }
         }
 

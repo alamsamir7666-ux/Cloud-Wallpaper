@@ -40,7 +40,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -58,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cloudimage.core.data.repository.ApplyError
+import com.cloudimage.core.designsystem.CompactSwitch
 import com.cloudimage.core.model.AppUpdate
 import com.cloudimage.core.model.RotationSettings
 import com.cloudimage.core.model.RotationTarget
@@ -421,7 +421,7 @@ private fun SwitchRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        CompactSwitch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

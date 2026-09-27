@@ -1,6 +1,5 @@
 package com.cloudimage.feature.browse
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,8 +21,6 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ScrollableTabRow
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -36,12 +33,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.cloudimage.core.designsystem.PillTabRow
 import com.cloudimage.core.designsystem.WallpaperCard
 import com.cloudimage.core.model.Wallpaper
 
@@ -49,9 +45,12 @@ import com.cloudimage.core.model.Wallpaper
  * The tabbed home (v1.0.10) — CloudStream's `mainPage` model, one tab per
  * feed instead of one row per feed: the personal "Recently applied" tab
  * leads the bar whenever it exists, followed by the provider's declared
- * sections. The bar is a scrollable pill tab row; the pages swipe through a
- * HorizontalPager, and every section page is a staggered grid fed by the
- * section's own pagination — one feed at a time, nothing stacked.
+ * sections. The bar is a scrollable pill tab row whose single pill is
+ * swipe-synced (v1.0.18): it slides and resizes between tabs in real time
+ * with the pager's drag instead of waiting for the settle. The pages swipe
+ * through a HorizontalPager, and every section page is a staggered grid
+ * fed by the section's own pagination — one feed at a time, nothing
+ * stacked.
  *
  * Tab selection lives in the ViewModel ([BrowseUiState.selectedHomeTab]):
  * taps and settled swipes both land in [onTabSelected], so the bar and the
@@ -98,10 +97,13 @@ internal fun SectionsHome(
         // One feed alone needs no bar — the tab would be a label, not a
         // switch; the pager still renders the single page.
         if (tabs.size > 1) {
-            HomeTabRow(
-                tabs = tabs,
+            PillTabRow(
+                tabs = tabs.map { it.title ?: stringResource(R.string.browse_recently_applied) },
                 selectedIndex = selectedIndex,
+                pageFraction = { pagerState.currentPage + pagerState.currentPageOffsetFraction },
                 onSelect = { index -> onTabSelected(tabs[index].key) },
+                tabTestTag = { index -> "browse:home-tab:${tabs[index].key}" },
+                modifier = Modifier.fillMaxWidth().testTag("browse:home-tabs"),
             )
         }
         HorizontalPager(
@@ -128,68 +130,6 @@ internal fun SectionsHome(
                     onLoadMore = { onLoadMoreSection(section.key) },
                 )
             }
-        }
-    }
-}
-
-/**
- * The scrollable pill bar: the active tab sits in a rounded
- * secondaryContainer pill, labels outside the pill mute to
- * on-surface-variant. The pill is the tab's own background (v1.0.12 fix):
- * material3 draws the TabRow indicator slot ON TOP of the tab content, so
- * the full-height pill placed there covered the active label entirely —
- * as a background it always sits behind the text, and it fades in/out
- * with the selection instead of sliding between positions.
- */
-@Composable
-private fun HomeTabRow(
-    tabs: List<HomeTab>,
-    selectedIndex: Int,
-    onSelect: (Int) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    ScrollableTabRow(
-        selectedTabIndex = selectedIndex,
-        edgePadding = 16.dp,
-        containerColor = Color.Transparent,
-        divider = {},
-        indicator = {},
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .testTag("browse:home-tabs"),
-    ) {
-        tabs.forEachIndexed { index, tab ->
-            val selected = index == selectedIndex
-            val pillColor by animateColorAsState(
-                targetValue =
-                    if (selected) {
-                        MaterialTheme.colorScheme.secondaryContainer
-                    } else {
-                        Color.Transparent
-                    },
-                label = "home-tab-pill",
-            )
-            Tab(
-                selected = selected,
-                onClick = { onSelect(index) },
-                text = {
-                    Text(
-                        text = tab.title ?: stringResource(R.string.browse_recently_applied),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                        maxLines = 1,
-                    )
-                },
-                selectedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier =
-                    Modifier
-                        .padding(horizontal = 4.dp, vertical = 7.dp)
-                        .clip(RoundedCornerShape(percent = 50))
-                        .background(pillColor)
-                        .testTag("browse:home-tab:${tab.key}"),
-            )
         }
     }
 }

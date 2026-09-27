@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,17 +28,15 @@ import androidx.compose.material.icons.rounded.HistoryEdu
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.cloudimage.core.designsystem.PillTabRow
 import com.cloudimage.core.designsystem.WallpaperCard
 import com.cloudimage.core.model.HistoryAction
 import com.cloudimage.core.model.HistoryEntry
@@ -71,11 +72,15 @@ private enum class LibraryTab {
  * The user's own collection: saved favorites as a masonry grid on the
  * first tab, the view/apply/download history feed on the second.
  *
+ * Since v1.0.18 the two tabs swipe through a HorizontalPager under the
+ * same swipe-synced pill bar the browse home uses — the pill slides
+ * between "Favorites" and "History" with the finger, and the settle is
+ * the selection.
+ *
  * Both lists are Room streams, so a heart tapped in the detail screen
  * updates this screen live. Saved items deliberately ignore the SFW-only
  * setting — they were clamped at browse time and are the user's picks.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
     onWallpaperClick: (Wallpaper) -> Unit,
@@ -86,6 +91,22 @@ fun LibraryScreen(
     var selectedTab by rememberSaveable { mutableIntStateOf(LibraryTab.FAVORITES.ordinal) }
     var showClearDialog by remember { mutableStateOf(false) }
     val tab = LibraryTab.entries[selectedTab]
+    val pagerState = rememberPagerState(initialPage = selectedTab, pageCount = { LibraryTab.entries.size })
+
+    // A tap on the bar moves the pager (animated); a swipe that settles
+    // is a selection like any tap — the bar and the pages can never
+    // disagree about which list is active.
+    LaunchedEffect(selectedTab) {
+        if (pagerState.settledPage != selectedTab) {
+            pagerState.animateScrollToPage(selectedTab)
+        }
+    }
+    LaunchedEffect(pagerState.settledPage) {
+        val page = pagerState.settledPage
+        if (page != selectedTab) {
+            selectedTab = page
+        }
+    }
 
     Column(
         modifier =
@@ -116,47 +137,49 @@ fun LibraryScreen(
             }
         }
 
-        // PrimaryTabRow: the v1.0.9 housekeeping swap — the old TabRow is
-        // the deprecated M3 top-level style; same arguments, modern look.
-        PrimaryTabRow(selectedTabIndex = selectedTab) {
-            Tab(
-                selected = tab == LibraryTab.FAVORITES,
-                onClick = { selectedTab = LibraryTab.FAVORITES.ordinal },
-                text = { Text(stringResource(R.string.library_tab_favorites)) },
-            )
-            Tab(
-                selected = tab == LibraryTab.HISTORY,
-                onClick = { selectedTab = LibraryTab.HISTORY.ordinal },
-                text = { Text(stringResource(R.string.library_tab_history)) },
-            )
-        }
+        PillTabRow(
+            tabs =
+                listOf(
+                    stringResource(R.string.library_tab_favorites),
+                    stringResource(R.string.library_tab_history),
+                ),
+            selectedIndex = selectedTab,
+            pageFraction = { pagerState.currentPage + pagerState.currentPageOffsetFraction },
+            onSelect = { selectedTab = it },
+        )
 
-        when (tab) {
-            LibraryTab.FAVORITES ->
-                if (state.hasFavorites) {
-                    FavoritesGrid(
-                        state = state,
-                        onWallpaperClick = onWallpaperClick,
-                        onRemove = viewModel::removeFromFavorites,
-                    )
-                } else {
-                    LibraryEmpty(
-                        icon = Icons.Rounded.Favorite,
-                        titleRes = R.string.library_empty_favorites_title,
-                        bodyRes = R.string.library_empty_favorites_body,
-                    )
-                }
+        HorizontalPager(
+            state = pagerState,
+            beyondViewportPageCount = 1,
+            modifier = Modifier.fillMaxSize(),
+        ) { page ->
+            when (LibraryTab.entries[page]) {
+                LibraryTab.FAVORITES ->
+                    if (state.hasFavorites) {
+                        FavoritesGrid(
+                            state = state,
+                            onWallpaperClick = onWallpaperClick,
+                            onRemove = viewModel::removeFromFavorites,
+                        )
+                    } else {
+                        LibraryEmpty(
+                            icon = Icons.Rounded.Favorite,
+                            titleRes = R.string.library_empty_favorites_title,
+                            bodyRes = R.string.library_empty_favorites_body,
+                        )
+                    }
 
-            LibraryTab.HISTORY ->
-                if (state.hasHistory) {
-                    HistoryList(history = state.history, onWallpaperClick = onWallpaperClick)
-                } else {
-                    LibraryEmpty(
-                        icon = Icons.Rounded.HistoryEdu,
-                        titleRes = R.string.library_empty_history_title,
-                        bodyRes = R.string.library_empty_history_body,
-                    )
-                }
+                LibraryTab.HISTORY ->
+                    if (state.hasHistory) {
+                        HistoryList(history = state.history, onWallpaperClick = onWallpaperClick)
+                    } else {
+                        LibraryEmpty(
+                            icon = Icons.Rounded.HistoryEdu,
+                            titleRes = R.string.library_empty_history_title,
+                            bodyRes = R.string.library_empty_history_body,
+                        )
+                    }
+            }
         }
     }
 

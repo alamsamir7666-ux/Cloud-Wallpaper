@@ -37,7 +37,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -57,6 +56,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.cloudimage.core.designsystem.CompactSwitch
 import com.cloudimage.extensions.core.ExtensionStatus
 import com.cloudimage.extensions.core.InstalledExtension
 import com.cloudimage.extensions.core.RepoError
@@ -486,7 +486,7 @@ private fun ExtensionRow(
                 }
             }
             if (manifest != null) {
-                Switch(
+                CompactSwitch(
                     checked = !disabled,
                     onCheckedChange = onToggle,
                     modifier =
