@@ -1,0 +1,10 @@
+{
+  "id": "cloudimage.wallpapercave",
+  "name": "WallpaperCave",
+  "versionName": "1.2.0",
+  "versionCode": 3,
+  "author": "Cloudimage",
+  "description": "Wallpapers from wallpapercave.com - scraped, keyless.",
+  "apiVersion": 1,
+  "entryClass": "com.cloudimage.wallpapercave.WallpaperCaveWallpaperProvider"
+}

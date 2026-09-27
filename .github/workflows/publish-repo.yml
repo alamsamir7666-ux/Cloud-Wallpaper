@@ -40,6 +40,8 @@ jobs:
             :providers:unsplash:packageExtension \
             :providers:pexels:packageExtension \
             :providers:pixabay:packageExtension \
+            :providers:wallpapercave:packageExtension \
+            :providers:hdqwalls:packageExtension \
             --no-daemon
 
       - name: Assemble repository
