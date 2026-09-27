@@ -191,6 +191,44 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-27 — v1.0.18 SHIPPED (swipe-synced pill tabs + compact
+  switches).** The user's field report, in four parts: the active tab
+  pill looked stretched around its label; the pill should move with
+  the swipe, not snap at the end; the extension-card toggles were too
+  large for the card; the settings toggles likewise. Diagnosis first —
+  the stretch was `ScrollableTabRow`'s baked-in 90dp minimum tab
+  width: a short label rides in a tab two-thirds padding, and the pill
+  (the tab's own background since the v1.0.12 indicator-slot fix)
+  inherits every wasted pixel. And a per-tab background can never
+  slide — it can only fade in and out at selection time, which is why
+  the pill "snapped" on settle. The fix is a new designsystem
+  `PillTabRow`: a custom scrollable `Layout` with one shared pill
+  drawn behind the labels, whose geometry is interpolated every layout
+  pass from the pager's live fraction (`currentPage +
+  currentPageOffsetFraction`, read in the measure phase so a running
+  swipe re-measures one tiny node per frame — labels never
+  recompose). At 50% swipe the pill is halfway between the two tabs
+  and has already adopted half the target's width; a cancelled swipe
+  rides the pager's own snap-back home. The bar scrolls itself to
+  keep the sliding pill in view — but only for pager-driven motion,
+  so a finger on the bar itself still browses freely. The pill now
+  hugs its label (14dp horizontal padding, 32dp pill height) while
+  labels keep full 48dp touch slots with a capsule ripple and Tab
+  semantics. The Library's Favorites/History pair moved under the
+  same bar as a `HorizontalPager` — both top-level screens now swipe,
+  with the same tap/settle contract (bar and pages can never
+  disagree). The toggles: `CompactSwitch` (designsystem) wraps the
+  material3 switch at 80% — the same colors, thumb animation, and
+  behavior at ~42x26dp — and now guards the extension cards, every
+  settings switch row, and the onboarding SFW choice. Twelve new
+  unit tests pin the interpolation and keep-in-view math as pure
+  functions (567 total). Gates: one `ktlintFormat` round
+  (chain-wrapping after multiline calls is attach-the-dot style),
+  567/0 tests, assembleRelease green after the usual one daemon-OOM
+  retry, dex audit PASS with 5,940 host classes and the wallhaven
+  plugin ABI intact; CI green; tag `v1.0.18`;
+  `Cloudimage-v1.0.18.apk`, 3.17MB.
+
 - **2026-09-27 — v1.0.17 SHIPPED (gallery-grade viewer).** The user's
   field report, in three parts: zooming a fully loaded image looked
   blurry while the same downloaded file zoomed crisp in the phone
