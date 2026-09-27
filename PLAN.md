@@ -191,6 +191,50 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-27 — v1.0.20 SHIPPED (Cloudstream-style extension system).**
+  The user asked for the Extensions tab to match Cloudstream's
+  extension system in structure and functionality, with their repo as
+  the reference (two screenshots + the recloudstream/cloudstream
+  source). The rework, in full: **the extensions tab is now a repository
+  browser** — one full-bleed row per added repo (monogram avatar, name,
+  url, trailing delete; tap opens the catalog, long-press copies
+  "name : url"), an empty state when no repos exist, and the add-repo
+  FAB kept from v1.0.13. **The counts bar moved from the list body to a
+  fixed bottom bar** and split into Cloudstream's three populations —
+  Downloaded / Disabled / Not downloaded — over a segmented
+  proportional track (neutral track when everything is zero; the
+  v1.0.10 zero-weight crash guard stays). Tapping it opens the
+  installed list. **Repo detail is a pushed screen** (repo id rides the
+  nav graph Base64 URL-safe — it's a URL full of path-reserved
+  characters): search over one repo's catalog, category filter chips
+  when the index declares categories (rendered only then, per the
+  user's "only if my extensions have categories"), and one row per
+  extension — avatar, name, `v + size` meta, short description, and the
+  per-item affordance the user asked for: download until installed,
+  delete after (confirmed first), update riding the download as an
+  install-over with an "Update to vX" chip. **The installed list** (was
+  the manager's top section) keeps every per-source control — enable
+  switch, API key flow, load diagnostics, uninstall — behind its own
+  search. The ViewModels split browser / repo detail / installed, and
+  the shared visual atoms (monogram avatar, chips, size formatting)
+  live in `ExtensionsSharedUi`. The existing bottom nav was KEPT — the
+  app's four labeled destinations already fit its model, and swapping
+  chrome only on one screen would fragment wayfinding (the user's
+  brief allowed exactly this). Schema: `RepoPackageEntry` + `name` +
+  `categories`, `ExtensionManifest` + `categories`, both defaulted so
+  old apps and old indexes interoperate both ways; the index builder
+  carries them; the four bundled providers declare wallpaper-relevant
+  categories (wallhaven anime/abstract/nature, unsplash
+  photography/nature/minimal, pexels photography/nature, pixabay
+  nature/photography/abstract). Provider versions intentionally NOT
+  bumped — categories only feed the catalog UI, so the re-published
+  gh-pages index alone carries them with no false update prompts.
+  Gates: ktlint clean (one auto-fix round), 581/0 tests (feature tests
+  28→38 across three VM suites + manifest categories parse test),
+  assembleRelease survived the usual daemon-OOM kill (pkill + retry),
+  dex audit PASS 5,957 host classes, wallhaven plugin ABI intact; CI
+  green; tag `v1.0.20`; `Cloudimage-v1.0.20.apk`, 3.19MB.
+
 - **2026-09-27 — v1.0.19 SHIPPED (suggestion panel that stays).** The
   user's field report: whenever an extension supplies search
   suggestions, the suggestion UI "appears and disappears immediately".
