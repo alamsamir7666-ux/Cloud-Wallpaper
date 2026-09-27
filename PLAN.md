@@ -191,6 +191,48 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-27 — v1.0.17 SHIPPED (gallery-grade viewer).** The user's
+  field report, in three parts: zooming a fully loaded image looked
+  blurry while the same downloaded file zoomed crisp in the phone
+  Gallery; the info icon was clutter; no feedback while an image
+  downloads. Diagnosis first, as always — the blur was not a URL
+  problem (every provider's `fullUrl` is the original file: wallhaven
+  `path`, pexels `src.original`, unsplash `urls.full`), it was the
+  decode: Coil's default sizing decodes an image to the screen's
+  dimensions, and the viewer then scaled that screen-sized bitmap up to
+  5x through a graphics layer. The Gallery, meanwhile, decodes
+  zoomed-in regions as tiles from the full-resolution original. The
+  fix is the same architecture: the viewer now renders through
+  telephoto (`me.saket.telephoto:zoomable-image-coil` 0.19.0 + `flick`)
+  — the original streams into Coil's disk cache and sub-sampled tiles
+  decode on demand as you zoom, so pinch-zoom stays crisp at any
+  magnification with no OutOfMemory risk, and the old hand-rolled
+  gesture code (which also let the image be panned clean off-screen,
+  no clamping, no fling, no focal-point pinch) is retired wholesale.
+  Part two, the info icon is gone: a "Swipe up for details" handle
+  above the action bar opens the sheet on a half-speed-following
+  upward drag (spring-back, haptic tick, fling-aware) or a plain tap —
+  the gesture is a bonus, never the only way in. Part three, loading
+  feedback: a corner chip reports byte-accurate progress ("47%", or
+  "1.2 MB" when the server declares no length) fed by the new
+  `ImageProgressRegistry` (core/network) — an OkHttp interceptor on
+  the app-wide Coil loader (installed via `ImageLoaderFactory` on the
+  application, which also drops the 30 s call timeout so multi-MB
+  originals survive slow networks; thumbnails pass through untouched,
+  zero cost for unobserved URLs). Polish on top, since the user asked
+  for it: a blurred thumbnail backdrop fills the screen while the
+  original downloads, a quick downward flick anywhere on the image
+  dismisses the screen (disabled while zoomed, so panning always
+  wins), the "More like this" carousel steps aside while zoomed so
+  nothing competes with pixel inspection, and the info sheet now
+  shows the wallpaper's tags as chips. Shipped: ktlint clean, 555
+  tests green (+4 registry cases over MockWebServer: monotonic byte
+  progress, unknown-length degradation, unobserved pass-through,
+  reset freshness; one CI round-trip on a test-import ordering
+  nit caught after the fact), assembleRelease green, dex audit PASS
+  with 5,960 host classes and the wallhaven plugin ABI intact; CI
+  green; tag `v1.0.17`; `Cloudimage-v1.0.17.apk`, 3.17MB.
+
 - **2026-09-26 — v1.0.16 SHIPPED (Cloudflare solves attach to a real
   window).** The v1.0.15 field report: a wallpaperflare install on a real
   phone still surfaced "source failed: wallpaperflare answered HTTP 403".
