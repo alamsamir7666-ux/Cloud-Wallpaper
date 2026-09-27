@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="extensions_title">Extensions</string>
-    <string name="extensions_installed_section">Installed extensions</string>
+    <string name="extensions_installed_title">Installed extensions</string>
     <string name="extensions_status_ready">Ready</string>
     <string name="extensions_status_corrupted">Corrupted</string>
     <string name="extensions_status_untrusted">Untrusted</string>
@@ -11,8 +11,9 @@
     <string name="extensions_uninstall_body">%1$s will be removed from this device. You can install it again from its repository.</string>
     <string name="extensions_uninstall_confirm">Uninstall</string>
     <string name="extensions_uninstall_cancel">Cancel</string>
+    <string name="extensions_uninstalled_snackbar">%1$s uninstalled</string>
     <string name="extensions_empty_title">No extensions installed</string>
-    <string name="extensions_empty_body">Add a repository below to browse and install wallpaper sources.</string>
+    <string name="extensions_empty_body_installed">Install one from one of your repositories.</string>
 
     <string name="extensions_add_repo">Add repository</string>
     <string name="extensions_add_repo_title">Add repository</string>
@@ -22,16 +23,15 @@
     <string name="extensions_add_repo_cancel">Cancel</string>
     <string name="extensions_add_repo_error">That did not look like a repository. Check the URL and try again.</string>
     <string name="extensions_repo_added">Repository added</string>
-    <string name="extensions_repos_section">Repositories</string>
-    <string name="extensions_repos_empty">No repositories yet. Add one to install more wallpaper sources.</string>
+    <string name="extensions_repo_copied">Repository details copied</string>
+    <string name="extensions_repos_empty_title">No repositories yet</string>
+    <string name="extensions_repos_empty_body">Add one to browse and install more wallpaper sources.</string>
     <string name="extensions_remove_repo">Remove repository</string>
     <string name="extensions_remove_repo_title">Remove repository?</string>
     <string name="extensions_remove_repo_body">%1$s will be removed. Extensions you installed from it stay installed.</string>
     <string name="extensions_remove_repo_confirm">Remove</string>
     <string name="extensions_remove_repo_cancel">Cancel</string>
     <string name="extensions_install_package">Install</string>
-    <string name="extensions_catalog_entry_details">v%1$s · %2$s · %3$s</string>
-    <string name="extensions_catalog_installed">Installed</string>
     <string name="extensions_installed_snackbar">%1$s installed</string>
     <string name="extensions_install_failed_snackbar">Install failed: %1$s</string>
     <string name="extensions_key_needed">API key needed</string>
@@ -48,12 +48,21 @@
     <string name="extensions_enable">Enable source</string>
     <string name="extensions_disable">Disable source</string>
     <string name="extensions_disabled_chip">Disabled</string>
-    <string name="extensions_search_hint">Search the catalog</string>
     <string name="extensions_search_clear">Clear search</string>
     <string name="extensions_refresh_repo">Check for updates</string>
     <string name="extensions_catalog_update_to">Update to v%1$s</string>
     <string name="extensions_updated_snackbar">%1$s updated</string>
-    <string name="extensions_stats_enabled">%1$d enabled</string>
-    <string name="extensions_stats_disabled">%1$d disabled</string>
-    <string name="extensions_stats_available">%1$d available</string>
+
+    <!-- v1.0.20: Cloudstream-style repository browser. -->
+    <string name="extensions_stats_downloaded">Downloaded: %1$d</string>
+    <string name="extensions_stats_disabled">Disabled: %1$d</string>
+    <string name="extensions_stats_not_downloaded">Not downloaded: %1$d</string>
+    <string name="extensions_back">Back</string>
+    <string name="extensions_search_catalog">Search this repository</string>
+    <string name="extensions_search_installed">Search installed extensions</string>
+    <string name="extensions_category_all">All</string>
+    <string name="extensions_catalog_failed">Couldn\'t load this repository.</string>
+    <string name="extensions_catalog_retry">Retry</string>
+    <string name="extensions_catalog_empty">No extensions in this repository.</string>
+    <string name="extensions_catalog_no_matches">Nothing matches your search.</string>
 </resources>

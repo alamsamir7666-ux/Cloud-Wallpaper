@@ -15,7 +15,10 @@ import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.feature.browse.BrowseScreen
 import com.cloudimage.feature.detail.DetailDestination
 import com.cloudimage.feature.detail.DetailScreen
+import com.cloudimage.feature.extensions.ExtensionsDestination
 import com.cloudimage.feature.extensions.ExtensionsScreen
+import com.cloudimage.feature.extensions.InstalledExtensionsScreen
+import com.cloudimage.feature.extensions.RepoDetailScreen
 import com.cloudimage.feature.library.LibraryScreen
 import com.cloudimage.feature.settings.SettingsScreen
 
@@ -57,7 +60,26 @@ fun CloudimageNavHost(
             )
         }
         composable(TopLevelDestination.EXTENSIONS.route) {
-            ExtensionsScreen()
+            ExtensionsScreen(
+                onOpenRepo = { repo ->
+                    navController.navigate(ExtensionsDestination.createRepoRoute(repo.id))
+                },
+                onOpenInstalled = {
+                    navController.navigate(ExtensionsDestination.installedRoute)
+                },
+            )
+        }
+        composable(
+            route = ExtensionsDestination.repoRoute,
+            arguments =
+                listOf(
+                    navArgument(ExtensionsDestination.repoArg) { type = NavType.StringType },
+                ),
+        ) {
+            RepoDetailScreen(onBack = { navController.popBackStack() })
+        }
+        composable(ExtensionsDestination.installedRoute) {
+            InstalledExtensionsScreen(onBack = { navController.popBackStack() })
         }
         composable(TopLevelDestination.SETTINGS.route) {
             SettingsScreen(
