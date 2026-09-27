@@ -5,6 +5,7 @@
   "versionCode": 1,
   "author": "Cloudimage",
   "description": "Wallpapers from wallhaven.cc - the app's original default source.",
+  "categories": ["anime", "abstract", "nature"],
   "apiVersion": 1,
   "entryClass": "com.cloudimage.wallhaven.WallhavenWallpaperProvider"
 }

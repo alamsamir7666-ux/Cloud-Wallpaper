@@ -23,6 +23,7 @@ data class ExtensionManifest(
     val versionCode: Int,
     val author: String = "",
     val description: String = "",
+    val categories: List<String> = emptyList(),
     val apiVersion: Int,
     val entryClass: String,
 ) {

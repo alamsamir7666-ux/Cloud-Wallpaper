@@ -5,6 +5,7 @@
   "versionCode": 1,
   "author": "Cloudimage",
   "description": "Free high-resolution photography from unsplash.com. Requires a free API key.",
+  "categories": ["photography", "nature", "minimal"],
   "apiVersion": 1,
   "entryClass": "com.cloudimage.unsplash.UnsplashWallpaperProvider"
 }

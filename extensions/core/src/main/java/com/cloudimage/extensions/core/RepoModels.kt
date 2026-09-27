@@ -24,7 +24,10 @@ data class StoredRepo(
  * without downloading anything.
  *
  * [fileName] is relative to the repo root; [sha256] is the promise the
- * installer verifies before trusting the downloaded bytes.
+ * installer verifies before trusting the downloaded bytes. [categories]
+ * (v1.0.20) are the content types the source serves ("anime", "nature"),
+ * lower-case and author-declared; a repo whose entries carry none simply
+ * renders without the category filter.
  */
 @Serializable
 data class RepoPackageEntry(
@@ -32,11 +35,15 @@ data class RepoPackageEntry(
     val fileName: String,
     val sha256: String,
     val sizeBytes: Long = 0L,
+    /** Display name from the manifest (v1.0.20); blank falls back to a
+     * capitalized id segment when rendered. */
+    val name: String = "",
     val versionName: String = "",
     val versionCode: Int = 1,
     val apiVersion: Int = 1,
     val author: String = "",
     val description: String = "",
+    val categories: List<String> = emptyList(),
 )
 
 /** Wire shape of a repo's `index.json`. */

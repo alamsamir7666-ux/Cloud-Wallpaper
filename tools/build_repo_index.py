@@ -13,11 +13,13 @@ the app's repo manager can parse:
           "fileName": "cloudimage.wallhaven.zip",
           "sha256": "…",
           "sizeBytes": 22304,
+          "name": "Wallhaven",
           "versionName": "1.0.0",
           "versionCode": 1,
           "apiVersion": 1,
           "author": "Cloudimage",
-          "description": "…"
+          "description": "…",
+          "categories": ["anime", "nature"]
         }
       ]
     }
@@ -59,17 +61,26 @@ def build_index(packages_dir: Path, repo_name: str) -> dict:
     packages = []
     for zip_path in sorted(packages_dir.glob("*.zip")):
         manifest = read_manifest(zip_path)
+        # Content types the source serves ("anime", "nature", ...). Lower-cased
+        # and trimmed so chip labels are stable; absent in older manifests.
+        categories = [
+            category.strip().lower()
+            for category in manifest.get("categories", [])
+            if isinstance(category, str) and category.strip()
+        ]
         packages.append(
             {
                 "id": manifest["id"],
                 "fileName": zip_path.name,
                 "sha256": sha256_of(zip_path),
                 "sizeBytes": zip_path.stat().st_size,
+                "name": str(manifest["name"]),
                 "versionName": str(manifest["versionName"]),
                 "versionCode": int(manifest["versionCode"]),
                 "apiVersion": int(manifest["apiVersion"]),
                 "author": str(manifest.get("author", "")),
                 "description": str(manifest.get("description", "")),
+                "categories": categories,
             }
         )
     return {"name": repo_name, "packages": packages}

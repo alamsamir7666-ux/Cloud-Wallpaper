@@ -5,6 +5,7 @@
   "versionCode": 1,
   "author": "Cloudimage",
   "description": "Free stock photos and wallpapers from pexels.com. Requires a free API key.",
+  "categories": ["photography", "nature"],
   "apiVersion": 1,
   "entryClass": "com.cloudimage.pexels.PexelsWallpaperProvider"
 }

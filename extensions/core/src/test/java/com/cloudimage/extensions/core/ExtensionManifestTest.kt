@@ -52,6 +52,40 @@ class ExtensionManifestTest {
     }
 
     @Test
+    fun parsesCategoriesAndDefaultsToEmpty() {
+        val withCategories =
+            ExtensionManifest.parse(
+                """
+                {
+                  "id": "cloudimage.demo",
+                  "name": "Demo",
+                  "versionName": "1.0.0",
+                  "versionCode": 1,
+                  "apiVersion": 1,
+                  "entryClass": "com.cloudimage.fixture.demo.DemoWallpaperProvider",
+                  "categories": ["anime", "nature"]
+                }
+                """.trimIndent(),
+            )
+        val withoutCategories =
+            ExtensionManifest.parse(
+                """
+                {
+                  "id": "cloudimage.demo",
+                  "name": "Demo",
+                  "versionName": "1.0.0",
+                  "versionCode": 1,
+                  "apiVersion": 1,
+                  "entryClass": "com.cloudimage.fixture.demo.DemoWallpaperProvider"
+                }
+                """.trimIndent(),
+            )
+
+        assertEquals(listOf("anime", "nature"), withCategories.categories)
+        assertEquals(emptyList<String>(), withoutCategories.categories)
+    }
+
+    @Test
     fun rejectsMalformedJson() = assertParseFails("not json at all")
 
     @Test
