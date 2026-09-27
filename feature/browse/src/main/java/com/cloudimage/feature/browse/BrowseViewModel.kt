@@ -146,6 +146,8 @@ data class BrowseUiState(
     val history: List<String> = emptyList(),
     /** Tag suggestions for the text being typed, from TAGS-capable sources. */
     val suggestions: List<String> = emptyList(),
+    /** True while suggestions for the text being typed are still in flight (v1.0.19). */
+    val suggestLoading: Boolean = false,
     /** True while the search field holds the keyboard focus. */
     val searchFocused: Boolean = false,
     /** Sources that failed the last merged grid search (v1.0.9). */
@@ -176,13 +178,21 @@ data class BrowseUiState(
 
     /**
      * The search panel (history + tag suggestions) shows while the field
-     * is focused and mid-edit: a blank field with history to offer, or
-     * text that differs from what the grid is already showing.
+     * is focused and there is something to offer: text the grid is not
+     * showing yet, suggestions that landed or are still in flight, or a
+     * blank field with history. The debounced search commit (v1.0.19) no
+     * longer ends the session — chips survive the grid catching up with
+     * the typed text; only a submit or losing the focus closes it.
      */
     val showSearchPanel: Boolean
         get() =
             searchFocused &&
-                (searchText != query.text || (searchText.isBlank() && history.isNotEmpty()))
+                (
+                    searchText != query.text ||
+                        suggestions.isNotEmpty() ||
+                        suggestLoading ||
+                        (searchText.isBlank() && history.isNotEmpty())
+                )
 
     /**
      * A pinned search with nothing to show offers the merged feed as the
@@ -258,6 +268,9 @@ class BrowseViewModel
 
         /** The in-flight tag suggestion request. */
         private var suggestJob: Job? = null
+
+        /** Bumped per suggestion request; a stale completion must not clear the loading flag. */
+        private var suggestGeneration = 0
 
         /** The in-flight sections-list request; cancelled on every restart. */
         private var sectionsJob: Job? = null
@@ -386,7 +399,9 @@ class BrowseViewModel
          * only explicit commits (IME submit, suggestion tap, history tap)
          * do, so the history reads as searches the user chose, not prefixes
          * they typed past. A blank mirrors the blank submit: the home is
-         * the blank state.
+         * the blank state. Committing does NOT close the search panel
+         * (v1.0.19) — the field still holds its focus and its suggestion
+         * chips; a submit or a focus loss ends the session.
          */
         private fun onDebouncedSearch() {
             val text = _state.value.searchText
@@ -412,24 +427,40 @@ class BrowseViewModel
             startGrid()
         }
 
-        /** Suggestions only ever chase the text being typed, never a committed query. */
+        /**
+         * Suggestions chase the text being typed — including a re-typed
+         * committed query (v1.0.19): the edit session lives until the
+         * field loses focus or the text is submitted, not until the grid
+         * catches up. The loading flag holds the panel open across the
+         * debounced search commit so the chips never flash away.
+         */
         private fun onDebouncedSuggest() {
             val text = _state.value.searchText
-            if (text.isBlank() || text == _state.value.query.text) {
-                _state.update { it.copy(suggestions = emptyList()) }
+            if (text.isBlank()) {
+                suggestJob?.cancel()
+                _state.update { it.copy(suggestions = emptyList(), suggestLoading = false) }
                 return
             }
             suggestJob?.cancel()
+            val generation = ++suggestGeneration
             suggestJob =
                 viewModelScope.launch {
-                    val tags =
-                        sources.suggestTags(
-                            text,
-                            sourceId = _state.value.scopeSourceId ?: _state.value.selectedSourceId,
-                        )
-                    // Only land if the user has not typed on since.
-                    if (_state.value.searchText == text) {
-                        _state.update { it.copy(suggestions = tags) }
+                    _state.update { it.copy(suggestLoading = true) }
+                    try {
+                        val tags =
+                            sources.suggestTags(
+                                text,
+                                sourceId = _state.value.scopeSourceId ?: _state.value.selectedSourceId,
+                            )
+                        // Only land if the user has not typed on since.
+                        if (_state.value.searchText == text) {
+                            _state.update { it.copy(suggestions = tags) }
+                        }
+                    } finally {
+                        // A newer request owns the flag; only the current one clears it.
+                        if (generation == suggestGeneration) {
+                            _state.update { it.copy(suggestLoading = false) }
+                        }
                     }
                 }
         }
@@ -437,6 +468,7 @@ class BrowseViewModel
         private fun cancelSearchDebounces() {
             searchDebounce?.cancel()
             suggestDebounce?.cancel()
+            suggestJob?.cancel()
         }
 
         /**
@@ -465,6 +497,7 @@ class BrowseViewModel
                     scopeSourceId = null,
                     mode = BrowseMode.GRID,
                     suggestions = emptyList(),
+                    suggestLoading = false,
                 )
             }
             recordSearch(text)
@@ -592,6 +625,7 @@ class BrowseViewModel
         /** Opens the flat grid scoped to one section — the See-all header. */
         fun onSeeAll(key: String) {
             val section = _state.value.sections.firstOrNull { it.key == key } ?: return
+            suggestJob?.cancel()
             _state.update {
                 it.copy(
                     mode = BrowseMode.GRID,
@@ -599,6 +633,8 @@ class BrowseViewModel
                     scopeSourceId = section.sourceId,
                     query = section.query,
                     searchText = "",
+                    suggestions = emptyList(),
+                    suggestLoading = false,
                 )
             }
             startGrid()
@@ -632,6 +668,7 @@ class BrowseViewModel
                     error = null,
                     errorDetail = null,
                     suggestions = emptyList(),
+                    suggestLoading = false,
                     sourceFailures = emptyList(),
                 )
             }
@@ -680,6 +717,7 @@ class BrowseViewModel
          */
         private fun restartSections() {
             sectionsJob?.cancel()
+            suggestJob?.cancel()
             sectionJobs.values.forEach { it.cancel() }
             sectionJobs.clear()
             sectionPages.clear()
@@ -695,6 +733,7 @@ class BrowseViewModel
                     errorDetail = null,
                     showApiKeyPrompt = needsKey,
                     suggestions = emptyList(),
+                    suggestLoading = false,
                     sourceFailures = emptyList(),
                 )
             }
@@ -938,7 +977,7 @@ class BrowseViewModel
             /** As-you-type search delay: past typing hesitation, under the keyless rate limits. */
             const val SEARCH_DEBOUNCE_MS = 450L
 
-            /** Suggestions land before the search commits, so chips are visible while typing. */
+            /** Suggestions fire while typing; the panel holds them past the search commit (v1.0.19). */
             const val SUGGEST_DEBOUNCE_MS = 200L
 
             /** How much history the personal row scans before filtering. */

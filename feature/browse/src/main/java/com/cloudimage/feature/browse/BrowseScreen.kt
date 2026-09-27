@@ -1,7 +1,14 @@
 package com.cloudimage.feature.browse
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,6 +74,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -99,6 +108,7 @@ fun BrowseScreen(
     viewModel: BrowseViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val focusManager = LocalFocusManager.current
     var showFilters by remember { mutableStateOf(false) }
     var showSourceSheet by remember { mutableStateOf(false) }
     var showClearHistoryDialog by remember { mutableStateOf(false) }
@@ -224,7 +234,9 @@ fun BrowseScreen(
         // The search panel (v1.0.9), CloudStream's search fragment condensed
         // into a dropdown: tag chips while typing, history while empty. It
         // only renders when it has something to offer — a hollow panel is
-        // noise, not guidance.
+        // noise, not guidance. Since v1.0.19 the chips also survive the
+        // search-as-you-type commit: the session ends on submit or focus
+        // loss, and a tap anywhere below the field dismisses both.
         val historyMatches =
             remember(state.history, state.searchText) {
                 if (state.searchText.isBlank()) {
@@ -233,18 +245,35 @@ fun BrowseScreen(
                     state.history.filter { it.contains(state.searchText, ignoreCase = true) }
                 }
             }
-        if (state.showSearchPanel && (state.suggestions.isNotEmpty() || historyMatches.isNotEmpty())) {
-            SearchPanel(
-                suggestions = state.suggestions,
-                historyRows = historyMatches,
-                onSuggestionSelected = viewModel::onSuggestionSelected,
-                onHistorySelected = viewModel::onHistorySelected,
-                onClearHistory = { showClearHistoryDialog = true },
-                modifier =
-                    Modifier
-                        .align(Alignment.TopStart)
-                        .padding(top = 72.dp, start = 16.dp, end = 16.dp),
-            )
+        AnimatedVisibility(
+            visible =
+                state.showSearchPanel &&
+                    (state.suggestions.isNotEmpty() || state.suggestLoading || historyMatches.isNotEmpty()),
+            enter = fadeIn(tween(150)) + slideInVertically(tween(200)) { -it / 4 },
+            exit = fadeOut(tween(120)) + slideOutVertically(tween(160)) { -it / 4 },
+            modifier = Modifier.align(Alignment.TopStart),
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                // Tap-away dismissal: dropping the field focus closes the
+                // panel and, with it, the keyboard. The scrim sits below
+                // the search bar so refining the text stays possible.
+                Box(
+                    modifier =
+                        Modifier
+                            .padding(top = 72.dp)
+                            .fillMaxSize()
+                            .pointerInput(Unit) { detectTapGestures { focusManager.clearFocus() } },
+                )
+                SearchPanel(
+                    suggestions = state.suggestions,
+                    historyRows = historyMatches,
+                    suggestLoading = state.suggestLoading,
+                    onSuggestionSelected = viewModel::onSuggestionSelected,
+                    onHistorySelected = viewModel::onHistorySelected,
+                    onClearHistory = { showClearHistoryDialog = true },
+                    modifier = Modifier.padding(top = 72.dp, start = 16.dp, end = 16.dp),
+                )
+            }
         }
 
         // The CloudStream home FAB: names the active source, opens the
@@ -403,12 +432,15 @@ private fun ScopeChipRow(
  * a dropdown: tag chips while typing (from TAGS-capable sources, never a
  * third-party suggest service) and the persisted history while the field
  * is empty, with clear-all behind a confirmation — history is data, not
- * decoration. Rendered only when it has something to offer.
+ * decoration. While the tags are in flight (v1.0.19) a light progress row
+ * holds the slot so the panel never flashes hollow. Rendered only when it
+ * has something to offer.
  */
 @Composable
 private fun SearchPanel(
     suggestions: List<String>,
     historyRows: List<String>,
+    suggestLoading: Boolean,
     onSuggestionSelected: (String) -> Unit,
     onHistorySelected: (String) -> Unit,
     onClearHistory: () -> Unit,
@@ -427,6 +459,23 @@ private fun SearchPanel(
                     .verticalScroll(rememberScrollState())
                     .padding(vertical = 8.dp),
         ) {
+            if (suggestions.isEmpty() && suggestLoading) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                ) {
+                    CircularProgressIndicator(
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = stringResource(R.string.browse_suggestions_loading),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             if (suggestions.isNotEmpty()) {
                 PanelHeader(text = stringResource(R.string.browse_suggestions_title))
                 SuggestionChipRow(

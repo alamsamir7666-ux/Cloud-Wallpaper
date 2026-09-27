@@ -54,6 +54,7 @@
     <string name="browse_scope_close">Back to sections</string>
 
     <string name="browse_suggestions_title">Suggested tags</string>
+    <string name="browse_suggestions_loading">Finding tags…</string>
     <string name="browse_history_title">Recent searches</string>
     <string name="browse_history_clear">Clear</string>
     <string name="browse_history_clear_title">Clear search history?</string>

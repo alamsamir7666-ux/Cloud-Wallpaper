@@ -4,6 +4,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.cloudimage.core.data.repository.SourceFailure
 import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.SourceSection
+import com.cloudimage.core.data.repository.WallpaperSources
 import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.ContentRating
 import com.cloudimage.core.model.HistoryAction
@@ -17,6 +18,7 @@ import com.cloudimage.core.testing.FakeHistoryRepository
 import com.cloudimage.core.testing.FakeWallpaperSources
 import com.cloudimage.core.testing.MainDispatcherRule
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -1162,6 +1164,91 @@ class BrowseViewModelTest {
         }
 
     @Test
+    fun `suggestions survive the debounced search commit while the field stays focused`() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { !it.isFirstLoading }
+
+            fake.scriptedSuggestions = listOf("nature art", "nature photography")
+            viewModel.onSearchFocusChange(true)
+            fake.enqueueSearch(page(ids = listOf("nature"), nextPage = null))
+            viewModel.onSearchTextChange("nature")
+            advanceMs(250)
+
+            assertEquals(listOf("nature art", "nature photography"), viewModel.state.value.suggestions)
+
+            // The 450ms search-as-you-type commit used to hide the panel
+            // (searchText == query.text) and kill the chips mid-edit (v1.0.19).
+            advanceMs(250)
+            val state = viewModel.state.first { it.wallpapers.isNotEmpty() }
+
+            assertEquals(BrowseMode.GRID, state.mode)
+            assertEquals("nature", state.query.text)
+            assertTrue(state.searchFocused)
+            assertTrue(state.showSearchPanel)
+            assertEquals(listOf("nature art", "nature photography"), state.suggestions)
+
+            // Losing the focus is what ends the session.
+            viewModel.onSearchFocusChange(false)
+            assertFalse(viewModel.state.value.showSearchPanel)
+        }
+
+    @Test
+    fun `retyping the committed text still refreshes suggestions`() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { !it.isFirstLoading }
+
+            fake.scriptedSuggestions = listOf("nature art")
+            viewModel.onSearchFocusChange(true)
+            viewModel.onSearchTextChange("nature")
+            advanceMs(500) // suggestions landed AND the search committed
+
+            assertEquals("nature", viewModel.state.value.query.text)
+            assertEquals(listOf("nature art"), viewModel.state.value.suggestions)
+
+            viewModel.onSearchTextChange("natures")
+            viewModel.onSearchTextChange("nature") // back to the committed text
+            advanceMs(250)
+
+            // The chips refresh instead of being discarded (v1.0.19).
+            assertEquals(listOf("nature", "nature"), fake.suggestCalls)
+            assertEquals(listOf("nature art"), viewModel.state.value.suggestions)
+            assertTrue(viewModel.state.value.showSearchPanel)
+        }
+
+    @Test
+    fun `a submit cancels in-flight suggestions so the panel never reopens`() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
+            val viewModel = newViewModel(SlowSuggestSources(fake, delayMs = 600), backgroundScope)
+            viewModel.state.first { !it.isFirstLoading }
+
+            fake.scriptedSuggestions = listOf("nature art")
+            viewModel.onSearchFocusChange(true)
+            fake.enqueueSearch(page(ids = listOf("s"), nextPage = null))
+            viewModel.onSearchTextChange("nature")
+            advanceMs(250) // the request is in flight; the loading flag holds the panel
+            assertTrue(viewModel.state.value.suggestLoading)
+            assertTrue(viewModel.state.value.showSearchPanel)
+
+            // The user submits before the tags land.
+            viewModel.onSearchSubmit()
+            viewModel.state.first { it.wallpapers.map { w -> w.id } == listOf("s") }
+            advanceMs(700) // past the would-be landing
+
+            assertEquals(emptyList<String>(), viewModel.state.value.suggestions)
+            assertFalse(viewModel.state.value.suggestLoading)
+            assertTrue(viewModel.state.value.searchFocused)
+            assertFalse(viewModel.state.value.showSearchPanel)
+        }
+
+    @Test
     fun `a history row re-runs its search and records it as most recent`() =
         runTest {
             val fake = FakeWallpaperSources()
@@ -1252,7 +1339,7 @@ class BrowseViewModelTest {
         }
 
     private fun newViewModel(
-        fake: FakeWallpaperSources,
+        sources: WallpaperSources,
         scope: CoroutineScope,
     ): BrowseViewModel {
         val preferences =
@@ -1261,7 +1348,21 @@ class BrowseViewModelTest {
                     tmpFolder.newFile("preferences_${System.nanoTime()}.preferences_pb")
                 },
             )
-        return BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+        return BrowseViewModel(sources = sources, userPreferencesRepository = preferences, historyRepository = history)
+    }
+
+    /** A [WallpaperSources] whose suggestions answer only after a delay — RTT simulation (v1.0.19). */
+    private class SlowSuggestSources(
+        private val delegate: WallpaperSources,
+        private val delayMs: Long,
+    ) : WallpaperSources by delegate {
+        override suspend fun suggestTags(
+            query: String,
+            sourceId: String?,
+        ): List<String> {
+            delay(delayMs)
+            return delegate.suggestTags(query, sourceId)
+        }
     }
 
     private fun TestScope.newPreferences(): UserPreferencesRepository =
