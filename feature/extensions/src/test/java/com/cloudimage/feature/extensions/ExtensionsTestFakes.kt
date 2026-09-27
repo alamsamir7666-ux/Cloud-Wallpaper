@@ -5,7 +5,10 @@ import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.SourceSection
 import com.cloudimage.core.data.repository.WallpaperSources
 import com.cloudimage.core.model.Page
+import com.cloudimage.core.model.Wallpaper
+import com.cloudimage.core.model.WallpaperDetails
 import com.cloudimage.core.model.WallpaperQuery
+import com.cloudimage.core.network.NetworkError
 import com.cloudimage.core.network.NetworkResult
 import com.cloudimage.extensions.core.AddRepoResult
 import com.cloudimage.extensions.core.ExtensionError
@@ -123,6 +126,9 @@ class FakeSources : WallpaperSources {
     ): List<String> = emptyList()
 
     override suspend fun sections(sourceId: String?): NetworkResult<List<SourceSection>> = NetworkResult.Success(emptyList())
+
+    override suspend fun details(wallpaper: Wallpaper): NetworkResult<WallpaperDetails> =
+        NetworkResult.Failure(NetworkError.Source("not scripted"))
 }
 
 fun row(id: String = "cloudimage.demo") =

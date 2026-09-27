@@ -1,6 +1,8 @@
 package com.cloudimage.core.data.repository
 
 import com.cloudimage.core.model.Page
+import com.cloudimage.core.model.Wallpaper
+import com.cloudimage.core.model.WallpaperDetails
 import com.cloudimage.core.model.WallpaperQuery
 import com.cloudimage.core.network.NetworkError
 import com.cloudimage.core.network.NetworkResult
@@ -154,4 +156,20 @@ interface WallpaperSources {
      * deliberately NOT translated — the user's SFW setting owns them.
      */
     suspend fun sections(sourceId: String? = null): NetworkResult<List<SourceSection>>
+
+    /**
+     * The source's definitive record for one wallpaper (v1.0.21) — the
+     * per-item facts a listing could not carry: the file's TRUE
+     * resolution (listings publish thumbnail crops or nothing at all),
+     * the download file size, the author, and the page URL.
+     *
+     * Routed to [Wallpaper.providerId]; a source that is not installed,
+     * disabled or failing answers an honest [NetworkError.Source], the
+     * same taxonomy [search] uses — the caller decides what a miss means
+     * (the preview screen degrades silently to the listing's own
+     * values). Sources whose listings already publish true dimensions
+     * are not required to be asked at all — callers should fetch only
+     * when the listing's dimensions are missing.
+     */
+    suspend fun details(wallpaper: Wallpaper): NetworkResult<WallpaperDetails>
 }

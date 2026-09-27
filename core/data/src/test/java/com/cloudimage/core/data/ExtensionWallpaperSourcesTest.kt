@@ -21,6 +21,7 @@ import com.cloudimage.extensions.core.ProviderTransportException
 import com.cloudimage.provider.api.Capability
 import com.cloudimage.provider.api.Filters
 import com.cloudimage.provider.api.HomeSection
+import com.cloudimage.provider.api.ProviderHttpException
 import com.cloudimage.provider.api.ProviderMeta
 import com.cloudimage.provider.api.WallpaperProvider
 import kotlinx.coroutines.CoroutineScope
@@ -59,6 +60,8 @@ class ExtensionWallpaperSourcesTest {
         private val sectionsError: Throwable? = null,
         private val tags: List<String>? = null,
         private val tagsError: Throwable? = null,
+        private val detailsRecord: com.cloudimage.provider.api.WallpaperDetails? = null,
+        private val detailsError: Throwable? = null,
     ) : WallpaperProvider {
         val calls = mutableListOf<String>()
 
@@ -91,8 +94,22 @@ class ExtensionWallpaperSourcesTest {
             return Result.success(tags.orEmpty())
         }
 
-        override suspend fun details(id: String): Result<com.cloudimage.provider.api.WallpaperDetails> =
-            Result.failure(UnsupportedOperationException())
+        override suspend fun details(id: String): Result<com.cloudimage.provider.api.WallpaperDetails> {
+            calls += "details:$id"
+            detailsError?.let { return Result.failure(it) }
+            return Result.success(
+                detailsRecord
+                    ?: com.cloudimage.provider.api.WallpaperDetails(
+                        wallpaper =
+                            com.cloudimage.provider.api.Wallpaper(
+                                id = id,
+                                providerId = meta.id,
+                                thumbUrl = "https://t/$id",
+                                fullUrl = "https://f/$id",
+                            ),
+                    ),
+            )
+        }
 
         override suspend fun random(): Result<List<com.cloudimage.provider.api.Wallpaper>> = Result.success(emptyList())
 
@@ -1061,6 +1078,111 @@ class ExtensionWallpaperSourcesTest {
                     .value.page.wallpapers
                     .map { it.id },
             )
+        }
+
+    @Test
+    fun `details routes to the owning source and maps the definitive record`() =
+        runTest {
+            val record =
+                com.cloudimage.provider.api.WallpaperDetails(
+                    wallpaper =
+                        com.cloudimage.provider.api.Wallpaper(
+                            id = "the-batman-wallpaper",
+                            providerId = "cloudimage.hdqwalls",
+                            thumbUrl = "https://images/bthumb/the-batman.jpg",
+                            fullUrl = "https://images/the-batman.jpg",
+                            width = 3840,
+                            height = 2159,
+                        ),
+                    author = "dreemaxx",
+                    resolution = "3840x2159",
+                    fileSizeBytes = 3_627_606,
+                    sourceUrl = "https://hdqwalls.com/the-batman-wallpaper",
+                )
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.hdqwalls"),
+                    capabilities = setOf(Capability.POPULAR),
+                    detailsRecord = record,
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.hdqwalls"))
+            val sources = sources(engine)
+
+            val result =
+                sources.details(
+                    com.cloudimage.core.model.Wallpaper(
+                        id = "the-batman-wallpaper",
+                        providerId = "cloudimage.hdqwalls",
+                        thumbUrl = "https://images/bthumb/the-batman.jpg",
+                        fullUrl = "https://images/the-batman.jpg",
+                    ),
+                )
+
+            assertEquals(listOf("details:the-batman-wallpaper"), provider.calls)
+            val mapped = (result as NetworkResult.Success).value
+            assertEquals("3840x2159", mapped.resolution)
+            assertEquals(3_627_606L, mapped.fileSizeBytes)
+            assertEquals("dreemaxx", mapped.author)
+            // The page URL folds into the wallpaper where the info sheet's
+            // "open on provider site" row reads it.
+            assertEquals("https://hdqwalls.com/the-batman-wallpaper", mapped.wallpaper.sourceUrl)
+            assertEquals(3840, mapped.wallpaper.width)
+        }
+
+    @Test
+    fun `details answers a Source error for an unknown source`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.POPULAR),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val sources = sources(engine)
+
+            val result =
+                sources.details(
+                    com.cloudimage.core.model.Wallpaper(
+                        id = "gone",
+                        providerId = "cloudimage.someone.else",
+                        thumbUrl = "https://t/gone",
+                        fullUrl = "https://f/gone",
+                    ),
+                )
+
+            val error = (result as NetworkResult.Failure).error
+            assertTrue(error is NetworkError.Source)
+            assertTrue((error as NetworkError.Source).reason.contains("not installed"))
+            assertTrue(provider.calls.isEmpty())
+        }
+
+    @Test
+    fun `details maps a provider failure honestly`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.hdqwalls"),
+                    capabilities = setOf(Capability.POPULAR),
+                    detailsError = ProviderHttpException("hdqwalls answered HTTP 404"),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.hdqwalls"))
+            val sources = sources(engine)
+
+            val result =
+                sources.details(
+                    com.cloudimage.core.model.Wallpaper(
+                        id = "gone",
+                        providerId = "cloudimage.hdqwalls",
+                        thumbUrl = "https://t/gone",
+                        fullUrl = "https://f/gone",
+                    ),
+                )
+
+            val error = (result as NetworkResult.Failure).error
+            assertTrue(error is NetworkError.Source)
         }
 
     private fun meta(id: String): ProviderMeta =

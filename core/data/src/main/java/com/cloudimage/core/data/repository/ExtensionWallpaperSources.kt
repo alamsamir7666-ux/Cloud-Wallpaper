@@ -5,6 +5,7 @@ import com.cloudimage.core.model.ContentRating
 import com.cloudimage.core.model.Page
 import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.core.model.WallpaperCategory
+import com.cloudimage.core.model.WallpaperDetails
 import com.cloudimage.core.model.WallpaperQuery
 import com.cloudimage.core.model.WallpaperSorting
 import com.cloudimage.core.network.NetworkError
@@ -34,6 +35,7 @@ import javax.inject.Singleton
 import com.cloudimage.provider.api.ContentRating as ProviderRating
 import com.cloudimage.provider.api.Page as ProviderPage
 import com.cloudimage.provider.api.Wallpaper as ProviderWallpaper
+import com.cloudimage.provider.api.WallpaperDetails as ProviderWallpaperDetails
 
 /**
  * Default [WallpaperSources] over the extension engine.
@@ -297,6 +299,36 @@ class ExtensionWallpaperSources
         }
 
         /**
+         * The definitive record for one wallpaper, routed to its source —
+         * the same honesty rules as [search]: a disabled or missing source
+         * is a Source error, never a connectivity claim, and a provider
+         * failure keeps its type through [toNetworkError]. The outer
+         * runCatching guards the plugin boundary itself (a package whose
+         * classes fail to bind throws here, it does not answer).
+         */
+        override suspend fun details(wallpaper: Wallpaper): NetworkResult<WallpaperDetails> {
+            if (wallpaper.providerId in disabled.value) {
+                return NetworkResult.Failure(
+                    NetworkError.Source("source '${wallpaper.providerId}' is disabled — enable it in the Extensions tab"),
+                )
+            }
+            val provider =
+                readyProviders().firstOrNull { it.first == wallpaper.providerId }?.second
+                    ?: return NetworkResult.Failure(
+                        NetworkError.Source("source '${wallpaper.providerId}' is not installed or not usable — see the Extensions tab"),
+                    )
+            return runCatching { provider.details(wallpaper.id) }.fold(
+                { outcome ->
+                    outcome.fold(
+                        { record -> NetworkResult.Success(record.toCore()) },
+                        { failure -> NetworkResult.Failure(failure.toNetworkError()) },
+                    )
+                },
+                { failure -> NetworkResult.Failure(failure.toNetworkError()) },
+            )
+        }
+
+        /**
          * Translates a provider section to the host query pipeline: the
          * host-vocabulary keys of its [Filters] become typed query fields.
          *
@@ -458,6 +490,21 @@ class ExtensionWallpaperSources
                 sourceUrl = null,
                 tags = tags,
                 contentRating = contentRating.toCore(),
+            )
+
+        /**
+         * The detail record: the payload's own wallpaper (true dimensions
+         * when the source publishes them) with the page URL folded in —
+         * the provider contract carries [ProviderWallpaperDetails.sourceUrl]
+         * separately, while the core model keeps it on the wallpaper where
+         * the info sheet's "open on provider site" row reads it.
+         */
+        private fun ProviderWallpaperDetails.toCore(): WallpaperDetails =
+            WallpaperDetails(
+                wallpaper = wallpaper.toCore().copy(sourceUrl = sourceUrl),
+                author = author,
+                resolution = resolution,
+                fileSizeBytes = fileSizeBytes,
             )
 
         private fun Capability.toSourceCapability(): SourceCapability =

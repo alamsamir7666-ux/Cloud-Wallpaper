@@ -27,6 +27,7 @@
     <string name="detail_info_hint">Swipe up for details</string>
     <string name="detail_info_tags">Tags</string>
     <string name="detail_info_resolution">Resolution</string>
+    <string name="detail_info_file_size">File size</string>
     <string name="detail_info_provider">Provider</string>
     <string name="detail_info_rating">Content rating</string>
     <string name="detail_info_id">Wallpaper ID</string>

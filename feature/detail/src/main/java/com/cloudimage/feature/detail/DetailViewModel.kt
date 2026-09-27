@@ -16,6 +16,7 @@ import com.cloudimage.core.data.repository.WallpaperSaver
 import com.cloudimage.core.data.repository.WallpaperSources
 import com.cloudimage.core.model.HistoryAction
 import com.cloudimage.core.model.Wallpaper
+import com.cloudimage.core.model.WallpaperDetails
 import com.cloudimage.core.model.WallpaperQuery
 import com.cloudimage.core.model.savedMimeType
 import com.cloudimage.core.network.NetworkResult
@@ -95,6 +96,15 @@ data class DetailUiState(
      * nothing. A bonus row, never a complaint.
      */
     val moreLikeThis: List<Wallpaper> = emptyList(),
+    /**
+     * The source's definitive record (v1.0.21) — the TRUE resolution and
+     * download size a listing could not carry, plus the author and the
+     * page URL. Null until it arrives, and permanently when the listing
+     * already knew the dimensions (no fetch happens — see
+     * [loadDetails]) or the source had nothing truer to say; the info
+     * sheet degrades to the grid item's own values either way.
+     */
+    val details: WallpaperDetails? = null,
 )
 
 /**
@@ -134,6 +144,7 @@ class DetailViewModel
                     .onEach { isFavorite -> _state.update { it.copy(isFavorite = isFavorite) } }
                     .launchIn(viewModelScope)
                 viewModelScope.launch { loadMoreLikeThis(wallpaper) }
+                viewModelScope.launch { loadDetails(wallpaper) }
             }
         }
 
@@ -220,6 +231,27 @@ class DetailViewModel
             if (!canRecommend || wallpaper.tags.none { it.isNotBlank() }) return
             val results = searchMoreLikeThis(wallpaper) ?: return
             _state.update { it.copy(moreLikeThis = results) }
+        }
+
+        /**
+         * Asks the source for the definitive record — but only when the
+         * listing could not state the wallpaper's dimensions. Listings that
+         * publish true dimensions (Wallhaven's API, WallpaperCave's topic
+         * pages) have nothing to gain: one extra request per opened preview
+         * would cost an API-keyed source real quota for a file size the
+         * info sheet can live without. Listings that cannot — HDQWalls's
+         * grid publishes only its uniform card crop — gain the file's TRUE
+         * resolution, and with it the download size and the page URL when
+         * the site states them. Every failure is silent: the info sheet
+         * keeps the grid item's own values.
+         */
+        private suspend fun loadDetails(wallpaper: Wallpaper) {
+            if (wallpaper.width != null && wallpaper.height != null) return
+            sources.sources.filterNotNull().first()
+            when (val outcome = sources.details(wallpaper)) {
+                is NetworkResult.Failure -> Unit
+                is NetworkResult.Success -> _state.update { it.copy(details = outcome.value) }
+            }
         }
 
         /**

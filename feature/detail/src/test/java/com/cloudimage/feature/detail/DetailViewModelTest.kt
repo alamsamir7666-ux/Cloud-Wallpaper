@@ -13,6 +13,7 @@ import com.cloudimage.core.model.Favorite
 import com.cloudimage.core.model.HistoryAction
 import com.cloudimage.core.model.Page
 import com.cloudimage.core.model.Wallpaper
+import com.cloudimage.core.model.WallpaperDetails
 import com.cloudimage.core.network.NetworkError
 import com.cloudimage.core.network.NetworkResult
 import com.cloudimage.core.testing.FakeFavoritesRepository
@@ -84,6 +85,53 @@ class DetailViewModelTest {
 
         assertEquals(wallpaper, viewModel.state.value.wallpaper)
     }
+
+    @Test
+    fun detailsLoadWhenTheListingCannotStateDimensions() =
+        runTest {
+            sources.setSources(capableSource)
+            val undimensioned = wallpaper.copy(width = null, height = null)
+            val record =
+                WallpaperDetails(
+                    wallpaper = undimensioned,
+                    author = "dreemaxx",
+                    resolution = "3840x2159",
+                    fileSizeBytes = 3_627_606,
+                )
+            sources.enqueueDetails(NetworkResult.Success(record))
+
+            val viewModel = createViewModel(DetailDestination.encode(undimensioned))
+            advanceUntilIdle()
+
+            assertEquals(record, viewModel.state.value.details)
+            assertEquals(listOf(undimensioned), sources.detailsCalls)
+        }
+
+    @Test
+    fun detailsAreNotFetchedWhenTheListingAlreadyKnowsDimensions() =
+        runTest {
+            sources.setSources(capableSource)
+
+            val viewModel = createViewModel(DetailDestination.encode(wallpaper))
+            advanceUntilIdle()
+
+            assertNull(viewModel.state.value.details)
+            assertTrue(sources.detailsCalls.isEmpty())
+        }
+
+    @Test
+    fun detailsFailureDegradesSilentlyToTheListingValues() =
+        runTest {
+            sources.setSources(capableSource)
+            val undimensioned = wallpaper.copy(width = null, height = null)
+            sources.enqueueDetails(NetworkResult.Failure(NetworkError.Source("source failed")))
+
+            val viewModel = createViewModel(DetailDestination.encode(undimensioned))
+            advanceUntilIdle()
+
+            assertNull(viewModel.state.value.details)
+            assertEquals(undimensioned, viewModel.state.value.wallpaper)
+        }
 
     @Test
     fun moreLikeThisLoadsOverTopTagsFromTheSameSource() =

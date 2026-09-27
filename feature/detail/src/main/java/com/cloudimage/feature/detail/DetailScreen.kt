@@ -100,10 +100,12 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.cloudimage.core.data.repository.ApplyTarget
 import com.cloudimage.core.model.Wallpaper
+import com.cloudimage.core.model.WallpaperDetails
 import me.saket.telephoto.zoomable.ZoomSpec
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import java.io.File
+import java.util.Locale
 
 /**
  * Fullscreen preview + apply screen (v1.0.17): a gallery-grade zoomable
@@ -201,6 +203,7 @@ fun DetailScreen(
     if (showInfoSheet && wallpaper != null) {
         InfoSheet(
             wallpaper = wallpaper,
+            details = state.details,
             onDismiss = { showInfoSheet = false },
         )
     }
@@ -552,6 +555,7 @@ private fun TargetSheet(
 @Composable
 private fun InfoSheet(
     wallpaper: Wallpaper,
+    details: WallpaperDetails?,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -566,7 +570,15 @@ private fun InfoSheet(
         )
         InfoRow(
             label = stringResource(R.string.detail_info_resolution),
-            value = wallpaper.resolution().orDash(),
+            // The listing's dimensions when it published true ones; the
+            // source's definitive record fills what the listing could not
+            // state (HDQWalls's grid carries only its card crop) — never a
+            // wrong number over a missing one.
+            value = (wallpaper.resolution() ?: details?.resolution).orDash(),
+        )
+        InfoRow(
+            label = stringResource(R.string.detail_info_file_size),
+            value = details?.fileSizeBytes?.let(::formatFileSize).orDash(),
         )
         InfoRow(label = stringResource(R.string.detail_info_provider), value = wallpaper.providerId)
         InfoRow(
@@ -685,6 +697,22 @@ private fun DetailAction.label(): Int =
     }
 
 private fun Wallpaper.resolution(): String? = if (width != null && height != null) "${width}x$height" else null
+
+/**
+ * File size the way the sites label their own downloads: KB/MB/GB with
+ * two decimals, never a bare byte count (3,627,606 B is "3.46 MB" — the
+ * same figure hdqwalls prints next to its Download Original button).
+ */
+private fun formatFileSize(bytes: Long): String {
+    val gigabytes = bytes / (1024.0 * 1024 * 1024)
+    val megabytes = bytes / (1024.0 * 1024)
+    val kilobytes = bytes / 1024.0
+    return when {
+        gigabytes >= 1 -> String.format(Locale.US, "%.2f GB", gigabytes)
+        megabytes >= 1 -> String.format(Locale.US, "%.2f MB", megabytes)
+        else -> String.format(Locale.US, "%.0f KB", kilobytes)
+    }
+}
 
 private fun String?.orDash(): String = this ?: "—"
 

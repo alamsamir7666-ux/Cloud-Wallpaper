@@ -6,7 +6,10 @@ import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.SourceSection
 import com.cloudimage.core.data.repository.WallpaperSources
 import com.cloudimage.core.model.Page
+import com.cloudimage.core.model.Wallpaper
+import com.cloudimage.core.model.WallpaperDetails
 import com.cloudimage.core.model.WallpaperQuery
+import com.cloudimage.core.network.NetworkError
 import com.cloudimage.core.network.NetworkResult
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,6 +46,11 @@ class FakeWallpaperSources : WallpaperSources {
     /** Every text suggestTags was called with, in order. */
     val suggestCalls = mutableListOf<String>()
 
+    private val scriptedDetails = ArrayDeque<NetworkResult<WallpaperDetails>>()
+
+    /** Every wallpaper details() was called with, in order (v1.0.21). */
+    val detailsCalls = mutableListOf<Wallpaper>()
+
     private var scriptedSections: NetworkResult<List<SourceSection>> =
         NetworkResult.Success(emptyList())
 
@@ -55,6 +63,11 @@ class FakeWallpaperSources : WallpaperSources {
     /** Test hook: queues the result for the next search() call. */
     fun enqueueSearch(result: NetworkResult<Page>) {
         scriptedSearches += result
+    }
+
+    /** Test hook: queues the result for the next details() call (v1.0.21). */
+    fun enqueueDetails(result: NetworkResult<WallpaperDetails>) {
+        scriptedDetails += result
     }
 
     /** Test hook: drives what sections() answers from now on. */
@@ -107,5 +120,13 @@ class FakeWallpaperSources : WallpaperSources {
     override suspend fun sections(sourceId: String?): NetworkResult<List<SourceSection>> {
         sectionsCalls += sourceId
         return scriptedSections
+    }
+
+    override suspend fun details(wallpaper: Wallpaper): NetworkResult<WallpaperDetails> {
+        detailsCalls += wallpaper
+        // Unscripted calls fail loudly rather than inventing a record —
+        // a test that expects details must script them.
+        return scriptedDetails.removeFirstOrNull()
+            ?: NetworkResult.Failure(NetworkError.Source("no scripted details for ${wallpaper.id}"))
     }
 }
