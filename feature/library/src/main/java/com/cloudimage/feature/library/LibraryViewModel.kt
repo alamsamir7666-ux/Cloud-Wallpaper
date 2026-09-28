@@ -2,9 +2,11 @@ package com.cloudimage.feature.library
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.cloudimage.core.data.repository.DownloadsRepository
 import com.cloudimage.core.data.repository.FavoritesRepository
 import com.cloudimage.core.data.repository.HistoryRepository
 import com.cloudimage.core.datastore.UserPreferencesRepository
+import com.cloudimage.core.model.Downloaded
 import com.cloudimage.core.model.Favorite
 import com.cloudimage.core.model.HistoryEntry
 import com.cloudimage.core.model.Wallpaper
@@ -22,6 +24,7 @@ import javax.inject.Inject
 data class LibraryUiState(
     val favorites: List<Favorite> = emptyList(),
     val history: List<HistoryEntry> = emptyList(),
+    val downloads: List<Downloaded> = emptyList(),
     val gridColumns: Int = 2,
     /** True until the first combine emission lands (Room is fast, but not
      *  synchronous) — guards tests and later loading UI. */
@@ -32,13 +35,16 @@ data class LibraryUiState(
     val hasFavorites: Boolean get() = favorites.isNotEmpty()
 
     val hasHistory: Boolean get() = history.isNotEmpty()
+
+    val hasDownloads: Boolean get() = downloads.isNotEmpty()
 }
 
 /**
- * Drives the library tab: the saved favorites grid and the history feed.
+ * Drives the library tab: the saved favorites grid, the history feed and the
+ * downloaded grid (v1.0.22).
  *
- * Both lists stream out of Room, so any change made elsewhere — a heart
- * tapped on the detail screen, a record written by the apply flow — lands
+ * All three lists stream out of Room, so any change made elsewhere — a heart
+ * tapped on the detail screen, a download finishing in the preview — lands
  * here live without manual refreshes.
  */
 @HiltViewModel
@@ -47,6 +53,7 @@ class LibraryViewModel
     constructor(
         private val favoritesRepository: FavoritesRepository,
         private val historyRepository: HistoryRepository,
+        downloadsRepository: DownloadsRepository,
         userPreferencesRepository: UserPreferencesRepository,
     ) : ViewModel() {
         private val _state = MutableStateFlow(LibraryUiState())
@@ -56,11 +63,13 @@ class LibraryViewModel
             combine(
                 favoritesRepository.observeFavorites(),
                 historyRepository.observeRecent(),
+                downloadsRepository.observeDownloads(),
                 userPreferencesRepository.preferences,
-            ) { favorites, history, preferences ->
+            ) { favorites, history, downloads, preferences ->
                 LibraryUiState(
                     favorites = favorites,
                     history = history,
+                    downloads = downloads,
                     gridColumns = preferences.gridColumns,
                     isLoading = false,
                 )
@@ -71,6 +80,12 @@ class LibraryViewModel
         /** Removes one wallpaper from the saved grid (toggle = remove here,
          *  because the button only appears on already-saved items). */
         fun removeFromFavorites(wallpaper: Wallpaper) {
+            viewModelScope.launch { favoritesRepository.toggleFavorite(wallpaper) }
+        }
+
+        /** Toggles the heart on a downloaded card: favoriting a download
+         *  never touches the downloads list, only favorites (and vice versa). */
+        fun toggleFavorite(wallpaper: Wallpaper) {
             viewModelScope.launch { favoritesRepository.toggleFavorite(wallpaper) }
         }
 

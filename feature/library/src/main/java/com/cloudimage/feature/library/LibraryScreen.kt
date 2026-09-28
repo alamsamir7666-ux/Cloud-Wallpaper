@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.HistoryEdu
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.Wallpaper
@@ -62,24 +63,27 @@ import com.cloudimage.core.model.HistoryAction
 import com.cloudimage.core.model.HistoryEntry
 import com.cloudimage.core.model.Wallpaper
 
-/** The two pages of the library. */
+/** The three pages of the library. */
 private enum class LibraryTab {
     FAVORITES,
     HISTORY,
+    DOWNLOADS,
 }
 
 /**
  * The user's own collection: saved favorites as a masonry grid on the
- * first tab, the view/apply/download history feed on the second.
+ * first tab, the view/apply/download history feed on the second, and
+ * everything downloaded from the app as a grid on the third (v1.0.22).
  *
- * Since v1.0.18 the two tabs swipe through a HorizontalPager under the
+ * Since v1.0.18 the tabs swipe through a HorizontalPager under the
  * same swipe-synced pill bar the browse home uses — the pill slides
- * between "Favorites" and "History" with the finger, and the settle is
- * the selection.
+ * between "Favorites", "History" and "Downloaded" with the finger, and
+ * the settle is the selection.
  *
- * Both lists are Room streams, so a heart tapped in the detail screen
- * updates this screen live. Saved items deliberately ignore the SFW-only
- * setting — they were clamped at browse time and are the user's picks.
+ * All lists are Room streams, so a heart tapped in the detail screen
+ * updates this screen live. Saved and downloaded items deliberately ignore
+ * the SFW-only setting — they were clamped at browse time and are the
+ * user's picks.
  */
 @Composable
 fun LibraryScreen(
@@ -142,6 +146,7 @@ fun LibraryScreen(
                 listOf(
                     stringResource(R.string.library_tab_favorites),
                     stringResource(R.string.library_tab_history),
+                    stringResource(R.string.library_tab_downloads),
                 ),
             selectedIndex = selectedTab,
             pageFraction = { pagerState.currentPage + pagerState.currentPageOffsetFraction },
@@ -177,6 +182,21 @@ fun LibraryScreen(
                             icon = Icons.Rounded.HistoryEdu,
                             titleRes = R.string.library_empty_history_title,
                             bodyRes = R.string.library_empty_history_body,
+                        )
+                    }
+
+                LibraryTab.DOWNLOADS ->
+                    if (state.hasDownloads) {
+                        DownloadsGrid(
+                            state = state,
+                            onWallpaperClick = onWallpaperClick,
+                            onToggleFavorite = viewModel::toggleFavorite,
+                        )
+                    } else {
+                        LibraryEmpty(
+                            icon = Icons.Rounded.Download,
+                            titleRes = R.string.library_empty_downloads_title,
+                            bodyRes = R.string.library_empty_downloads_body,
                         )
                     }
             }
@@ -251,6 +271,75 @@ private fun FavoritesGrid(
                             tint = MaterialTheme.colorScheme.primary,
                             contentDescription =
                                 stringResource(R.string.library_remove_favorite),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The Downloaded tab (v1.0.22): the same masonry grid and card layout the
+ * favorites tab uses, but for wallpapers downloaded from the app. The heart
+ * overlay reflects (and toggles) favorites — a download and a favorite are
+ * independent facts, so an un-favorited download shows an outlined heart
+ * and a favorited one a filled heart, exactly as it would on the detail
+ * screen.
+ */
+@Composable
+private fun DownloadsGrid(
+    state: LibraryUiState,
+    onWallpaperClick: (Wallpaper) -> Unit,
+    onToggleFavorite: (Wallpaper) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val favoriteKeys =
+        remember(state.favorites) {
+            state.favorites.map { "${it.wallpaper.providerId}:${it.wallpaper.id}" }.toSet()
+        }
+    LazyVerticalStaggeredGrid(
+        columns = StaggeredGridCells.Fixed(state.gridColumns),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalItemSpacing = 12.dp,
+        modifier = modifier.fillMaxSize().testTag("library:downloads"),
+    ) {
+        items(
+            count = state.downloads.size,
+            key = { index ->
+                "${state.downloads[index].wallpaper.providerId}:${state.downloads[index].wallpaper.id}"
+            },
+        ) { index ->
+            val downloaded = state.downloads[index]
+            val isFavorite = "${downloaded.wallpaper.providerId}:${downloaded.wallpaper.id}" in favoriteKeys
+            Box {
+                WallpaperCard(
+                    wallpaper = downloaded.wallpaper,
+                    onClick = { onWallpaperClick(downloaded.wallpaper) },
+                )
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                    modifier =
+                        Modifier
+                            .padding(6.dp)
+                            .align(Alignment.TopEnd),
+                ) {
+                    IconButton(
+                        onClick = { onToggleFavorite(downloaded.wallpaper) },
+                        modifier =
+                            Modifier.size(36.dp).testTag(
+                                "library:download-favorite:${downloaded.wallpaper.id}",
+                            ),
+                    ) {
+                        Icon(
+                            imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                            tint = MaterialTheme.colorScheme.primary,
+                            contentDescription =
+                                stringResource(
+                                    if (isFavorite) R.string.library_remove_favorite else R.string.library_add_favorite,
+                                ),
                         )
                     }
                 }

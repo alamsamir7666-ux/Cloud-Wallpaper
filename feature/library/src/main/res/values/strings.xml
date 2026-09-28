@@ -3,11 +3,15 @@
     <string name="library_title">Library</string>
     <string name="library_tab_favorites">Favorites</string>
     <string name="library_tab_history">History</string>
+    <string name="library_tab_downloads">Downloaded</string>
     <string name="library_empty_favorites_title">No favorites yet</string>
     <string name="library_empty_favorites_body">Tap the heart on a wallpaper to keep it here.</string>
     <string name="library_empty_history_title">Nothing here yet</string>
     <string name="library_empty_history_body">Wallpapers you view, apply, or download will show up here.</string>
+    <string name="library_empty_downloads_title">No downloads yet</string>
+    <string name="library_empty_downloads_body">Wallpapers you download from the app will appear here.</string>
     <string name="library_remove_favorite">Remove from favorites</string>
+    <string name="library_add_favorite">Add to favorites</string>
     <string name="library_clear_history">Clear history</string>
     <string name="library_clear_confirm_title">Clear history?</string>
     <string name="library_clear_confirm_body">All history records will be removed. Favorites are kept.</string>
