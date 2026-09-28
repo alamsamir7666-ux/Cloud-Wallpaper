@@ -9,6 +9,7 @@ import com.cloudimage.core.data.repository.SaveError
 import com.cloudimage.core.data.repository.SaveResult
 import com.cloudimage.core.data.repository.SourceCapability
 import com.cloudimage.core.data.repository.SourceInfo
+import com.cloudimage.core.model.Downloaded
 import com.cloudimage.core.model.Favorite
 import com.cloudimage.core.model.HistoryAction
 import com.cloudimage.core.model.Page
@@ -16,6 +17,7 @@ import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.core.model.WallpaperDetails
 import com.cloudimage.core.network.NetworkError
 import com.cloudimage.core.network.NetworkResult
+import com.cloudimage.core.testing.FakeDownloadsRepository
 import com.cloudimage.core.testing.FakeFavoritesRepository
 import com.cloudimage.core.testing.FakeHistoryRepository
 import com.cloudimage.core.testing.FakeWallpaperApplier
@@ -25,6 +27,7 @@ import com.cloudimage.core.testing.MainDispatcherRule
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -45,6 +48,7 @@ class DetailViewModelTest {
     private val saver = FakeWallpaperSaver()
     private val favorites = FakeFavoritesRepository()
     private val history = FakeHistoryRepository()
+    private val downloads = FakeDownloadsRepository()
     private val sources = FakeWallpaperSources()
 
     private val wallpaper =
@@ -76,6 +80,7 @@ class DetailViewModelTest {
             saver = saver,
             favoritesRepository = favorites,
             historyRepository = history,
+            downloadsRepository = downloads,
             sources = sources,
         )
 
@@ -370,7 +375,78 @@ class DetailViewModelTest {
         }
 
     @Test
-    fun saveFailureEmitsMappedError() =
+    fun saveProgressFlowsIntoTheStateAndClearsOnCompletion() =
+        runTest {
+            saver.progressScript =
+                listOf(
+                    1_200L to 4_500L,
+                    3_400L to 4_500L,
+                    4_500L to 4_500L,
+                )
+            saver.gate = CompletableDeferred()
+            val viewModel = createViewModel(DetailDestination.encode(wallpaper))
+
+            viewModel.onSave()
+            runCurrent()
+
+            // Mid-flight: running state with the LAST tick's bytes on it.
+            assertTrue(viewModel.state.value.saveOp is OperationState.Running)
+            assertEquals(
+                DownloadProgress(bytesRead = 4_500L, totalBytes = 4_500L),
+                viewModel.state.value.downloadProgress,
+            )
+            // The label's math: half the total, and honest null when unknown.
+            assertEquals(0.5f, DownloadProgress(2_250L, 4_500L).fraction)
+            assertEquals(null, DownloadProgress(2_250L, null).fraction)
+
+            saver.gate?.complete(Unit)
+            advanceUntilIdle()
+
+            // Completion settles the button, not the byte count.
+            assertEquals(null, viewModel.state.value.downloadProgress)
+            assertEquals(OperationState.Succeeded, viewModel.state.value.saveOp)
+        }
+
+    @Test
+    fun saveSuccessMarksTheWallpaperDownloaded() =
+        runTest {
+            val viewModel = createViewModel(DetailDestination.encode(wallpaper))
+
+            viewModel.onSave()
+            advanceUntilIdle()
+
+            assertEquals(listOf(wallpaper), downloads.downloads.map { it.wallpaper })
+            assertTrue(viewModel.state.value.isDownloaded)
+        }
+
+    @Test
+    fun downloadedFlagFollowsTheRepository() =
+        runTest {
+            downloads.setDownloads(listOf(Downloaded(wallpaper, downloadedAtMillis = 1)))
+            val viewModel = createViewModel(DetailDestination.encode(wallpaper))
+
+            advanceUntilIdle()
+
+            assertTrue(viewModel.state.value.isDownloaded)
+        }
+
+    @Test
+    fun alreadyDownloadedWallpaperSavesNothingOnAnotherTap() =
+        runTest {
+            downloads.setDownloads(listOf(Downloaded(wallpaper, downloadedAtMillis = 1)))
+            val viewModel = createViewModel(DetailDestination.encode(wallpaper))
+            advanceUntilIdle()
+
+            viewModel.onSave()
+            advanceUntilIdle()
+
+            assertTrue(saver.galleryCalls.isEmpty())
+            assertEquals(OperationState.Idle, viewModel.state.value.saveOp)
+            assertEquals(null, viewModel.state.value.downloadProgress)
+        }
+
+    @Test
+    fun saveFailureClearsProgressSoTheButtonReturnsToIdle() =
         runTest {
             saver.galleryResult = SaveResult.Failure(SaveError.HTTP)
             val viewModel = createViewModel(DetailDestination.encode(wallpaper))
@@ -380,8 +456,15 @@ class DetailViewModelTest {
                 advanceUntilIdle()
 
                 assertEquals(OperationState.Failed(DetailError.HTTP), viewModel.state.value.saveOp)
+                assertEquals(null, viewModel.state.value.downloadProgress)
                 assertEquals(DetailEvent.ActionFailed(DetailAction.SAVE, DetailError.HTTP), awaitItem())
             }
+
+            // The retry is a fresh tap: the wall between failures resets.
+            saver.galleryResult = SaveResult.Success(uri = "content://media/43", fileName = "retry.png")
+            viewModel.onSave()
+            advanceUntilIdle()
+            assertEquals(OperationState.Succeeded, viewModel.state.value.saveOp)
         }
 
     @Test

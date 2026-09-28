@@ -7,6 +7,7 @@
     <string name="detail_remove_favorite">Remove from favorites</string>
     <string name="detail_set_wallpaper">Set wallpaper</string>
     <string name="detail_save">Save to gallery</string>
+    <string name="detail_downloaded">Downloaded</string>
     <string name="detail_share">Share</string>
     <string name="detail_share_title">Share wallpaper</string>
     <string name="detail_applied">Wallpaper set</string>

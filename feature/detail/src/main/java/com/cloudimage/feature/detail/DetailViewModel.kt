@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.cloudimage.core.data.repository.ApplyError
 import com.cloudimage.core.data.repository.ApplyResult
 import com.cloudimage.core.data.repository.ApplyTarget
+import com.cloudimage.core.data.repository.DownloadsRepository
 import com.cloudimage.core.data.repository.FavoritesRepository
 import com.cloudimage.core.data.repository.HistoryRepository
 import com.cloudimage.core.data.repository.SaveError
@@ -82,6 +83,23 @@ sealed interface DetailEvent {
     ) : DetailEvent
 }
 
+/**
+ * Live byte progress of one gallery download (v1.0.22): the running count
+ * and the total when the server stated one. [fraction] is null exactly when
+ * the total is unknown — the button degrades to an indeterminate ring and
+ * the label shows the running count alone.
+ */
+data class DownloadProgress(
+    val bytesRead: Long,
+    val totalBytes: Long?,
+) {
+    val fraction: Float?
+        get() =
+            totalBytes
+                ?.takeIf { it > 0 }
+                ?.let { (bytesRead.toDouble() / it).toFloat().coerceIn(0f, 1f) }
+}
+
 /** Immutable snapshot of everything the preview screen renders. */
 data class DetailUiState(
     val wallpaper: Wallpaper? = null,
@@ -89,6 +107,11 @@ data class DetailUiState(
     val applyOp: OperationState = OperationState.Idle,
     val saveOp: OperationState = OperationState.Idle,
     val shareOp: OperationState = OperationState.Idle,
+    /** Live bytes of an in-flight gallery download; null when idle. */
+    val downloadProgress: DownloadProgress? = null,
+    /** True the moment a wallpaper has ever been downloaded from the app —
+     * the save button settles into a static, untappable checkmark. */
+    val isDownloaded: Boolean = false,
     /**
      * Same-provider lookalikes over the wallpaper's top tags (v1.0.9) —
      * empty means the row stays hidden: the source does not declare
@@ -126,6 +149,7 @@ class DetailViewModel
         private val saver: WallpaperSaver,
         private val favoritesRepository: FavoritesRepository,
         private val historyRepository: HistoryRepository,
+        private val downloadsRepository: DownloadsRepository,
         private val sources: WallpaperSources,
     ) : ViewModel() {
         private val initialWallpaper = DetailDestination.decode(savedStateHandle[DetailDestination.arg])
@@ -142,6 +166,10 @@ class DetailViewModel
                 favoritesRepository
                     .observeIsFavorite(wallpaper.providerId, wallpaper.id)
                     .onEach { isFavorite -> _state.update { it.copy(isFavorite = isFavorite) } }
+                    .launchIn(viewModelScope)
+                downloadsRepository
+                    .observeIsDownloaded(wallpaper.providerId, wallpaper.id)
+                    .onEach { isDownloaded -> _state.update { it.copy(isDownloaded = isDownloaded) } }
                     .launchIn(viewModelScope)
                 viewModelScope.launch { loadMoreLikeThis(wallpaper) }
                 viewModelScope.launch { loadDetails(wallpaper) }
@@ -175,21 +203,37 @@ class DetailViewModel
             }
         }
 
-        /** Saves the full-resolution image into the system gallery. */
+        /**
+         * Saves the full-resolution image into the system gallery.
+         *
+         * While the bytes stream, [DetailUiState.downloadProgress] carries the
+         * running count for the button's ring and size label. A successful save
+         * records the download (the Library's Downloaded tab and this button's
+         * checkmark both live off that record) next to the usual history entry;
+         * a failure clears the progress and leaves the button idle — the retry
+         * is a fresh tap.
+         */
         fun onSave() {
             val wallpaper = _state.value.wallpaper ?: return
             if (_state.value.saveOp is OperationState.Running) return
+            if (_state.value.isDownloaded) return
             viewModelScope.launch {
-                _state.update { it.copy(saveOp = OperationState.Running) }
-                when (val result = saver.saveToGallery(wallpaper)) {
+                _state.update { it.copy(saveOp = OperationState.Running, downloadProgress = null) }
+                when (
+                    val result =
+                        saver.saveToGallery(wallpaper) { bytesRead, totalBytes ->
+                            _state.update { it.copy(downloadProgress = DownloadProgress(bytesRead, totalBytes)) }
+                        }
+                ) {
                     is SaveResult.Success -> {
-                        _state.update { it.copy(saveOp = OperationState.Succeeded) }
+                        _state.update { it.copy(saveOp = OperationState.Succeeded, downloadProgress = null) }
                         historyRepository.record(wallpaper, HistoryAction.DOWNLOADED)
+                        downloadsRepository.recordDownload(wallpaper)
                         _events.tryEmit(DetailEvent.WallpaperSaved)
                     }
                     is SaveResult.Failure -> {
                         val error = result.error.toDetailError()
-                        _state.update { it.copy(saveOp = OperationState.Failed(error)) }
+                        _state.update { it.copy(saveOp = OperationState.Failed(error), downloadProgress = null) }
                         _events.tryEmit(DetailEvent.ActionFailed(DetailAction.SAVE, error))
                     }
                 }

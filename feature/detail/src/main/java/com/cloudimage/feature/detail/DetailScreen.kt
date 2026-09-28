@@ -46,6 +46,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
@@ -58,7 +59,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -80,6 +80,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -175,6 +176,9 @@ fun DetailScreen(
                 applyBusy = state.applyOp is OperationState.Running,
                 saveBusy = state.saveOp is OperationState.Running,
                 shareBusy = state.shareOp is OperationState.Running,
+                saveSucceeded = state.saveOp is OperationState.Succeeded,
+                downloadProgress = state.downloadProgress,
+                isDownloaded = state.isDownloaded,
                 moreLikeThis = state.moreLikeThis,
                 onOpenWallpaper = onOpenWallpaper,
                 onOpenInfo = { showInfoSheet = true },
@@ -267,6 +271,9 @@ private fun DetailBottomActions(
     applyBusy: Boolean,
     saveBusy: Boolean,
     shareBusy: Boolean,
+    saveSucceeded: Boolean,
+    downloadProgress: DownloadProgress?,
+    isDownloaded: Boolean,
     moreLikeThis: List<Wallpaper>,
     onOpenWallpaper: (Wallpaper) -> Unit,
     onOpenInfo: () -> Unit,
@@ -291,6 +298,9 @@ private fun DetailBottomActions(
             applyBusy = applyBusy,
             saveBusy = saveBusy,
             shareBusy = shareBusy,
+            saveSucceeded = saveSucceeded,
+            downloadProgress = downloadProgress,
+            isDownloaded = isDownloaded,
             onSetWallpaper = onSetWallpaper,
             onSave = onSave,
             onShare = onShare,
@@ -377,11 +387,20 @@ private fun InfoHandleRow(
     }
 }
 
+/**
+ * The viewer's action row (v1.0.22): "Set wallpaper" on the left, download
+ * and share as circular icon buttons on the right with a deliberate gap —
+ * twice the row's rhythm — so the two read as distinct actions, not one
+ * clustered control.
+ */
 @Composable
 private fun DetailBottomBar(
     applyBusy: Boolean,
     saveBusy: Boolean,
     shareBusy: Boolean,
+    saveSucceeded: Boolean,
+    downloadProgress: DownloadProgress?,
+    isDownloaded: Boolean,
     onSetWallpaper: () -> Unit,
     onSave: () -> Unit,
     onShare: () -> Unit,
@@ -406,33 +425,152 @@ private fun DetailBottomBar(
             Text(stringResource(R.string.detail_set_wallpaper))
         }
         Spacer(Modifier.weight(1f))
-        ActionIconButton(
-            icon = Icons.Rounded.Download,
-            contentDescription = stringResource(R.string.detail_save),
+        DownloadButton(
             busy = saveBusy,
+            succeeded = saveSucceeded,
+            downloaded = isDownloaded,
+            progress = downloadProgress,
             onClick = onSave,
         )
-        ActionIconButton(
+        Spacer(Modifier.width(12.dp))
+        CircleActionButton(
             icon = Icons.Rounded.Share,
             contentDescription = stringResource(R.string.detail_share),
-            busy = shareBusy,
+            enabled = !shareBusy,
             onClick = onShare,
         )
     }
 }
 
+/**
+ * A 40 dp circular action button on the FilledTonal palette — the share
+ * action's own shape, and the idle shape of the download button.
+ */
 @Composable
-private fun ActionIconButton(
+private fun CircleActionButton(
     icon: ImageVector,
     contentDescription: String,
-    busy: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    FilledTonalButton(onClick = onClick, enabled = !busy, shape = CircleShape) {
-        if (busy) {
-            CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
-        } else {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier.size(40.dp),
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
             Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+/**
+ * The download action, in its four faces (v1.0.22):
+ *
+ * - **idle** — the download icon, tappable;
+ * - **running** — the icon is replaced by a progress ring tracing the
+ *   button's edge clockwise as the bytes land, with a small
+ *   "1.2 MB / 4.5 MB" label directly below the button (the label, not the
+ *   button, carries the numbers — the button is small and circular). An
+ *   unknown Content-Length degrades the ring to indeterminate and the label
+ *   to the running count alone;
+ * - **complete** — a static checkmark, not tappable: once downloaded the
+ *   button stays a checkmark (the user's chosen end state) and re-saving
+ *   is simply not offered;
+ * - **failed** — back to the idle face; the retry is a fresh tap.
+ *
+ * The button's right edge never moves: the column is end-aligned, so the
+ * size label grows leftward into the space the row's weight spacer already
+ * reserves.
+ */
+@Composable
+private fun DownloadButton(
+    busy: Boolean,
+    succeeded: Boolean,
+    downloaded: Boolean,
+    progress: DownloadProgress?,
+    onClick: () -> Unit,
+) {
+    val complete = succeeded || downloaded
+    val running = busy && !complete
+    Column(horizontalAlignment = Alignment.End, modifier = Modifier.testTag("detail:download")) {
+        Box(contentAlignment = Alignment.Center) {
+            Surface(
+                onClick = onClick,
+                enabled = !busy && !complete,
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                    when {
+                        complete ->
+                            Icon(
+                                Icons.Rounded.Check,
+                                contentDescription = stringResource(R.string.detail_downloaded),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        // The icon gives way to the ring while the bytes land.
+                        running -> Unit
+                        else ->
+                            Icon(
+                                Icons.Rounded.Download,
+                                contentDescription = stringResource(R.string.detail_save),
+                                modifier = Modifier.size(18.dp),
+                            )
+                    }
+                }
+            }
+            if (running) {
+                val fraction = progress?.fraction
+                if (fraction != null) {
+                    CircularProgressIndicator(
+                        progress = { fraction },
+                        strokeWidth = 3.dp,
+                        strokeCap = StrokeCap.Round,
+                        trackColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
+                        modifier = Modifier.matchParentSize(),
+                    )
+                } else {
+                    CircularProgressIndicator(
+                        strokeWidth = 3.dp,
+                        trackColor = Color.Transparent,
+                        modifier = Modifier.matchParentSize(),
+                    )
+                }
+            }
+        }
+        AnimatedVisibility(
+            visible = running && progress != null,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            val label =
+                when (val current = progress) {
+                    null -> ""
+                    else ->
+                        if (current.totalBytes != null && current.totalBytes > 0) {
+                            "${formatFileSize(current.bytesRead)} / ${formatFileSize(current.totalBytes)}"
+                        } else {
+                            formatFileSize(current.bytesRead)
+                        }
+                }
+            Surface(
+                color = Color.White.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(50),
+                modifier = Modifier.padding(top = 4.dp),
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.9f),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                )
+            }
         }
     }
 }
