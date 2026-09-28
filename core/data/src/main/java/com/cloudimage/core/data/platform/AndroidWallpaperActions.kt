@@ -178,10 +178,13 @@ class MediaStoreWallpaperSaver
         private val httpClient: CloudimageHttpClient,
         @ApplicationContext private val context: Context,
     ) : WallpaperSaver {
-        override suspend fun saveToGallery(wallpaper: Wallpaper): SaveResult =
+        override suspend fun saveToGallery(
+            wallpaper: Wallpaper,
+            onProgress: (bytesRead: Long, totalBytes: Long?) -> Unit,
+        ): SaveResult =
             withContext(Dispatchers.IO) {
                 val bytes =
-                    when (val response = httpClient.download(wallpaper.fullUrl)) {
+                    when (val response = httpClient.download(wallpaper.fullUrl, onProgress)) {
                         is NetworkResult.Failure -> return@withContext SaveResult.Failure(response.error.toSaveError())
                         is NetworkResult.Success -> response.value
                     }

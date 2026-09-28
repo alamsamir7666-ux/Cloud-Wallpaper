@@ -34,11 +34,30 @@ class FakeWallpaperApplier : WallpaperApplier {
 class FakeWallpaperSaver : WallpaperSaver {
     val galleryCalls = mutableListOf<Wallpaper>()
     val shareCalls = mutableListOf<Wallpaper>()
+
+    /** Every progress pair emitted by the last (or scripted) gallery save. */
+    val emittedProgress = mutableListOf<Pair<Long, Long?>>()
+
+    /** What a gallery save reports, in order; defaults to a quick 2-tick run. */
+    var progressScript: List<Pair<Long, Long?>> = listOf(2_000L to 4_000L, 4_000L to 4_000L)
+
+    /** Suspends a gallery save AFTER its progress ticks — lets tests observe mid-flight state. */
+    var gate: CompletableDeferred<Unit>? = null
+
     var galleryResult: SaveResult = SaveResult.Success(uri = "content://media/42", fileName = "wallhaven-e1abc2.jpg")
     var shareResult: SaveResult = SaveResult.Success(uri = "/cache/shared/wallhaven-e1abc2.jpg", fileName = "wallhaven-e1abc2.jpg")
 
-    override suspend fun saveToGallery(wallpaper: Wallpaper): SaveResult {
+    override suspend fun saveToGallery(
+        wallpaper: Wallpaper,
+        onProgress: (bytesRead: Long, totalBytes: Long?) -> Unit,
+    ): SaveResult {
         galleryCalls += wallpaper
+        emittedProgress.clear()
+        progressScript.forEach { (bytes, total) ->
+            emittedProgress += bytes to total
+            onProgress(bytes, total)
+        }
+        gate?.await()
         return galleryResult
     }
 

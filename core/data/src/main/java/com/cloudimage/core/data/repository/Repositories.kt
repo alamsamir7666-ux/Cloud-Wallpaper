@@ -1,5 +1,6 @@
 package com.cloudimage.core.data.repository
 
+import com.cloudimage.core.model.Downloaded
 import com.cloudimage.core.model.Favorite
 import com.cloudimage.core.model.HistoryAction
 import com.cloudimage.core.model.HistoryEntry
@@ -36,4 +37,22 @@ interface HistoryRepository {
     companion object {
         const val DEFAULT_LIMIT = 50
     }
+}
+
+/**
+ * Wallpapers the user downloaded from the app (v1.0.22). Tracked
+ * independently of favorites — downloading never favorites, and favoriting
+ * never marks downloaded.
+ */
+interface DownloadsRepository {
+    /** Every downloaded wallpaper, newest download first. */
+    fun observeDownloads(): Flow<List<Downloaded>>
+
+    fun observeIsDownloaded(
+        providerId: String,
+        wallpaperId: String,
+    ): Flow<Boolean>
+
+    /** Records (or refreshes) the download's snapshot — a plain upsert. */
+    suspend fun recordDownload(wallpaper: Wallpaper)
 }

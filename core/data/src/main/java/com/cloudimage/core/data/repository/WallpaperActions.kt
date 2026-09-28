@@ -84,7 +84,19 @@ interface WallpaperApplier {
  */
 interface WallpaperSaver {
     /** Saves the full-resolution image where gallery apps can find it. */
-    suspend fun saveToGallery(wallpaper: Wallpaper): SaveResult
+    suspend fun saveToGallery(wallpaper: Wallpaper): SaveResult = saveToGallery(wallpaper) { _, _ -> }
+
+    /**
+     * [saveToGallery] with live byte progress: [onProgress] receives the
+     * bytes fetched so far and the total when the server states one — the
+     * preview screen's download button renders it as a filling ring with a
+     * "1.2 MB / 4.5 MB" label. A null total means no Content-Length arrived
+     * and callers degrade honestly.
+     */
+    suspend fun saveToGallery(
+        wallpaper: Wallpaper,
+        onProgress: (bytesRead: Long, totalBytes: Long?) -> Unit,
+    ): SaveResult
 
     /**
      * Writes the image into an app-private cache dir and returns its absolute

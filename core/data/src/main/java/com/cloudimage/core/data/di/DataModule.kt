@@ -8,10 +8,12 @@ import com.cloudimage.core.data.platform.MediaStoreWallpaperSaver
 import com.cloudimage.core.data.platform.SystemWallpaperSetter
 import com.cloudimage.core.data.platform.WallpaperManagerSetter
 import com.cloudimage.core.data.repository.AppUpdateRepository
+import com.cloudimage.core.data.repository.DownloadsRepository
 import com.cloudimage.core.data.repository.ExtensionWallpaperSources
 import com.cloudimage.core.data.repository.FavoritesRepository
 import com.cloudimage.core.data.repository.GitHubAppUpdateRepository
 import com.cloudimage.core.data.repository.HistoryRepository
+import com.cloudimage.core.data.repository.RoomDownloadsRepository
 import com.cloudimage.core.data.repository.RoomFavoritesRepository
 import com.cloudimage.core.data.repository.RoomHistoryRepository
 import com.cloudimage.core.data.repository.UpdateInstaller
@@ -45,6 +47,9 @@ internal abstract class DataModule {
 
     @Binds
     abstract fun bindHistoryRepository(impl: RoomHistoryRepository): HistoryRepository
+
+    @Binds
+    abstract fun bindDownloadsRepository(impl: RoomDownloadsRepository): DownloadsRepository
 
     @Binds
     abstract fun bindWallpaperSources(impl: ExtensionWallpaperSources): WallpaperSources

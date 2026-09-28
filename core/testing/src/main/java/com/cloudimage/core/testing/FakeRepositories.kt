@@ -1,7 +1,9 @@
 package com.cloudimage.core.testing
 
+import com.cloudimage.core.data.repository.DownloadsRepository
 import com.cloudimage.core.data.repository.FavoritesRepository
 import com.cloudimage.core.data.repository.HistoryRepository
+import com.cloudimage.core.model.Downloaded
 import com.cloudimage.core.model.Favorite
 import com.cloudimage.core.model.HistoryAction
 import com.cloudimage.core.model.HistoryEntry
@@ -74,5 +76,34 @@ class FakeHistoryRepository : HistoryRepository {
     /** Test hook: replaces the entire state in one shot. */
     fun setEntries(entries: List<HistoryEntry>) {
         _entries.value = entries
+    }
+}
+
+class FakeDownloadsRepository : DownloadsRepository {
+    private val _downloads = MutableStateFlow<List<Downloaded>>(emptyList())
+    val downloads: List<Downloaded> get() = _downloads.value
+
+    override fun observeDownloads(): Flow<List<Downloaded>> = _downloads.asStateFlow()
+
+    override fun observeIsDownloaded(
+        providerId: String,
+        wallpaperId: String,
+    ): Flow<Boolean> =
+        _downloads.map { list ->
+            list.any { it.wallpaper.providerId == providerId && it.wallpaper.id == wallpaperId }
+        }
+
+    override suspend fun recordDownload(wallpaper: Wallpaper) {
+        val matches = { downloaded: Downloaded ->
+            downloaded.wallpaper.providerId == wallpaper.providerId && downloaded.wallpaper.id == wallpaper.id
+        }
+        _downloads.update { current ->
+            current.filterNot(matches) + Downloaded(wallpaper, downloadedAtMillis = System.currentTimeMillis())
+        }
+    }
+
+    /** Test hook: replaces the entire state in one shot. */
+    fun setDownloads(downloads: List<Downloaded>) {
+        _downloads.value = downloads
     }
 }

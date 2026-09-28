@@ -105,11 +105,17 @@ class CloudimageHttpClient
          * User-Agent that earned it, so it overrides both the host agent and
          * any provider browser UA for that host, and its cookies ride the
          * same request.
+         *
+         * [onProgress], when set, streams 2xx bodies in [PROGRESS_CHUNK_BYTES]
+         * chunks and reports the running byte count plus the Content-Length
+         * when there is one; every other body (error pages, challenges) is
+         * buffered as before.
          */
         private suspend fun execute(
             url: String,
             extraHeaders: Map<String, String>,
             bypass: CloudflareBypass?,
+            onProgress: ((bytesRead: Long, totalBytes: Long?) -> Unit)? = null,
         ): HttpPayload {
             val request =
                 Request
@@ -126,10 +132,17 @@ class CloudimageHttpClient
                         }
                     }.build()
             return okHttpClient.newCall(request).await().use { response ->
+                val body = response.body
+                val bytes =
+                    when {
+                        body == null -> ByteArray(0)
+                        onProgress != null && response.code in 200..299 -> body.readBytesWithProgress(onProgress)
+                        else -> body.bytes()
+                    }
                 HttpPayload(
                     statusCode = response.code,
                     headers = response.headers.toMultimap(),
-                    body = response.body?.bytes() ?: ByteArray(0),
+                    body = bytes,
                 )
             }
         }
@@ -162,18 +175,48 @@ class CloudimageHttpClient
          * Same failure taxonomy as [get]; the body is buffered in memory, which
          * is fine for wallpaper-sized files (single-digit megabytes).
          */
-        suspend fun download(url: String): NetworkResult<ByteArray> {
-            val raw = getRaw(url)
-            return when (raw) {
-                is Failure -> raw
-                is Success ->
-                    if (raw.value.isSuccessful) {
-                        Success(raw.value.body)
+        suspend fun download(url: String): NetworkResult<ByteArray> = download(url) { _, _ -> }
+
+        /**
+         * [download] with live byte progress: [onProgress] receives the bytes
+         * read so far and the total when the server states one (null when the
+         * response carries no usable Content-Length — the caller degrades to an
+         * indeterminate indicator).
+         *
+         * Progress only flows on 2xx bodies: error pages and Cloudflare
+         * challenges are tiny and buffered as usual, so a solve-and-replay
+         * never emits misleading byte counts.
+         */
+        suspend fun download(
+            url: String,
+            onProgress: (bytesRead: Long, totalBytes: Long?) -> Unit,
+        ): NetworkResult<ByteArray> =
+            withContext(Dispatchers.IO) {
+                try {
+                    val state = cloudflare.bypassStateFor(url)
+                    val first = execute(url, emptyMap(), state, onProgress)
+                    val payload =
+                        if (!CloudflareChallenge.isChallenge(first)) {
+                            first
+                        } else {
+                            val bypass = cloudflare.solve(url, staleState = state)
+                            if (bypass == null) {
+                                first
+                            } else {
+                                execute(url, emptyMap(), bypass, onProgress)
+                            }
+                        }
+                    if (payload.isSuccessful) {
+                        Success(payload.body)
                     } else {
-                        Failure(NetworkError.Http(raw.value.statusCode, url))
+                        Failure(NetworkError.Http(payload.statusCode, url))
                     }
+                } catch (e: SocketTimeoutException) {
+                    Failure(NetworkError.Timeout)
+                } catch (e: IOException) {
+                    Failure(NetworkError.Io(e))
+                }
             }
-        }
 
         /** Performs a GET and decodes the JSON body into [T]. */
         suspend fun <T> getJson(
@@ -197,11 +240,41 @@ class CloudimageHttpClient
 
             private const val HEADER_COOKIE = "Cookie"
 
+            /**
+             * How many bytes one progress tick covers — wallpaper-sized
+             * files report a few dozen ticks, not one per read.
+             */
+            internal const val PROGRESS_CHUNK_BYTES = 64L * 1024
+
             /** Sent with every request; some public APIs require identification. */
             internal const val USER_AGENT =
                 "Cloudimage/1.0 (Android; +https://github.com/alamsamir7666-ux/Cloud-Wallpaper)"
         }
     }
+
+/**
+ * Streams [this] body into a byte array, reporting the running count to
+ * [onProgress] once per [CloudimageHttpClient.PROGRESS_CHUNK_BYTES] read.
+ * The declared Content-Length (when positive) rides along as the total;
+ * chunked or unlengthed bodies report a null total and the caller decides
+ * how to render that honestly.
+ */
+private fun okhttp3.ResponseBody.readBytesWithProgress(onProgress: (bytesRead: Long, totalBytes: Long?) -> Unit): ByteArray {
+    val total = contentLength().takeIf { it > 0 }
+    val source = source()
+    val output = okio.Buffer()
+    val chunk = okio.Buffer()
+    var read = 0L
+    while (true) {
+        val count = source.read(chunk, CloudimageHttpClient.PROGRESS_CHUNK_BYTES)
+        if (count == -1L) break
+        read += count
+        output.write(chunk, count)
+        chunk.clear()
+        onProgress(read, total)
+    }
+    return output.readByteArray()
+}
 
 /**
  * Suspends until the OkHttp call completes; cancelling the coroutine cancels

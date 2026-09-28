@@ -1,8 +1,10 @@
 package com.cloudimage.core.data.mapper
 
+import com.cloudimage.core.database.DownloadedEntity
 import com.cloudimage.core.database.FavoriteEntity
 import com.cloudimage.core.database.HistoryEntity
 import com.cloudimage.core.model.ContentRating
+import com.cloudimage.core.model.Downloaded
 import com.cloudimage.core.model.Favorite
 import com.cloudimage.core.model.HistoryAction
 import com.cloudimage.core.model.HistoryEntry
@@ -30,6 +32,26 @@ internal fun FavoriteEntity.toFavorite(): Favorite =
         addedAtMillis = addedAtMillis,
     )
 
+internal fun Wallpaper.toDownloadedEntity(): DownloadedEntity =
+    DownloadedEntity(
+        providerId = providerId,
+        wallpaperId = id,
+        thumbUrl = thumbUrl,
+        fullUrl = fullUrl,
+        title = title,
+        width = width,
+        height = height,
+        sourceUrl = sourceUrl,
+        contentRating = contentRating.name,
+        downloadedAtMillis = System.currentTimeMillis(),
+    )
+
+internal fun DownloadedEntity.toDownloaded(): Downloaded =
+    Downloaded(
+        wallpaper = toWallpaper(),
+        downloadedAtMillis = downloadedAtMillis,
+    )
+
 internal fun Wallpaper.toHistoryEntity(
     action: HistoryAction,
     atMillis: Long,
@@ -55,22 +77,57 @@ internal fun HistoryEntity.toHistoryEntry(): HistoryEntry =
         atMillis = atMillis,
     )
 
-private fun FavoriteEntity.toWallpaper(): Wallpaper =
-    Wallpaper(
-        id = wallpaperId,
+private fun HistoryEntity.toWallpaper(): Wallpaper =
+    snapshotToWallpaper(
         providerId = providerId,
+        wallpaperId = wallpaperId,
         thumbUrl = thumbUrl,
         fullUrl = fullUrl,
         title = title,
         width = width,
         height = height,
         sourceUrl = sourceUrl,
-        contentRating =
-            runCatching { ContentRating.valueOf(contentRating) }
-                .getOrDefault(ContentRating.SFW),
+        contentRating = contentRating,
     )
 
-private fun HistoryEntity.toWallpaper(): Wallpaper =
+private fun FavoriteEntity.toWallpaper(): Wallpaper =
+    snapshotToWallpaper(
+        providerId = providerId,
+        wallpaperId = wallpaperId,
+        thumbUrl = thumbUrl,
+        fullUrl = fullUrl,
+        title = title,
+        width = width,
+        height = height,
+        sourceUrl = sourceUrl,
+        contentRating = contentRating,
+    )
+
+private fun DownloadedEntity.toWallpaper(): Wallpaper =
+    snapshotToWallpaper(
+        providerId = providerId,
+        wallpaperId = wallpaperId,
+        thumbUrl = thumbUrl,
+        fullUrl = fullUrl,
+        title = title,
+        width = width,
+        height = height,
+        sourceUrl = sourceUrl,
+        contentRating = contentRating,
+    )
+
+/** All three snapshot entities carry the same fields; this is their one mapper. */
+private fun snapshotToWallpaper(
+    providerId: String,
+    wallpaperId: String,
+    thumbUrl: String,
+    fullUrl: String,
+    title: String?,
+    width: Int?,
+    height: Int?,
+    sourceUrl: String?,
+    contentRating: String,
+): Wallpaper =
     Wallpaper(
         id = wallpaperId,
         providerId = providerId,

@@ -1,11 +1,15 @@
 package com.cloudimage.core.data.repository
 
+import com.cloudimage.core.data.mapper.toDownloaded
+import com.cloudimage.core.data.mapper.toDownloadedEntity
 import com.cloudimage.core.data.mapper.toFavorite
 import com.cloudimage.core.data.mapper.toFavoriteEntity
 import com.cloudimage.core.data.mapper.toHistoryEntity
 import com.cloudimage.core.data.mapper.toHistoryEntry
+import com.cloudimage.core.database.DownloadedDao
 import com.cloudimage.core.database.FavoriteDao
 import com.cloudimage.core.database.HistoryDao
+import com.cloudimage.core.model.Downloaded
 import com.cloudimage.core.model.Favorite
 import com.cloudimage.core.model.HistoryAction
 import com.cloudimage.core.model.HistoryEntry
@@ -57,4 +61,23 @@ internal class RoomHistoryRepository
         }
 
         override suspend fun clear() = historyDao.clearAll()
+    }
+
+@Singleton
+internal class RoomDownloadsRepository
+    @Inject
+    constructor(
+        private val downloadedDao: DownloadedDao,
+    ) : DownloadsRepository {
+        override fun observeDownloads(): Flow<List<Downloaded>> =
+            downloadedDao.observeAll().map { entities -> entities.map { it.toDownloaded() } }
+
+        override fun observeIsDownloaded(
+            providerId: String,
+            wallpaperId: String,
+        ): Flow<Boolean> = downloadedDao.observeIsDownloaded(providerId, wallpaperId)
+
+        override suspend fun recordDownload(wallpaper: Wallpaper) {
+            downloadedDao.upsert(wallpaper.toDownloadedEntity())
+        }
     }

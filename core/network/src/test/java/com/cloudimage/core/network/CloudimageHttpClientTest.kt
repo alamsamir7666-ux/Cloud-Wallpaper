@@ -142,6 +142,71 @@ class CloudimageHttpClientTest {
         }
 
     @Test
+    fun downloadWithProgressReportsRunningBytesAndTotal() =
+        runTest {
+            // A body larger than one 64 KiB progress chunk, with a declared
+            // Content-Length so the total is knowable.
+            val bytes = ByteArray(3 * CloudimageHttpClient.PROGRESS_CHUNK_BYTES.toInt() + 7) { (it % 251).toByte() }
+            server.enqueue(
+                MockResponse()
+                    .setBody(okio.Buffer().write(bytes))
+                    .setHeader("Content-Length", bytes.size.toLong()),
+            )
+            val progress = mutableListOf<Pair<Long, Long?>>()
+
+            val result =
+                client.download(server.url("/full/big.jpg").toString()) { read, total ->
+                    progress += read to total
+                }
+
+            assertTrue(result is NetworkResult.Success)
+            assertTrue((result as NetworkResult.Success).value.contentEquals(bytes))
+            // Monotonic byte counts, ending at the declared total.
+            assertEquals(bytes.size.toLong(), progress.last().first)
+            assertEquals(bytes.size.toLong(), progress.last().second)
+            assertTrue(progress.zipWithNext().all { (earlier, later) -> later.first > earlier.first })
+            assertTrue(progress.all { it.second == bytes.size.toLong() })
+        }
+
+    @Test
+    fun downloadWithProgressDegradesToNullTotalWithoutContentLength() =
+        runTest {
+            // Chunked transfer encoding: no Content-Length on the response.
+            val bytes = ByteArray(200) { (it % 97).toByte() }
+            server.enqueue(
+                MockResponse()
+                    .setChunkedBody(okio.Buffer().write(bytes), 64),
+            )
+            val progress = mutableListOf<Pair<Long, Long?>>()
+
+            val result =
+                client.download(server.url("/full/chunked.jpg").toString()) { read, total ->
+                    progress += read to total
+                }
+
+            assertTrue(result is NetworkResult.Success)
+            assertTrue((result as NetworkResult.Success).value.contentEquals(bytes))
+            assertEquals(bytes.size.toLong(), progress.last().first)
+            assertTrue(progress.all { it.second == null })
+        }
+
+    @Test
+    fun downloadWithProgressEmitsNothingForErrorBodies() =
+        runTest {
+            val url = server.url("/full/forbidden.jpg").toString()
+            server.enqueue(MockResponse().setResponseCode(403).setBody("denied"))
+            val progress = mutableListOf<Pair<Long, Long?>>()
+
+            val result =
+                client.download(url) { read, total ->
+                    progress += read to total
+                }
+
+            assertEquals(NetworkResult.Failure(NetworkError.Http(code = 403, url = url)), result)
+            assertTrue(progress.isEmpty())
+        }
+
+    @Test
     fun getRawSendsExtraHeaders() =
         runTest {
             server.enqueue(MockResponse().setBody("{}"))
