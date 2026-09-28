@@ -23,9 +23,10 @@ internal object DatabaseModule {
                 klass = CloudimageDatabase::class.java,
                 name = "cloudimage.db",
             )
-            // Acceptable while pre-1.0: schema churn wipes local data.
-            // Part 8 adds real migrations before release.
-            .fallbackToDestructiveMigration()
+            // Real migrations since v1.0.22 — favorites, history and
+            // downloads must survive app updates, so the pre-1.0
+            // destructive fallback is retired.
+            .addMigrations(*Migrations.ALL)
             .build()
 
     @Provides
@@ -33,4 +34,7 @@ internal object DatabaseModule {
 
     @Provides
     fun provideHistoryDao(database: CloudimageDatabase): HistoryDao = database.historyDao()
+
+    @Provides
+    fun provideDownloadedDao(database: CloudimageDatabase): DownloadedDao = database.downloadedDao()
 }

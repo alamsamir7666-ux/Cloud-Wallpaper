@@ -50,3 +50,25 @@ data class HistoryEntity(
     val action: String,
     val atMillis: Long,
 )
+
+/**
+ * A wallpaper the user downloaded from the app (v1.0.22). Identity is the
+ * (providerId, wallpaperId) pair like favorites, and the same snapshot fields
+ * so the row renders even if the source later changes or disappears.
+ *
+ * Downloaded is tracked independently of favorites — a wallpaper can be
+ * downloaded without being favorited and vice versa.
+ */
+@Entity(tableName = "downloads", primaryKeys = ["providerId", "wallpaperId"])
+data class DownloadedEntity(
+    val providerId: String,
+    val wallpaperId: String,
+    val thumbUrl: String,
+    val fullUrl: String,
+    val title: String?,
+    val width: Int?,
+    val height: Int?,
+    val sourceUrl: String?,
+    val contentRating: String,
+    val downloadedAtMillis: Long,
+)

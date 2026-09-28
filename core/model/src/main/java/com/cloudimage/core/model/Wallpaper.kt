@@ -69,6 +69,12 @@ data class Favorite(
     val addedAtMillis: Long,
 )
 
+/** A wallpaper the user downloaded from the app, tracked independently of favorites. */
+data class Downloaded(
+    val wallpaper: Wallpaper,
+    val downloadedAtMillis: Long,
+)
+
 /** What the user did with a wallpaper — drives the history feed. */
 enum class HistoryAction {
     VIEWED,

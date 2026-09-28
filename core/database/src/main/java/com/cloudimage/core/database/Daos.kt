@@ -49,3 +49,21 @@ interface HistoryDao {
     @Query("DELETE FROM history")
     suspend fun clearAll()
 }
+
+@Dao
+interface DownloadedDao {
+    /** Inserts or replaces — re-downloading refreshes the stored snapshot. */
+    @Upsert
+    suspend fun upsert(downloaded: DownloadedEntity)
+
+    @Query("SELECT * FROM downloads ORDER BY downloadedAtMillis DESC")
+    fun observeAll(): Flow<List<DownloadedEntity>>
+
+    @Query(
+        "SELECT EXISTS(SELECT 1 FROM downloads WHERE providerId = :providerId AND wallpaperId = :wallpaperId)",
+    )
+    fun observeIsDownloaded(
+        providerId: String,
+        wallpaperId: String,
+    ): Flow<Boolean>
+}

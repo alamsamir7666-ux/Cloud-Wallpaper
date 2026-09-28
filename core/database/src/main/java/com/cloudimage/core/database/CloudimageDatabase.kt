@@ -10,12 +10,14 @@ import androidx.room.RoomDatabase
  * migration tests on before the v1.0.0 release.
  */
 @Database(
-    entities = [FavoriteEntity::class, HistoryEntity::class],
-    version = 1,
+    entities = [FavoriteEntity::class, HistoryEntity::class, DownloadedEntity::class],
+    version = 2,
     exportSchema = false,
 )
 abstract class CloudimageDatabase : RoomDatabase() {
     abstract fun favoriteDao(): FavoriteDao
 
     abstract fun historyDao(): HistoryDao
+
+    abstract fun downloadedDao(): DownloadedDao
 }
