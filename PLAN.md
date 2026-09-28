@@ -191,6 +191,53 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-28 — v1.0.22 SHIPPED (Downloads: the library tab and the
+  honest download button).** The user's two-part brief, shipped whole.
+  **(a) The Library grows a third destination — Downloaded** (order:
+  Favorites, History, Downloaded), riding the same swipe-synced pill
+  pager. It is a masonry grid of every wallpaper downloaded from the
+  app, mirroring the favorites grid's layout exactly (same columns,
+  spacing, card) — tracked in its OWN Room table (downloads, keyed by
+  the favorite's (providerId, wallpaperId) pair with the same snapshot
+  fields) so a download and a favorite stay independent facts: the
+  heart overlay on downloaded cards reflects and toggles favorites
+  (outlined when not favorited, filled when favorited — "still shows
+  the heart icon as filled/active" when both), downloading never
+  favorites, and clearing history never touches downloads. Empty
+  state: "No downloads yet." **The migration is real** — database
+  version 2 retires the pre-1.0 destructive fallback and seeds the new
+  table from the history feed (newest DOWNLOADED row per wallpaper
+  via SQLite's MAX-picks-the-row guarantee), so wallpapers downloaded
+  under v1.0.21 and earlier appear without re-downloading; a
+  full-fidelity Robolectric test builds a v1 file and opens it through
+  Room so the migrated schema is validated for real (it caught the
+  NOT NULL on the autoincrement id on its first run — the test works).
+  **(b) The preview's download button gets the full treatment:** tap
+  it and the icon is REPLACED by a determinate progress ring tracing
+  the circular button's edge clockwise as the bytes land, driven by a
+  new streaming path in CloudimageHttpClient (64 KiB ticks, the
+  Content-Length when the server states one; error pages and
+  Cloudflare challenges stay buffered so a solve-and-replay never
+  emits misleading counts). The size text — "1.2 MB / 4.5 MB",
+  KB/MB/GB formatted like the info sheet — rides as a small label
+  DIRECTLY BELOW the button (the user's call: the button is small and
+  circular), growing leftward so the button never moves. Unknown
+  total degrades honestly: indeterminate ring, running count alone.
+  On success the ring becomes a static checkmark, NOT tappable — once
+  downloaded, always downloaded (isDownloaded streams from the table,
+  so revisiting opens straight into the checkmark); a failure or
+  cancel returns the button to its idle download icon for a fresh-tap
+  retry. The download and share buttons are now true 40dp circular
+  buttons on the FilledTonal palette, separated by twice the row's
+  rhythm (24dp) so they read as distinct actions — the spacing the
+  user asked for. Gates: ktlint clean; **669/0 tests (+15**:
+  3 DAO + 2 migration + 3 streaming client + 5 detail VM incl. a
+  gated mid-flight progress assertion + 3 library VM**)**;
+  assembleRelease 3,184,827 bytes unsigned after the usual daemon-OOM
+  pkill+retry; dex audit PASS 5,974 host classes, wallhaven ABI
+  intact; CI green on dcd0d9d; tag `v1.0.22`;
+  `Cloudimage-v1.0.22.apk` 3,197,115 bytes signed & cert-verified.
+
 - **2026-09-27 — v1.0.21 SHIPPED (two keyless scrapers + honest
   detail info).** Two halves shipped under one version. **(a) Two new
   official keyless providers** in the app tree as buildable
