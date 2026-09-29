@@ -191,6 +191,54 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-29 — v1.0.27 SHIPPED (a held finger holds the image still: the shiver
+  was two diseases).** The user's report narrowed the symptom to its sharpest
+  form yet: "It seems the problem has been partially resolved, but the image
+  still shakes. The image shakes when I swipe it slightly to the right or
+  left and hold it, or when I swipe it down a bit and hold it." Partially
+  resolved is exactly what v1.0.26 delivered — one real fix (the interleaved
+  writers) plus one fresh amplification (whole-pixel rounding) — and the
+  remainder finally identified BOTH leftover diseases. **Disease one: the
+  v1.0.26 rework had the locked drag's write AND its `change.consume()`
+  running AFTER the Main-pass observation await.** Consumption only travels
+  downstream, and the zoomable dispatches its Main pass BEFORE its parent —
+  so a consume landing during the parent's own Main dispatch is one full
+  lap too late for the child to ever see. The v1.0.26 commit message said
+  "it still consumes its locked moves in Initial"; the shipped code did
+  not. Telephoto's tap and quick-zoom detectors therefore ran on the raw,
+  unconsumed stream for the entire drag, and a quick zoom armed by an
+  earlier release — engaging in the gap between the image's ~8dp tap slop
+  and the arbiter's 10dp lock slop — could take the very finger the arbiter
+  was already moving the image with, invisibly to the claim check (whose
+  `!locked` guard then blinded it too). Two writers again, worst on slight
+  swipes held in place — precisely the reported gesture. **The write and
+  the consume now land while the arbiter still owns the Initial pass**
+  (before the zoomable's detectors dispatch at all): a locked move arrives
+  at the image's own layer already consumed, its detectors cancel on a
+  swipe instead of arming windows, and a post-lock claim is no longer
+  something to miss — it cannot happen. The claim check still reads the
+  Main pass and runs BEFORE the lock's first write, so a quick zoom that
+  engaged pre-lock is stood down on the very event it starts consuming;
+  the zoom-fraction stand-down moved ahead of the lock for the same
+  reason. **Disease two: a resting finger is not still to its digitizer.**
+  Panels keep reporting sub-pixel and single-pixel jitter for as long as
+  the finger rests, and a follow fed straight through — rendered, since
+  v1.0.26, on whole-pixel layout offsets — translated that noise into a
+  whole-pixel shiver along whichever axis the swipe had locked. **The
+  follows are now written through a stillness band** (`ViewerGestureArbiter`
+  tracks the last applied follow per axis; `followX`/`followY` only move
+  once the raw follow has traveled `STILLNESS_PX = 3` pixels from it, the
+  anchor resetting on every `onDown`): a fraction of a millimetre, far
+  below anything a deliberate drag can feel — only stillness is filtered
+  out, never travel. Gates: ktlint clean; **713/0 tests** (the stillness
+  band is pure arbiter arithmetic, so this time it IS JVM-testable: 5 new
+  tests — held horizontal noise, held dismiss noise, genuine travel
+  crossing the band, and the anchor resetting between gestures);
+  assembleRelease 3,184,827 bytes unsigned; dex audit PASS (5,973 host
+  classes, wallhaven zip 36 classes / 32 external refs / 0 unresolved); CI
+  green on `42ce138`; tag `v1.0.27`; `Cloudimage-v1.0.27.apk` 3,197,115
+  bytes signed & cert-verified, badging confirms versionCode 28 / 1.0.27.
+
 - **2026-09-29 — v1.0.26 SHIPPED (one gesture, one writer: the shiver, actually
   fixed).** The user's report, twice corrected into precision: "When I swipe
   down on the image, it starts slightly shaking vertically, and when I swipe
