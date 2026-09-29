@@ -15,6 +15,7 @@ import com.cloudimage.core.data.repository.SourceCapability
 import com.cloudimage.core.data.repository.WallpaperApplier
 import com.cloudimage.core.data.repository.WallpaperSaver
 import com.cloudimage.core.data.repository.WallpaperSources
+import com.cloudimage.core.data.viewer.ViewerSession
 import com.cloudimage.core.model.HistoryAction
 import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.core.model.WallpaperDetails
@@ -22,15 +23,21 @@ import com.cloudimage.core.model.WallpaperQuery
 import com.cloudimage.core.model.savedMimeType
 import com.cloudimage.core.network.NetworkResult
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -112,6 +119,10 @@ data class DetailUiState(
     /** True the moment a wallpaper has ever been downloaded from the app —
      * the save button settles into a static, untappable checkmark. */
     val isDownloaded: Boolean = false,
+    /** A previous image exists to page back to with a rightward swipe (v1.0.23). */
+    val hasPrevious: Boolean = false,
+    /** A next image exists to page forward to with a leftward swipe (v1.0.23). */
+    val hasNext: Boolean = false,
     /**
      * Same-provider lookalikes over the wallpaper's top tags (v1.0.9) —
      * empty means the row stays hidden: the source does not declare
@@ -139,6 +150,11 @@ data class DetailUiState(
  * tags, a same-provider "More like this" carousel loads alongside (v1.0.9):
  * the top tags become one query, broadening to the single strongest tag
  * when the combination was too narrow.
+ *
+ * Since v1.0.23 the screen also pages in place: the grid it was opened from
+ * parks its list in the [ViewerSession], which this ViewModel snapshots and
+ * owns — sideways swipes then move through it, reloading history,
+ * recommendations and details for each image that lands.
  */
 @HiltViewModel
 class DetailViewModel
@@ -151,8 +167,15 @@ class DetailViewModel
         private val historyRepository: HistoryRepository,
         private val downloadsRepository: DownloadsRepository,
         private val sources: WallpaperSources,
+        private val viewerSession: ViewerSession,
     ) : ViewModel() {
         private val initialWallpaper = DetailDestination.decode(savedStateHandle[DetailDestination.arg])
+
+        /** The list this viewer pages through — the grid it was opened from, or the lookalike fallback. */
+        private var frame: ViewerSession.Frame? = null
+
+        /** The per-wallpaper loads (recommendations, details), cancelled on every page. */
+        private var loadsJob: Job? = null
 
         private val _state = MutableStateFlow(DetailUiState(wallpaper = initialWallpaper))
         val state: StateFlow<DetailUiState> = _state.asStateFlow()
@@ -162,17 +185,15 @@ class DetailViewModel
 
         init {
             initialWallpaper?.let { wallpaper ->
+                frame = viewerSession.take(wallpaper)
+                updateNeighbors()
                 viewModelScope.launch { historyRepository.record(wallpaper, HistoryAction.VIEWED) }
-                favoritesRepository
-                    .observeIsFavorite(wallpaper.providerId, wallpaper.id)
-                    .onEach { isFavorite -> _state.update { it.copy(isFavorite = isFavorite) } }
-                    .launchIn(viewModelScope)
-                downloadsRepository
-                    .observeIsDownloaded(wallpaper.providerId, wallpaper.id)
-                    .onEach { isDownloaded -> _state.update { it.copy(isDownloaded = isDownloaded) } }
-                    .launchIn(viewModelScope)
-                viewModelScope.launch { loadMoreLikeThis(wallpaper) }
-                viewModelScope.launch { loadDetails(wallpaper) }
+                observeWallpaperFlags()
+                loadsJob =
+                    viewModelScope.launch {
+                        loadMoreLikeThis(wallpaper)
+                        loadDetails(wallpaper)
+                    }
             }
         }
 
@@ -180,6 +201,72 @@ class DetailViewModel
         fun onToggleFavorite() {
             val wallpaper = _state.value.wallpaper ?: return
             viewModelScope.launch { favoritesRepository.toggleFavorite(wallpaper) }
+        }
+
+        /**
+         * Pages the viewer through its list (v1.0.23): +1 is the next
+         * image (a leftward swipe), -1 the previous (a rightward one). The
+         * wallpaper swaps in place — history, recommendations and details
+         * reload for the image that lands while the loads belonging to the
+         * one that leaves are cancelled; a page past either end lands on
+         * the rubber band instead, not on a wrap-around.
+         */
+        fun onNavigate(delta: Int) {
+            if (delta == 0) return
+            val current = frame ?: return
+            val target = current.index + delta
+            if (target !in current.wallpapers.indices) return
+            val wallpaper = current.wallpapers[target]
+            frame = current.copy(index = target)
+            _state.update {
+                it.copy(
+                    wallpaper = wallpaper,
+                    details = null,
+                    moreLikeThis = emptyList(),
+                    isFavorite = false,
+                    isDownloaded = false,
+                    applyOp = OperationState.Idle,
+                    saveOp = OperationState.Idle,
+                    shareOp = OperationState.Idle,
+                    downloadProgress = null,
+                )
+            }
+            updateNeighbors()
+            loadsJob?.cancel()
+            loadsJob =
+                viewModelScope.launch {
+                    historyRepository.record(wallpaper, HistoryAction.VIEWED)
+                    loadMoreLikeThis(wallpaper)
+                    loadDetails(wallpaper)
+                }
+        }
+
+        /**
+         * Follows the wallpaper on screen through favorites and downloads:
+         * the observers re-bind on every in-place page, so a swipe never
+         * carries the previous image's flags over to the next one.
+         */
+        @OptIn(ExperimentalCoroutinesApi::class)
+        private fun observeWallpaperFlags() {
+            _state
+                .map { it.wallpaper }
+                .filterNotNull()
+                .distinctUntilChanged()
+                .flatMapLatest { wallpaper ->
+                    combine(
+                        favoritesRepository.observeIsFavorite(wallpaper.providerId, wallpaper.id),
+                        downloadsRepository.observeIsDownloaded(wallpaper.providerId, wallpaper.id),
+                    ) { isFavorite, isDownloaded -> isFavorite to isDownloaded }
+                }.onEach { (isFavorite, isDownloaded) ->
+                    _state.update { it.copy(isFavorite = isFavorite, isDownloaded = isDownloaded) }
+                }.launchIn(viewModelScope)
+        }
+
+        /** Publishes which paging neighbors exist for the wallpaper on screen. */
+        private fun updateNeighbors() {
+            _state.update {
+                it.copy(hasPrevious = frame?.hasPrevious == true, hasNext = frame?.hasNext == true)
+            }
         }
 
         /** Applies the wallpaper to the chosen target screen(s). */
@@ -275,6 +362,14 @@ class DetailViewModel
             if (!canRecommend || wallpaper.tags.none { it.isNotBlank() }) return
             val results = searchMoreLikeThis(wallpaper) ?: return
             _state.update { it.copy(moreLikeThis = results) }
+            // No grid parked a list for this screen (process death, a deep
+            // link): the row itself becomes the browsing list, led by the
+            // wallpaper on screen so "previous" from the first lookalike
+            // steps back to it.
+            if (frame == null && results.isNotEmpty()) {
+                frame = ViewerSession.Frame(listOf(wallpaper) + results, index = 0)
+                updateNeighbors()
+            }
         }
 
         /**

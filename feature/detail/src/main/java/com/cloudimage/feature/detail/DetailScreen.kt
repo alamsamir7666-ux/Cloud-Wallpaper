@@ -37,7 +37,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -71,11 +71,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -102,17 +103,17 @@ import coil.request.ImageRequest
 import com.cloudimage.core.data.repository.ApplyTarget
 import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.core.model.WallpaperDetails
-import me.saket.telephoto.zoomable.ZoomSpec
-import me.saket.telephoto.zoomable.rememberZoomableImageState
-import me.saket.telephoto.zoomable.rememberZoomableState
 import java.io.File
 import java.util.Locale
 
 /**
- * Fullscreen preview + apply screen (v1.0.17): a gallery-grade zoomable
- * image that stays crisp at any zoom, a blurred-thumbnail backdrop with
- * byte-accurate loading progress while the original downloads, and a
- * bottom "swipe up for details" handle replacing the old info icon. The
+ * Fullscreen preview + apply screen (v1.0.17; gestures reworked v1.0.23):
+ * a gallery-grade zoomable image that stays crisp at any zoom, with one
+ * gesture per swipe direction — down dismisses (1:1 translate plus fade,
+ * never a scale), left/right page through the list the viewer was opened
+ * from (gallery feed, library tab, or "More like this"), up opens the
+ * details panel like the bottom pill it echoes. The chrome (top bar,
+ * carousel, action row) rides the same dismiss fade as the scrim. The
  * same-provider "More like this" carousel steps aside while zoomed so
  * nothing competes with pixel inspection. Favorite toggle, set-as-wallpaper
  * (home / lock / both), save-to-gallery and share ride as before; one-shot
@@ -121,7 +122,7 @@ import java.util.Locale
 @Composable
 fun DetailScreen(
     onBack: () -> Unit,
-    onOpenWallpaper: (Wallpaper) -> Unit,
+    onOpenWallpaper: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: DetailViewModel = hiltViewModel(),
 ) {
@@ -132,13 +133,15 @@ fun DetailScreen(
     var showInfoSheet by remember { mutableStateOf(false) }
     val wallpaper = state.wallpaper
 
-    // The preview drives this state; this screen reacts to it (hiding the
-    // carousel while zoomed).
-    val zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = MAX_ZOOM))
-    val imageState = rememberZoomableImageState(zoomableState)
-    val zoomed by remember {
-        derivedStateOf { (zoomableState.zoomFraction ?: 0f) > ZOOMED_FRACTION }
-    }
+    // The viewer's live motion (v1.0.23): hoisted above the per-wallpaper
+    // key below so a committed swipe can animate its exit, swap the
+    // wallpaper, and slide the next one in — the offsets outlive the swap
+    // while the zoom states reset with the image. zoomedOut and
+    // imageDisplayed report the preview's state upward the same way.
+    val motionScope = rememberCoroutineScope()
+    val motion = remember(motionScope) { ViewerMotionState(motionScope) }
+    val zoomedOut = remember { mutableStateOf(false) }
+    val imageDisplayed = remember { mutableStateOf(false) }
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
@@ -157,22 +160,42 @@ fun DetailScreen(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
+    Box(
+        // The viewer draws — and fades — its own scrim; solid black stays
+        // only behind the invalid-destination dead end so its light text
+        // keeps a home.
+        modifier =
+            modifier
+                .fillMaxSize()
+                .background(if (wallpaper == null) Color.Black else Color.Transparent),
+    ) {
         if (wallpaper == null) {
             InvalidDestination(onBack = onBack)
         } else {
-            ZoomableWallpaperPreview(
-                wallpaper = wallpaper,
-                imageState = imageState,
-                onDismiss = onBack,
-            )
+            key("${wallpaper.providerId}:${wallpaper.id}") {
+                ZoomableWallpaperPreview(
+                    wallpaper = wallpaper,
+                    zoomedOut = zoomedOut,
+                    imageDisplayed = imageDisplayed,
+                    motion = motion,
+                    onDismiss = onBack,
+                    onNavigate = viewModel::onNavigate,
+                    onOpenInfo = { showInfoSheet = true },
+                    hasNext = state.hasNext,
+                    hasPrevious = state.hasPrevious,
+                )
+            }
             DetailTopBar(
                 isFavorite = state.isFavorite,
                 onBack = onBack,
                 onToggleFavorite = viewModel::onToggleFavorite,
+                modifier =
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .graphicsLayer { alpha = 1f - motion.dismissProgress },
             )
             DetailBottomActions(
-                zoomed = zoomed,
+                zoomed = zoomedOut.value,
                 applyBusy = state.applyOp is OperationState.Running,
                 saveBusy = state.saveOp is OperationState.Running,
                 shareBusy = state.shareOp is OperationState.Running,
@@ -180,18 +203,31 @@ fun DetailScreen(
                 downloadProgress = state.downloadProgress,
                 isDownloaded = state.isDownloaded,
                 moreLikeThis = state.moreLikeThis,
-                onOpenWallpaper = onOpenWallpaper,
+                onOpenWallpaper = { wallpapers, index ->
+                    // Browsing onward from a lookalike tap: prepend the
+                    // wallpaper on screen so "previous" from the first
+                    // lookalike steps back to it.
+                    onOpenWallpaper(listOf(wallpaper) + wallpapers, index + 1)
+                },
                 onOpenInfo = { showInfoSheet = true },
                 onSetWallpaper = { showTargetSheet = true },
                 onSave = viewModel::onSave,
                 onShare = viewModel::onShare,
-                modifier = Modifier.align(Alignment.BottomCenter),
+                modifier =
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .graphicsLayer { alpha = 1f - motion.dismissProgress },
             )
         }
 
         SnackbarHost(
             hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 128.dp),
+            modifier =
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .graphicsLayer { alpha = 1f - motion.dismissProgress }
+                    .navigationBarsPadding()
+                    .padding(bottom = 128.dp),
         )
     }
 
@@ -275,7 +311,7 @@ private fun DetailBottomActions(
     downloadProgress: DownloadProgress?,
     isDownloaded: Boolean,
     moreLikeThis: List<Wallpaper>,
-    onOpenWallpaper: (Wallpaper) -> Unit,
+    onOpenWallpaper: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
     onOpenInfo: () -> Unit,
     onSetWallpaper: () -> Unit,
     onSave: () -> Unit,
@@ -580,11 +616,14 @@ private fun DownloadButton(
  * mirroring the home carousels' card metrics at a smaller scale so the
  * fullscreen image stays the hero. It only exists when the ViewModel
  * found something — empty means hidden — and it slides away while zoomed.
+ * Since v1.0.23 a tap hands the whole row (plus the wallpaper it belongs
+ * to) to navigation, so the opened viewer can page through the row with
+ * sideways swipes.
  */
 @Composable
 private fun MoreLikeThisRow(
     wallpapers: List<Wallpaper>,
-    onOpenWallpaper: (Wallpaper) -> Unit,
+    onOpenWallpaper: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -607,10 +646,13 @@ private fun MoreLikeThisRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.heightIn(min = LOOKALIKE_HEIGHT + 4.dp),
         ) {
-            items(wallpapers, key = { "${it.providerId}:${it.id}" }) { wallpaper ->
+            itemsIndexed(
+                wallpapers,
+                key = { _, wallpaper -> "${wallpaper.providerId}:${wallpaper.id}" },
+            ) { index, wallpaper ->
                 LookalikeCard(
                     wallpaper = wallpaper,
-                    onClick = { onOpenWallpaper(wallpaper) },
+                    onClick = { onOpenWallpaper(wallpapers, index) },
                 )
             }
         }
@@ -858,9 +900,6 @@ private val HeartRed = Color(0xFFEF6C74)
 
 /** Height of one "More like this" card. */
 private val LOOKALIKE_HEIGHT = 128.dp
-
-/** Zoom ceiling for the preview, relative to the image's native size. */
-private const val MAX_ZOOM = 5f
 
 /** The swipe-up handle: row height, drag gating, and feedback tuning. */
 private val INFO_HANDLE_HEIGHT = 48.dp
