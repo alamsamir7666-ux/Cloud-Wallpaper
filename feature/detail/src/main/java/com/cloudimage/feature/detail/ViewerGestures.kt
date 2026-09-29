@@ -8,6 +8,7 @@ import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -234,6 +235,9 @@ internal class ViewerMotionState(
     /** True while a settle/commit animation owns the offsets — drags stand by. */
     val animating = mutableStateOf(false)
 
+    /** The restore in flight, if any — see [animateRestore]. */
+    private var restoreJob: Job? = null
+
     var viewportWidthPx: Float = 1f
         private set
 
@@ -270,23 +274,37 @@ internal class ViewerMotionState(
         }
     }
 
-    /** Springs both offsets home — the release-below-threshold settle. */
+    /**
+     * Springs both offsets home — the release-below-threshold settle.
+     *
+     * Single flight (v1.0.25): the stand-downs that call this used to
+     * spawn a fresh spring per pointer move whenever the zoomable had
+     * claimed a drag, and the interleaved per-frame writes to the same
+     * offsets read as the image shivering along its drag axis. One
+     * restore owns the offsets at a time; a newer one replaces its
+     * predecessor mid-flight, and a superseded restore never clears
+     * [animating] on the way out.
+     */
     fun animateRestore() {
-        scope.launch {
-            animating.value = true
-            try {
-                coroutineScope {
-                    if (offsetX.floatValue != 0f) {
-                        launch { animateToZero(offsetX) }
+        restoreJob?.cancel()
+        restoreJob =
+            scope.launch {
+                animating.value = true
+                try {
+                    coroutineScope {
+                        if (offsetX.floatValue != 0f) {
+                            launch { animateToZero(offsetX) }
+                        }
+                        if (offsetY.floatValue != 0f) {
+                            launch { animateToZero(offsetY) }
+                        }
                     }
-                    if (offsetY.floatValue != 0f) {
-                        launch { animateToZero(offsetY) }
+                } finally {
+                    if (restoreJob == coroutineContext[Job]) {
+                        animating.value = false
                     }
                 }
-            } finally {
-                animating.value = false
             }
-        }
     }
 
     /**
@@ -295,6 +313,8 @@ internal class ViewerMotionState(
      * the viewer) only after the animation settles.
      */
     fun animateDismiss(onDone: () -> Unit) {
+        restoreJob?.cancel()
+        restoreJob = null
         scope.launch {
             animating.value = true
             try {
@@ -323,6 +343,8 @@ internal class ViewerMotionState(
         onSwap: () -> Unit,
         awaitReady: (suspend () -> Unit)? = null,
     ) {
+        restoreJob?.cancel()
+        restoreJob = null
         scope.launch {
             animating.value = true
             try {
@@ -339,7 +361,11 @@ internal class ViewerMotionState(
                     targetValue = 0f,
                     animationSpec =
                         spring(
-                            dampingRatio = Spring.DampingRatioLowBouncy,
+                            // No overshoot (v1.0.25): a bouncy landing
+                            // read as a horizontal shiver at the tail end
+                            // of every committed swipe. The page slides in
+                            // briskly and stops where it means to.
+                            dampingRatio = Spring.DampingRatioNoBouncy,
                             stiffness = Spring.StiffnessMediumLow,
                         ),
                 ) { value, _ -> offsetX.floatValue = value }

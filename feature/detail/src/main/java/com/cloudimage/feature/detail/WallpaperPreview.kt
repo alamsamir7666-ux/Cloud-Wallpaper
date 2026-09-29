@@ -41,6 +41,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
@@ -319,6 +320,18 @@ internal fun ZoomableWallpaperPreview(
  * scaling ever), sideways pages, up opens details. A second finger or the
  * zoomable claiming the drag stands the arbiter down and settles the
  * image back home.
+ *
+ * The handler lives in the Initial pass (v1.0.25). This Box is the
+ * zoomable's parent, so in the Main pass its move consumption landed
+ * only after the zoomable's own detectors had already dispatched — a
+ * swipe's release counted as a tap there, arming telephoto's
+ * double-tap window, and the next quick swipe (the normal rhythm of
+ * paging) fell into it as quick zoom: the zoomable started consuming
+ * the drag out from under the arbiter mid-flight. Claiming moves first
+ * in Initial makes the same consumption visible to those detectors, so
+ * a swipe reads as a swipe. Real taps, double-tap zoom, quick zoom and
+ * pinches are untouched — the arbiter still never consumes downs, ups
+ * or multi-finger events.
  */
 private fun Modifier.pointerInputGestures(
     motion: ViewerMotionState,
@@ -337,7 +350,11 @@ private fun Modifier.pointerInputGestures(
             val detailsNudgeCapPx = DETAILS_NUDGE_CAP.toPx()
 
             awaitEachGesture {
-                val down = awaitFirstDown(requireUnconsumed = false)
+                val down =
+                    awaitFirstDown(
+                        requireUnconsumed = false,
+                        pass = PointerEventPass.Initial,
+                    )
                 val navigateCommitPx = size.width * NAVIGATE_COMMIT_FRACTION
                 val arbiter =
                     ViewerGestureArbiter(
@@ -361,7 +378,7 @@ private fun Modifier.pointerInputGestures(
                 // the two neighbors while the finger wavers.
                 var warmingDirection = 0
                 while (true) {
-                    val event = awaitPointerEvent()
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
                     if (event.changes.size > 1) {
                         // A second finger is pinch intent: the zoomable
                         // takes the rest of this gesture.
@@ -427,10 +444,17 @@ private fun Modifier.pointerInputGestures(
                     if (!tracking) continue
                     if (change.isConsumed) {
                         // The zoomable claimed this drag mid-flight (a
-                        // zoom began) — settle home and stay out of it.
-                        tracking = false
-                        motion.animateRestore()
-                        gate.clear()
+                        // zoom began) — settle home once and stay out of
+                        // it. Guarded so a drag the zoomable owns start
+                        // to finish fires exactly one restore (v1.0.25):
+                        // the unguarded version stacked a spring per
+                        // pointer move and the interleaved writes read as
+                        // the image shivering along its drag axis.
+                        if (tracking) {
+                            tracking = false
+                            motion.animateRestore()
+                            gate.clear()
+                        }
                         continue
                     }
                     if (arbiter.onMove(change.position.x, change.position.y) != ViewerGesture.NONE) {
