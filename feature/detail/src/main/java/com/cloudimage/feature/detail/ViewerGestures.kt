@@ -68,6 +68,15 @@ internal sealed interface ViewerRelease {
  *   finger sideways and never fades;
  * - releases decide by crossed distance OR fling velocity, and a refusal
  *   at the list's edge (no next/previous to go to) always springs back.
+ *
+ * The follows are written through a stillness band (v1.0.27): the applied
+ * follow only moves once the raw one has traveled a few pixels away from
+ * it. A finger that has stopped still gets sub-pixel and single-pixel
+ * position noise from its digitizer for as long as it rests, and a follow
+ * fed straight through would translate that noise into a whole-pixel
+ * shiver along the drag axis — exactly what a held swipe read as. The band
+ * is far below anything a deliberate drag can feel (a fraction of a
+ * millimetre), so only stillness is filtered out, never travel.
  */
 internal class ViewerGestureArbiter(
     private val lockSlopPx: Float,
@@ -77,6 +86,8 @@ internal class ViewerGestureArbiter(
     private val detailsFlingPx: Float,
     private val navigateCommitPx: Float,
     private val navigateFlingPx: Float,
+    /** Wander below this leaves the applied follow where it was (v1.0.27). */
+    private val stillnessPx: Float = STILLNESS_PX,
 ) {
     var gesture: ViewerGesture = ViewerGesture.NONE
         private set
@@ -91,6 +102,11 @@ internal class ViewerGestureArbiter(
     private var lastX = 0f
     private var lastY = 0f
 
+    /** The follow the image last rendered with — the stillness anchor. */
+    private var appliedFollowX = 0f
+
+    private var appliedFollowY = 0f
+
     /** Starts a fresh drag at the given pointer position. */
     fun onDown(
         x: Float,
@@ -101,6 +117,8 @@ internal class ViewerGestureArbiter(
         totalY = 0f
         lastX = x
         lastY = y
+        appliedFollowX = 0f
+        appliedFollowY = 0f
     }
 
     /**
@@ -169,15 +187,16 @@ internal class ViewerGestureArbiter(
     /**
      * The image's horizontal follow for the current drag: 1:1 with the
      * finger, rubber-banded to a quarter speed once the swipe points past
-     * the list's end so edges push back instead of dragging into nothing.
+     * the list's end so edges push back instead of dragging into nothing,
+     * and written through the stillness band so a resting finger's noise
+     * never moves the image (v1.0.27).
      */
     fun followX(
         hasNext: Boolean,
         hasPrevious: Boolean,
-    ): Float =
-        if (gesture != ViewerGesture.HORIZONTAL) {
-            0f
-        } else {
+    ): Float {
+        if (gesture != ViewerGesture.HORIZONTAL) return 0f
+        val raw =
             when {
                 totalX < 0f && !hasNext -> totalX * EDGE_RESISTANCE
 
@@ -185,29 +204,44 @@ internal class ViewerGestureArbiter(
 
                 else -> totalX
             }
-        }
+        return raw.settledInto(appliedFollowX).also { appliedFollowX = it }
+    }
 
     /**
      * The image's vertical follow. A dismiss drags the image down 1:1 and
      * never up; a details drag nudges the image up at [detailsFollowFactor]
      * of the finger's speed, capped at [detailsNudgeCapPx] — feedback, not
-     * a second dismiss.
+     * a second dismiss. Like the horizontal channel, it is written through
+     * the stillness band (v1.0.27).
      */
     fun followY(
         detailsNudgeCapPx: Float,
         detailsFollowFactor: Float = DETAILS_FOLLOW_FACTOR,
-    ): Float =
-        when (gesture) {
-            ViewerGesture.DISMISS -> max(0f, totalY)
+    ): Float {
+        val raw =
+            when (gesture) {
+                ViewerGesture.DISMISS -> max(0f, totalY)
 
-            ViewerGesture.DETAILS -> (totalY * detailsFollowFactor).coerceIn(-detailsNudgeCapPx, 0f)
+                ViewerGesture.DETAILS -> (totalY * detailsFollowFactor).coerceIn(-detailsNudgeCapPx, 0f)
 
-            else -> 0f
-        }
+                else -> return 0f
+            }
+        return raw.settledInto(appliedFollowY).also { appliedFollowY = it }
+    }
+
+    /**
+     * The stillness band: raw wander that stayed within [stillnessPx] of
+     * the applied value leaves the applied value alone. Only genuine
+     * travel — a drag, not a resting finger's noise — crosses it.
+     */
+    private fun Float.settledInto(applied: Float): Float = if (abs(this - applied) < stillnessPx) applied else this
 
     private companion object {
         /** How much of an edge-pointing swipe the image actually follows. */
         const val EDGE_RESISTANCE = 0.25f
+
+        /** Digitizer noise ceiling while a finger rests, in pixels. */
+        const val STILLNESS_PX = 3f
     }
 }
 

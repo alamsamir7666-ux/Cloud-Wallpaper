@@ -95,12 +95,23 @@ import kotlin.math.roundToInt
  * - the zoomable states are keyed by wallpaper, so paging resets the zoom
  *   without touching the drag offsets hoisted in [motion] — an in-flight
  *   page animation finishes across the swap;
- * - one gesture has one writer (v1.0.26): the arbiter engages a drag only
- *   when the zoomable demonstrably has not claimed it, and yields the
- *   finger the moment it does — the image never receives interleaved
- *   offset and transform writes, which is what read as it shivering along
- *   the drag axis. The drag itself moves the image through the layout on
+ * - one gesture has one writer, and the handoff is clean (v1.0.26, tightened
+ *   v1.0.27): the arbiter engages a drag only when the zoomable
+ *   demonstrably has not claimed it, and yields the finger the moment it
+ *   does. A locked drag's moves are consumed on the Initial pass — before
+ *   the zoomable's detectors ever dispatch them — so the image's own tap
+ *   and quick-zoom machinery cancels on a swipe instead of arming windows
+ *   mid-drag; the claim check reads the Main pass, where a child's
+ *   consumption is visible, and stands down on the very event a quick zoom
+ *   starts taking the finger. The image never receives interleaved offset
+ *   and transform writes, which is what read as it shivering along the
+ *   drag axis. The drag itself moves the image through the layout on
  *   whole pixels, never through a sub-pixel layer translation;
+ * - a held finger holds the image still (v1.0.27): the follows are written
+ *   through a stillness band, so the sub-pixel and single-pixel position
+ *   noise a resting digitizer keeps reporting never becomes a whole-pixel
+ *   shiver — only travel moves the image, and a fraction of a millimetre
+ *   of filtering is far below anything a deliberate drag can feel;
  * - paging never trades the old image for a blank (v1.0.24): the neighbor a
  *   swipe points at warms up offscreen through the same image stack, the
  *   release holds until it can paint, and the loading furniture (blurred
@@ -335,26 +346,37 @@ internal fun ZoomableWallpaperPreview(
  * zoomable claiming the drag stands the arbiter down and settles the
  * image back home.
  *
- * One gesture, one writer (v1.0.26). The arbiter watches every event on
- * TWO passes, because consumption is only visible downstream: it consumes
- * its locked moves in the Initial pass — where the consumption lands before
- * the zoomable's detectors dispatch, keeping a swipe's release from
- * counting as a tap that would arm telephoto's double-tap window (v1.0.25)
- * — and then awaits the SAME event again on the Main pass, which this Box
- * (the zoomable's parent) sees only after the zoomable has dispatched it.
- * A move that arrives consumed there was claimed by the image's own
- * gesture layer — a quick zoom armed by an earlier tap, a zoomed-in pan —
- * and the arbiter yields the finger at once, before its own lock. The
- * zoomable's double-tap listener fires its zoom without consuming
- * anything, so a zoom fraction appearing mid-drag gets the same answer.
- * Before this, the stand-down check only ever read the Initial pass,
- * where a child's consumption can never be seen: the arbiter kept
- * writing drag offsets while the zoomable animated its own transform over
- * the same finger, and the two interleaved per-frame writes read as the
- * image shivering along its drag axis. Real taps, double-tap zoom, quick
- * zoom and pinches are untouched — the arbiter still never consumes
- * downs, ups or multi-finger events, and it engages only when the zoomable
- * demonstrably has not.
+ * One gesture, one writer, and the handoff on the right pass (v1.0.27).
+ * The arbiter watches every event on TWO passes, because consumption is
+ * only visible downstream: it consumes its locked moves on the Initial
+ * pass — where the consumption lands before the zoomable's detectors
+ * dispatch, keeping a swipe's release from counting as a tap that would arm
+ * telephoto's double-tap window (v1.0.25) — and then awaits the SAME event
+ * again on the Main pass, which this Box (the zoomable's parent) sees only
+ * after the zoomable has dispatched it. A move that arrives consumed there
+ * was claimed by the image's own gesture layer — a quick zoom armed by an
+ * earlier tap, a zoomed-in pan — and the arbiter yields the finger at
+ * once, before its own lock ever writes. The zoomable's double-tap
+ * listener fires its zoom without consuming anything, so a zoom fraction
+ * appearing mid-gesture gets the same answer, checked before the lock
+ * writes at all.
+ *
+ * The order of those two steps is the whole fix (v1.0.27): the v1.0.26
+ * rework had the locked write and its consume running AFTER the Main-pass
+ * await — landing during the parent's own Main dispatch, one full lap too
+ * late for the zoomable to ever see. The image's tap and quick-zoom
+ * detectors therefore ran on the raw, unconsumed stream for the whole
+ * drag, and a quick zoom engaging between the image's tap slop and the
+ * lock slop took the finger while the arbiter kept writing offsets over
+ * it: the two interleaved per-frame writes read as the image shivering
+ * along the drag axis, worst on slight swipes held in place. Consuming on
+ * Initial closes the door — the child can no longer claim a locked drag —
+ * and the pre-lock claim check catches everything that engaged before the
+ * lock, on the very event it starts consuming.
+ *
+ * Real taps, double-tap zoom, quick zoom and pinches are untouched — the
+ * arbiter still never consumes downs, ups or multi-finger events, and it
+ * engages only when the zoomable demonstrably has not.
  */
 private fun Modifier.pointerInputGestures(
     motion: ViewerMotionState,
@@ -478,28 +500,19 @@ private fun Modifier.pointerInputGestures(
                         continue
                     }
 
-                    val locked = arbiter.onMove(change.position.x, change.position.y) != ViewerGesture.NONE
-
-                    // The same event, seen again after the zoomable has
-                    // dispatched it (this Box is its parent, so its Main pass
-                    // runs last): a move consumed there was claimed by the
-                    // image's own gesture layer. The claim is only readable
-                    // before our own lock — afterwards every move already
-                    // carries our Initial-pass consumption.
-                    val zoomableEvent = awaitPointerEvent()
-                    val zoomableClaimed =
-                        !locked && zoomableEvent.changes.any { it.id == down.id && it.isConsumed }
-
-                    // The double-tap listener starts its zoom without
-                    // consuming a single event, so a zoom fraction that
-                    // appears mid-gesture is the same answer: the zoomable
-                    // has the finger.
-                    if (zoomableClaimed || zoomFraction() > ZOOM_STAND_DOWN_FRACTION) {
+                    // Any zoom at all means the zoomable holds the finger
+                    // (its double-tap listener fires a zoom without consuming
+                    // a single event), so this is checked before the lock
+                    // ever writes (v1.0.27) — an armed quick zoom is stood
+                    // down before the drag and the zoom ever share a frame.
+                    if (zoomFraction() > ZOOM_STAND_DOWN_FRACTION) {
                         tracking = false
                         motion.animateRestore()
                         gate.clear()
                         continue
                     }
+
+                    val locked = arbiter.onMove(change.position.x, change.position.y) != ViewerGesture.NONE
 
                     if (locked) {
                         // A sideways drag most of the way to a commit points
@@ -515,10 +528,44 @@ private fun Modifier.pointerInputGestures(
                                 warmingDirection = direction
                             }
                         }
+                        // The write AND the consumption both land while this
+                        // Box still owns the Initial pass (v1.0.27) — the
+                        // zoomable dispatches the Main pass only after its
+                        // parent has had Initial, so a locked move arrives at
+                        // the image's own gesture layer already consumed. Its
+                        // tap and quick-zoom detectors therefore cancel on a
+                        // swipe's moves instead of arming windows and claiming
+                        // fingers mid-drag — the rework in v1.0.26 had this
+                        // consume running after the Main-pass await below,
+                        // where it landed too late for the child to ever see,
+                        // and a quick zoom armed by an earlier release could
+                        // take the same drag the arbiter was already moving
+                        // the image with.
                         motion.offsetX.floatValue =
                             arbiter.followX(hasNext = hasNext(), hasPrevious = hasPrevious())
                         motion.offsetY.floatValue = arbiter.followY(detailsNudgeCapPx)
                         change.consume()
+                    }
+
+                    // The same event, seen again after the zoomable has
+                    // dispatched it (this Box is its parent, so its Main pass
+                    // runs last): a move consumed there was claimed by the
+                    // image's own gesture layer. The claim is only legible
+                    // before our own lock — afterwards every move carries our
+                    // Initial-pass consumption — which is exactly the window
+                    // where a claim can still happen: a quick zoom engaging
+                    // between the image's tap slop and the lock slop. It is
+                    // caught here on the very event it starts consuming, and
+                    // the arbiter never locks over a claimed finger.
+                    val zoomableEvent = awaitPointerEvent()
+                    val zoomableClaimed =
+                        !locked && zoomableEvent.changes.any { it.id == down.id && it.isConsumed }
+
+                    if (zoomableClaimed) {
+                        tracking = false
+                        motion.animateRestore()
+                        gate.clear()
+                        continue
                     }
                 }
             }

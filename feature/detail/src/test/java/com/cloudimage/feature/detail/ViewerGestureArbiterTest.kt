@@ -224,4 +224,51 @@ class ViewerGestureArbiterTest {
         drag(dx = 0f, dy = 300f)
         assertEquals(0f, arbiter.followX(hasNext = true, hasPrevious = true))
     }
+
+    @Test
+    fun aHeldFingersNoiseNeverShakesTheImage() {
+        arbiter.onDown(x = 100f, y = 100f)
+        arbiter.onMove(x = 160f, y = 105f) // Locks HORIZONTAL, follow 60.
+        val followed = arbiter.followX(hasNext = true, hasPrevious = true)
+        assertEquals(60f, followed)
+        // The finger stops; the panel keeps reporting jitter around it.
+        arbiter.onMove(x = 161.5f, y = 104f)
+        arbiter.onMove(x = 158.9f, y = 106f)
+        arbiter.onMove(x = 162.4f, y = 103f)
+        arbiter.onMove(x = 157.6f, y = 107f)
+        assertEquals(60f, arbiter.followX(hasNext = true, hasPrevious = true))
+    }
+
+    @Test
+    fun aHeldDismissalNoiseNeverShakesTheImage() {
+        arbiter.onDown(x = 100f, y = 100f)
+        arbiter.onMove(x = 105f, y = 150f) // Locks DISMISS, follow 50.
+        assertEquals(50f, arbiter.followY(detailsNudgeCapPx = 80f))
+        // The finger rests around y=150; the panel jitters around it.
+        arbiter.onMove(x = 104f, y = 148.5f)
+        arbiter.onMove(x = 106f, y = 151.8f)
+        arbiter.onMove(x = 103f, y = 147.2f)
+        assertEquals(50f, arbiter.followY(detailsNudgeCapPx = 80f))
+    }
+
+    @Test
+    fun genuineTravelCrossesTheStillnessBand() {
+        arbiter.onDown(x = 100f, y = 100f)
+        arbiter.onMove(x = 160f, y = 100f) // Locks HORIZONTAL, follow 60.
+        arbiter.followX(hasNext = true, hasPrevious = true)
+        // A real drag keeps moving — the follow moves with it again.
+        arbiter.onMove(x = 165f, y = 100f)
+        assertEquals(65f, arbiter.followX(hasNext = true, hasPrevious = true))
+    }
+
+    @Test
+    fun theStillnessAnchorResetsBetweenGestures() {
+        arbiter.onDown(x = 100f, y = 100f)
+        arbiter.onMove(x = 160f, y = 100f) // HORIZONTAL, applied 60.
+        assertEquals(60f, arbiter.followX(hasNext = true, hasPrevious = true))
+        // A new gesture near the stale anchor must not inherit its stillness.
+        arbiter.onDown(x = 100f, y = 100f)
+        arbiter.onMove(x = 161f, y = 100f)
+        assertEquals(61f, arbiter.followX(hasNext = true, hasPrevious = true))
+    }
 }
