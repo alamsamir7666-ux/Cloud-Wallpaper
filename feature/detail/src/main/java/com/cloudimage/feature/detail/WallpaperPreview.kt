@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -53,6 +54,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -66,6 +68,7 @@ import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Fullscreen wallpaper preview, gallery-grade (v1.0.17, reworked v1.0.23):
@@ -92,6 +95,12 @@ import kotlin.math.abs
  * - the zoomable states are keyed by wallpaper, so paging resets the zoom
  *   without touching the drag offsets hoisted in [motion] — an in-flight
  *   page animation finishes across the swap;
+ * - one gesture has one writer (v1.0.26): the arbiter engages a drag only
+ *   when the zoomable demonstrably has not claimed it, and yields the
+ *   finger the moment it does — the image never receives interleaved
+ *   offset and transform writes, which is what read as it shivering along
+ *   the drag axis. The drag itself moves the image through the layout on
+ *   whole pixels, never through a sub-pixel layer translation;
  * - paging never trades the old image for a blank (v1.0.24): the neighbor a
  *   swipe points at warms up offscreen through the same image stack, the
  *   release holds until it can paint, and the loading furniture (blurred
@@ -196,17 +205,22 @@ internal fun ZoomableWallpaperPreview(
         }
 
         // Everything the finger moves travels together — the backdrop, the
-        // image and its loading furniture — with the offsets and fade read
-        // at draw time so the drag itself never recomposes.
+        // image and its loading furniture. The drag moves it through the
+        // LAYOUT, on the pixel grid (v1.0.26, flick's own discipline): a
+        // sub-pixel graphicsLayer translation would re-sample the
+        // sub-sampled tiles at a fresh fractional position every frame,
+        // which reads as a faint shimmer along the drag axis. Whole-pixel
+        // offsets render rock-solid; the fade stays a draw-phase concern.
         Box(
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .graphicsLayer {
-                        translationX = motion.offsetX.floatValue
-                        translationY = motion.offsetY.floatValue
-                        alpha = motion.imageAlpha
-                    },
+                    .offset {
+                        IntOffset(
+                            motion.offsetX.floatValue.roundToInt(),
+                            motion.offsetY.floatValue.roundToInt(),
+                        )
+                    }.graphicsLayer { alpha = motion.imageAlpha },
         ) {
             // Blurred thumbnail backdrop: something rich fills the screen
             // while (and only while) the original is on its way.
@@ -249,7 +263,7 @@ internal fun ZoomableWallpaperPreview(
                         .pointerInputGestures(
                             motion = motion,
                             gate = preloadGate,
-                            zoomedOut = zoomedOut,
+                            zoomFraction = { zoomableState.zoomFraction ?: 0f },
                             hasNext = { currentHasNext },
                             hasPrevious = { currentHasPrevious },
                             navigateTarget = { delta -> currentNavigateTarget(delta) },
@@ -321,22 +335,31 @@ internal fun ZoomableWallpaperPreview(
  * zoomable claiming the drag stands the arbiter down and settles the
  * image back home.
  *
- * The handler lives in the Initial pass (v1.0.25). This Box is the
- * zoomable's parent, so in the Main pass its move consumption landed
- * only after the zoomable's own detectors had already dispatched — a
- * swipe's release counted as a tap there, arming telephoto's
- * double-tap window, and the next quick swipe (the normal rhythm of
- * paging) fell into it as quick zoom: the zoomable started consuming
- * the drag out from under the arbiter mid-flight. Claiming moves first
- * in Initial makes the same consumption visible to those detectors, so
- * a swipe reads as a swipe. Real taps, double-tap zoom, quick zoom and
- * pinches are untouched — the arbiter still never consumes downs, ups
- * or multi-finger events.
+ * One gesture, one writer (v1.0.26). The arbiter watches every event on
+ * TWO passes, because consumption is only visible downstream: it consumes
+ * its locked moves in the Initial pass — where the consumption lands before
+ * the zoomable's detectors dispatch, keeping a swipe's release from
+ * counting as a tap that would arm telephoto's double-tap window (v1.0.25)
+ * — and then awaits the SAME event again on the Main pass, which this Box
+ * (the zoomable's parent) sees only after the zoomable has dispatched it.
+ * A move that arrives consumed there was claimed by the image's own
+ * gesture layer — a quick zoom armed by an earlier tap, a zoomed-in pan —
+ * and the arbiter yields the finger at once, before its own lock. The
+ * zoomable's double-tap listener fires its zoom without consuming
+ * anything, so a zoom fraction appearing mid-drag gets the same answer.
+ * Before this, the stand-down check only ever read the Initial pass,
+ * where a child's consumption can never be seen: the arbiter kept
+ * writing drag offsets while the zoomable animated its own transform over
+ * the same finger, and the two interleaved per-frame writes read as the
+ * image shivering along its drag axis. Real taps, double-tap zoom, quick
+ * zoom and pinches are untouched — the arbiter still never consumes
+ * downs, ups or multi-finger events, and it engages only when the zoomable
+ * demonstrably has not.
  */
 private fun Modifier.pointerInputGestures(
     motion: ViewerMotionState,
     gate: ViewerPreloadGate,
-    zoomedOut: MutableState<Boolean>,
+    zoomFraction: () -> Float,
     hasNext: () -> Boolean,
     hasPrevious: () -> Boolean,
     navigateTarget: (Int) -> Wallpaper?,
@@ -371,7 +394,7 @@ private fun Modifier.pointerInputGestures(
                 velocityTracker.addPosition(down.uptimeMillis, down.position)
                 motion.snapIfIdle()
 
-                var tracking = !zoomedOut.value && !motion.animating.value
+                var tracking = zoomFraction() <= ZOOMED_FRACTION && !motion.animating.value
 
                 // The direction this drag has already asked the warmer to
                 // prepare for, so the preloader never flip-flops between
@@ -443,21 +466,42 @@ private fun Modifier.pointerInputGestures(
                     velocityTracker.addPosition(change.uptimeMillis, change.position)
                     if (!tracking) continue
                     if (change.isConsumed) {
-                        // The zoomable claimed this drag mid-flight (a
-                        // zoom began) — settle home once and stay out of
-                        // it. Guarded so a drag the zoomable owns start
-                        // to finish fires exactly one restore (v1.0.25):
-                        // the unguarded version stacked a spring per
-                        // pointer move and the interleaved writes read as
-                        // the image shivering along its drag axis.
-                        if (tracking) {
-                            tracking = false
-                            motion.animateRestore()
-                            gate.clear()
-                        }
+                        // An ancestor claimed this drag mid-flight — settle
+                        // home once and stay out of it. Guarded so a claimed
+                        // drag fires exactly one restore (v1.0.25): the
+                        // unguarded version stacked a spring per pointer
+                        // move and the interleaved writes read as the image
+                        // shivering along its drag axis.
+                        tracking = false
+                        motion.animateRestore()
+                        gate.clear()
                         continue
                     }
-                    if (arbiter.onMove(change.position.x, change.position.y) != ViewerGesture.NONE) {
+
+                    val locked = arbiter.onMove(change.position.x, change.position.y) != ViewerGesture.NONE
+
+                    // The same event, seen again after the zoomable has
+                    // dispatched it (this Box is its parent, so its Main pass
+                    // runs last): a move consumed there was claimed by the
+                    // image's own gesture layer. The claim is only readable
+                    // before our own lock — afterwards every move already
+                    // carries our Initial-pass consumption.
+                    val zoomableEvent = awaitPointerEvent()
+                    val zoomableClaimed =
+                        !locked && zoomableEvent.changes.any { it.id == down.id && it.isConsumed }
+
+                    // The double-tap listener starts its zoom without
+                    // consuming a single event, so a zoom fraction that
+                    // appears mid-gesture is the same answer: the zoomable
+                    // has the finger.
+                    if (zoomableClaimed || zoomFraction() > ZOOM_STAND_DOWN_FRACTION) {
+                        tracking = false
+                        motion.animateRestore()
+                        gate.clear()
+                        continue
+                    }
+
+                    if (locked) {
                         // A sideways drag most of the way to a commit points
                         // at a real neighbor: warm it now, while the finger is
                         // still travelling, so the transition that follows
@@ -636,6 +680,13 @@ private fun formatMegabytes(bytes: Long): String = String.format(Locale.US, "%.1
 
 /** Fraction of the zoom range past which the surrounding chrome steps aside. */
 internal const val ZOOMED_FRACTION = 0.04f
+
+/**
+ * Any zoom at all mid-gesture means the zoomable took the finger (the
+ * double-tap listener animates without consuming events) — the arbiter
+ * stands down the moment the fraction leaves zero (v1.0.26).
+ */
+private const val ZOOM_STAND_DOWN_FRACTION = 0.001f
 
 private val BACKDROP_BLUR_RADIUS = 24.dp
 private val PROGRESS_CHIP_TOP_PADDING = 60.dp

@@ -219,9 +219,13 @@ internal class ViewerGestureArbiter(
  * animate its exit, swap the wallpaper, and slide the next image in
  * without the motion dying mid-flight.
  *
- * Offsets are read during the draw phase (graphicsLayer blocks) so the
- * drag itself never recomposes; the dismiss progress drives the image's
- * alpha, the scrim's fade toward transparent and the chrome fade alike.
+ * Offsets are read outside composition — the layout-phase offset block
+ * and the draw-phase fades alike — so the drag itself never recomposes;
+ * the dismiss progress drives the image's alpha, the scrim's fade toward
+ * transparent and the chrome fade alike. Since v1.0.26 the drag applies
+ * the offsets as whole-pixel layout offsets, not sub-pixel layer
+ * translations: sub-sampled tiles re-sampled at a fresh fractional
+ * position every frame read as a faint shimmer along the drag axis.
  */
 internal class ViewerMotionState(
     private val scope: CoroutineScope,
