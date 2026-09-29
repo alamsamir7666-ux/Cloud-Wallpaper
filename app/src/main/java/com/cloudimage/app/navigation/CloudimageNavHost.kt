@@ -11,6 +11,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.cloudimage.core.data.viewer.ViewerSession
 import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.feature.browse.BrowseScreen
 import com.cloudimage.feature.detail.DetailDestination
@@ -22,12 +23,27 @@ import com.cloudimage.feature.extensions.RepoDetailScreen
 import com.cloudimage.feature.library.LibraryScreen
 import com.cloudimage.feature.settings.SettingsScreen
 
+/**
+ * The app's navigation graph. Every grid that opens the viewer parks its
+ * list and the tapped index in the [ViewerSession] (v1.0.23) right before
+ * navigating, so the fullscreen viewer can page through it with sideways
+ * swipes.
+ */
 @Composable
 fun CloudimageNavHost(
     navController: NavHostController,
+    viewerSession: ViewerSession,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+
+    fun openWallpaper(
+        wallpapers: List<Wallpaper>,
+        index: Int,
+    ) {
+        viewerSession.open(wallpapers, index)
+        navController.navigate(DetailDestination.createRoute(wallpapers[index]))
+    }
 
     NavHost(
         navController = navController,
@@ -36,8 +52,8 @@ fun CloudimageNavHost(
     ) {
         composable(TopLevelDestination.BROWSE.route) {
             BrowseScreen(
-                onWallpaperClick = { wallpaper: Wallpaper ->
-                    navController.navigate(DetailDestination.createRoute(wallpaper))
+                onWallpaperClick = { wallpapers: List<Wallpaper>, index: Int ->
+                    openWallpaper(wallpapers, index)
                 },
                 onOpenExtensions = {
                     // Same navigation contract as the bottom bar, so the
@@ -54,8 +70,8 @@ fun CloudimageNavHost(
         }
         composable(TopLevelDestination.LIBRARY.route) {
             LibraryScreen(
-                onWallpaperClick = { wallpaper: Wallpaper ->
-                    navController.navigate(DetailDestination.createRoute(wallpaper))
+                onWallpaperClick = { wallpapers: List<Wallpaper>, index: Int ->
+                    openWallpaper(wallpapers, index)
                 },
             )
         }
@@ -99,8 +115,8 @@ fun CloudimageNavHost(
         ) { backStackEntry ->
             DetailScreen(
                 onBack = { navController.popBackStack() },
-                onOpenWallpaper = { wallpaper: Wallpaper ->
-                    navController.navigate(DetailDestination.createRoute(wallpaper))
+                onOpenWallpaper = { wallpapers: List<Wallpaper>, index: Int ->
+                    openWallpaper(wallpapers, index)
                 },
             )
         }

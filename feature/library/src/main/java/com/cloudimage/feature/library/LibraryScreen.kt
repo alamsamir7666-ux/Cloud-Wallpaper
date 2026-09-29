@@ -87,7 +87,7 @@ private enum class LibraryTab {
  */
 @Composable
 fun LibraryScreen(
-    onWallpaperClick: (Wallpaper) -> Unit,
+    onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
@@ -228,10 +228,11 @@ fun LibraryScreen(
 @Composable
 private fun FavoritesGrid(
     state: LibraryUiState,
-    onWallpaperClick: (Wallpaper) -> Unit,
+    onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
     onRemove: (Wallpaper) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val wallpapers = remember(state.favorites) { state.favorites.map { it.wallpaper } }
     LazyVerticalStaggeredGrid(
         columns = StaggeredGridCells.Fixed(state.gridColumns),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
@@ -249,7 +250,7 @@ private fun FavoritesGrid(
             Box {
                 WallpaperCard(
                     wallpaper = favorite.wallpaper,
-                    onClick = { onWallpaperClick(favorite.wallpaper) },
+                    onClick = { onWallpaperClick(wallpapers, index) },
                 )
                 Surface(
                     shape = CircleShape,
@@ -290,10 +291,11 @@ private fun FavoritesGrid(
 @Composable
 private fun DownloadsGrid(
     state: LibraryUiState,
-    onWallpaperClick: (Wallpaper) -> Unit,
+    onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
     onToggleFavorite: (Wallpaper) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val wallpapers = remember(state.downloads) { state.downloads.map { it.wallpaper } }
     val favoriteKeys =
         remember(state.favorites) {
             state.favorites.map { "${it.wallpaper.providerId}:${it.wallpaper.id}" }.toSet()
@@ -316,7 +318,7 @@ private fun DownloadsGrid(
             Box {
                 WallpaperCard(
                     wallpaper = downloaded.wallpaper,
-                    onClick = { onWallpaperClick(downloaded.wallpaper) },
+                    onClick = { onWallpaperClick(wallpapers, index) },
                 )
                 Surface(
                     shape = CircleShape,
@@ -351,9 +353,10 @@ private fun DownloadsGrid(
 @Composable
 private fun HistoryList(
     history: List<HistoryEntry>,
-    onWallpaperClick: (Wallpaper) -> Unit,
+    onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val wallpapers = remember(history) { history.map { it.wallpaper } }
     LazyColumn(
         contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp),
         modifier = modifier.fillMaxSize().testTag("library:history"),
@@ -363,7 +366,7 @@ private fun HistoryList(
             key = { index -> "${history[index].wallpaper.providerId}:${history[index].wallpaper.id}:${history[index].atMillis}" },
         ) { index ->
             val entry = history[index]
-            HistoryRow(entry = entry, onClick = { onWallpaperClick(entry.wallpaper) })
+            HistoryRow(entry = entry, onClick = { onWallpaperClick(wallpapers, index) })
             if (index < history.lastIndex) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             }

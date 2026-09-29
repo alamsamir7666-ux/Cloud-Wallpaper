@@ -2,6 +2,7 @@ package com.cloudimage.app.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.cloudimage.core.data.viewer.ViewerSession
 import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.UserPreferences
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -14,7 +15,9 @@ import javax.inject.Inject
 /**
  * App-shell state: decides between the first-run onboarding and the main
  * scaffold, and keeps the theme's dynamic-color switch in sync with
- * preferences.
+ * preferences. Also hands the navigation graph the [ViewerSession] the
+ * grids park their lists in, so the fullscreen viewer can page through
+ * them with sideways swipes.
  *
  * [preferences] is null only until DataStore's first emission arrives —
  * the splash screen covers that window.
@@ -24,6 +27,7 @@ class AppViewModel
     @Inject
     constructor(
         private val userPreferencesRepository: UserPreferencesRepository,
+        val viewerSession: ViewerSession,
     ) : ViewModel() {
         val preferences: StateFlow<UserPreferences?> =
             userPreferencesRepository.preferences

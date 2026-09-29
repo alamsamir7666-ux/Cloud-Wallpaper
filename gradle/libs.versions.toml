@@ -70,10 +70,10 @@ coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }
 coil = { module = "io.coil-kt:coil", version.ref = "coil" }
 
 # Gallery-grade zooming for the fullscreen viewer (v1.0.17): sub-sampled
-# tiles keep full-resolution originals crisp at any zoom, and flick gives
-# the swipe-down-to-dismiss gesture.
+# tiles keep full-resolution originals crisp at any zoom. The dismiss,
+# paging and details gestures are the app's own (the swipe-through
+# rework); flick's scaled dismiss is retired.
 telephoto-zoomable-image-coil = { module = "me.saket.telephoto:zoomable-image-coil", version.ref = "telephoto" }
-telephoto-flick = { module = "me.saket.telephoto:flick", version.ref = "telephoto" }
 
 # Persistence (used from Part 2 onward)
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }

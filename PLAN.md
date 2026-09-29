@@ -191,6 +191,65 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-30 — v1.0.29 SHIPPED (the viewer's gestures, rebuilt on a
+  pager).** The user's brief, precise this time: swipe down dismisses
+  with a 1:1 translate-and-fade and NO scaling at any point (flick's
+  scaled dismiss was the distortion on screen); swipe left/right pages
+  to the next/previous image; swipe up stays reserved for details; and
+  the three directions must separate cleanly. The v1.0.23-27 lesson was
+  architectural, so the rebuild is architectural: **the old design's
+  fatal flaw was a custom four-direction arbiter layered as a parent
+  over telephoto's zoomable — a parent must consume on the Initial pass
+  to beat its own child, then watch the Main pass to learn whether the
+  child claimed anyway, and five releases of that choreography still
+  left interleaved writers.** The new design never fights the zoomable
+  at all. **Horizontal is not custom anymore**: the viewer became a
+  native `HorizontalPager` over the list the grid opened from (the
+  `ViewerSession` hand-off is revived — browse feeds, every library
+  tab, and the lookalike row park list+index; process death falls back
+  to the lookalike row led by the current image), with
+  `beyondViewportPageCount = 1` prefetching neighbors (the whole
+  ViewerPreloadGate apparatus, retired) and `userScrollEnabled`
+  standing down while the current page is zoomed. **Vertical is a
+  passive underlay**: inside each page the invisible gesture Box is the
+  FIRST child — below the moving image Box in dispatch order — so
+  telephoto sees every event first; a drag the zoomable claims (zoomed
+  pan, pinch, quick zoom) arrives at the underlay already consumed and
+  it stands down on the spot, while its own locked moves are consumed
+  for the pager above. One gesture, one writer, always, with no
+  Initial-pass dance to get wrong. The zoomable's non-consuming
+  engagements are covered deterministically: any zoom fraction at all
+  disqualifies the gesture (checked before every lock and every
+  write), and a down inside the double-tap window of a recent up is
+  skipped outright — that finger belongs to telephoto's double-tap /
+  quick-zoom detectors, exactly the interleaving the old arbiter
+  fought. The held-finger shiver gets the same disciplines v1.0.26-27
+  found, now actually effective because there is never a second
+  writer: whole-pixel layout offsets (a sub-pixel layer translation
+  re-samples the sub-sampled tiles every frame), a 3px stillness band
+  on the follow, single-flight restore springs, and a dismiss exit
+  that is immune to new input. The follow also latches the offset at
+  lock time as its baseline, so a drag that grabs the image while a
+  settle animation is in flight continues from exactly where the image
+  is — no snap. Feel: the dismiss commits past 35% of the screen or a
+  1250dp/s flick, the image fading to half at the threshold and to
+  zero at 70% travel while the exit tween (220ms) carries it off
+  screen; the chrome fades in lockstep; below threshold everything
+  springs home critically damped. The details swipe nudges the image
+  up at half speed capped at 24dp and opens the sheet past 64dp or an
+  800dp/s flick (the bottom pill remains as its echo). Each page keeps
+  its own zoom state and motion, registered up to the screen for the
+  `userScrollEnabled` gate and the chrome fade; a settled page rebinds
+  history, recommendations, details and the favorite/downloaded
+  observers to the image that landed (`flatMapLatest`, so nothing
+  carries over). Gates: ktlint clean; **540/0 tests** in the fresh
+  sandbox (12 network-gated skips as always; +31 over the restore's
+  single-variant count: 19 arbiter, 7 session, 5 ViewModel paging
+  cases); `assembleDebug` green end-to-end. v1.0.23's mining paid off:
+  ViewerSession and the ViewModel rebind came back nearly verbatim,
+  the arbiter came back halved (vertical only), and the preload gate
+  stayed dead.
+
 - **2026-09-29 — v1.0.28 SHIPPED (the v1.0.22 restore).** The user
   called it: five releases of gesture work (v1.0.23-v1.0.27 — arbiter,
   in-place paging, preload gate, one-writer dispatch, stillness band)

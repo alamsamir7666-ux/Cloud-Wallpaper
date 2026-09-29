@@ -9,6 +9,7 @@ import com.cloudimage.core.data.repository.SaveError
 import com.cloudimage.core.data.repository.SaveResult
 import com.cloudimage.core.data.repository.SourceCapability
 import com.cloudimage.core.data.repository.SourceInfo
+import com.cloudimage.core.data.viewer.ViewerSession
 import com.cloudimage.core.model.Downloaded
 import com.cloudimage.core.model.Favorite
 import com.cloudimage.core.model.HistoryAction
@@ -50,6 +51,7 @@ class DetailViewModelTest {
     private val history = FakeHistoryRepository()
     private val downloads = FakeDownloadsRepository()
     private val sources = FakeWallpaperSources()
+    private val viewerSession = ViewerSession()
 
     private val wallpaper =
         Wallpaper(
@@ -73,7 +75,10 @@ class DetailViewModelTest {
             capabilities = setOf(SourceCapability.SEARCH, SourceCapability.TAGS),
         )
 
-    private fun createViewModel(encoded: String?): DetailViewModel =
+    private fun createViewModel(
+        encoded: String?,
+        session: ViewerSession = viewerSession,
+    ): DetailViewModel =
         DetailViewModel(
             savedStateHandle = SavedStateHandle(mapOf(DetailDestination.arg to encoded)),
             applier = applier,
@@ -82,6 +87,7 @@ class DetailViewModelTest {
             historyRepository = history,
             downloadsRepository = downloads,
             sources = sources,
+            viewerSession = session,
         )
 
     @Test
@@ -90,6 +96,104 @@ class DetailViewModelTest {
 
         assertEquals(wallpaper, viewModel.state.value.wallpaper)
     }
+
+    @Test
+    fun aParkedFrameBecomesTheViewerList() =
+        runTest {
+            val neighbor = wallpaper.copy(id = "zzz999")
+            val previous = wallpaper.copy(id = "aaa111")
+            val session = ViewerSession()
+            session.open(listOf(previous, wallpaper, neighbor), index = 1)
+
+            val viewModel = createViewModel(DetailDestination.encode(wallpaper), session)
+            advanceUntilIdle()
+
+            assertEquals(listOf(previous, wallpaper, neighbor), viewModel.state.value.viewerList)
+            assertEquals(1, viewModel.state.value.viewerIndex)
+        }
+
+    @Test
+    fun aFrameParkedForAnotherWallpaperIsIgnored() =
+        runTest {
+            val other = wallpaper.copy(id = "someone.else")
+            val session = ViewerSession()
+            session.open(listOf(other), index = 0)
+
+            val viewModel = createViewModel(DetailDestination.encode(wallpaper), session)
+            advanceUntilIdle()
+
+            // No frame means a lone page: the wallpaper itself.
+            assertEquals(listOf(wallpaper), viewModel.state.value.viewerList)
+            assertEquals(0, viewModel.state.value.viewerIndex)
+        }
+
+    @Test
+    fun aSettledPageRebindsTheScreenToTheImageThatLanded() =
+        runTest {
+            sources.setSources(capableSource)
+            val neighbor = taggedWallpaper.copy(id = "zzz999", tags = listOf("forest"))
+            val neighborLookalike = taggedWallpaper.copy(id = "mno321", tags = listOf("forest"))
+            val session = ViewerSession()
+            session.open(listOf(taggedWallpaper, neighbor), index = 0)
+            sources.enqueueSearch(NetworkResult.Success(Page(wallpapers = listOf(neighbor), nextPage = null)))
+            sources.enqueueSearch(
+                NetworkResult.Success(Page(wallpapers = listOf(neighborLookalike), nextPage = null)),
+            )
+
+            val viewModel = createViewModel(DetailDestination.encode(taggedWallpaper), session)
+            advanceUntilIdle()
+            assertEquals(listOf(neighbor), viewModel.state.value.moreLikeThis)
+
+            // The pager settles on the next page.
+            viewModel.onPageSettled(1)
+            advanceUntilIdle()
+
+            assertEquals(neighbor, viewModel.state.value.wallpaper)
+            assertEquals(1, viewModel.state.value.viewerIndex)
+            assertEquals(
+                listOf(HistoryAction.VIEWED, HistoryAction.VIEWED),
+                history.entries.map { it.action },
+            )
+            // The lookalike row reloads for the image that landed.
+            assertEquals(listOf(neighborLookalike), viewModel.state.value.moreLikeThis)
+        }
+
+    @Test
+    fun settlingThePageAlreadyShownOrOutOfBoundsChangesNothing() =
+        runTest {
+            val neighbor = wallpaper.copy(id = "zzz999")
+            val session = ViewerSession()
+            session.open(listOf(wallpaper, neighbor), index = 0)
+
+            val viewModel = createViewModel(DetailDestination.encode(wallpaper), session)
+            advanceUntilIdle()
+
+            viewModel.onPageSettled(0)
+            viewModel.onPageSettled(7)
+            advanceUntilIdle()
+
+            assertEquals(wallpaper, viewModel.state.value.wallpaper)
+            assertEquals(
+                listOf(HistoryAction.VIEWED),
+                history.entries.map { it.action },
+            )
+        }
+
+    @Test
+    fun withoutAParkedFrameTheLookalikesBecomeTheViewerList() =
+        runTest {
+            sources.setSources(capableSource)
+            val lookalike = taggedWallpaper.copy(id = "zzz999")
+            sources.enqueueSearch(NetworkResult.Success(Page(wallpapers = listOf(lookalike), nextPage = null)))
+
+            val viewModel = createViewModel(DetailDestination.encode(taggedWallpaper))
+            advanceUntilIdle()
+
+            // Led by the wallpaper on screen, so "previous" from the first
+            // lookalike steps back to it.
+            assertEquals(listOf(taggedWallpaper, lookalike), viewModel.state.value.viewerList)
+            assertEquals(0, viewModel.state.value.viewerIndex)
+        }
 
     @Test
     fun detailsLoadWhenTheListingCannotStateDimensions() =
