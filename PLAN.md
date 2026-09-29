@@ -191,6 +191,50 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-29 — v1.0.24 SHIPPED (flicker-free in-place paging).** The user
+  reported the v1.0.23 page swap flickered: "the image now
+  flickers/blinks during the swipe transition (visible as a flash where
+  the image seems to disappear or re-render mid-animation) instead of
+  animating smoothly." Root cause, three compounding gaps at the swap
+  instant: (1) `animateNavigate` swapped the wallpaper the moment the
+  160ms exit finished, but the re-keyed `ZoomableAsyncImage` still had
+  to load — the old image was traded for NOTHING (black scrim) until
+  Coil finished, often after the enter spring had already settled; (2)
+  the blurred backdrop and corner progress chip keyed off raw
+  `imageDisplayed` (which flips false→true around every re-key), so
+  they pulsed/blipped even on warm loads; (3) the request's 250ms
+  `crossfade` faded the incoming image in from transparent over black —
+  literally the reported blink. **The fix makes the transition start on
+  an image that can paint.** A pure `ViewerPreloadGate` (armed via
+  `gate.arm(target)`, awaited via `gate.await(target, 600ms)`) is fed by
+  an offscreen `PreloadedViewerImage` — an invisible (2% alpha, beneath
+  the gesture host) copy of the viewer's own `ZoomableAsyncImage` stack
+  for the pointed-at neighbor, built with the SAME URL + retry-0
+  memory-cache key + layout size, so whatever it loads is exactly what
+  the incoming preview paints (memory hit at swap). The gesture layer
+  arms it two ways: mid-drag once a sideways drag crosses 40% of the
+  commit distance in a direction (the load gets a head start while the
+  finger still travels), and at release for fast flings that never
+  crossed the threshold. The release then HOLDS the image at its dragged
+  offset (`animateNavigate`'s new `awaitReady` hook, inside the
+  `animating` window so competing gestures stand by) until the neighbor
+  reports displayed; a neighbor that FAILS unlocks immediately (the swap
+  lands on the retry overlay), one that stays silent only holds 600ms
+  before proceeding into the usual loading treatment. The loading
+  furniture now shows only after a 150ms grace of not displaying
+  (`LOADING_FURNITURE_GRACE_MS`), so a warm paint never blinks it in
+  and out while a genuinely slow original still gets the full
+  treatment; the crossfade is dropped from the viewer request (the
+  enter spring is the transition's motion). `DetailViewModel.peekNeighbor`
+  (over `ViewerSession.Frame.neighbor`) lets the gesture layer look
+  before it leaps. Gates: ktlint clean; **709/0 tests (+8: 6 gate
+  verdict/timeout/stale-skipping, 1 session neighbor, 1 VM peek)**;
+  assembleRelease 3,184,823 bytes unsigned (one daemon-OOM
+  pkill+retry); dex audit PASS 5,969 host classes, wallhaven ABI
+  intact; CI green on c174b16 (publish-repo idle — no provider
+  changes); tag `v1.0.24`; `Cloudimage-v1.0.24.apk` 3,197,111 bytes
+  signed & cert-verified, badging confirms versionCode 25 / 1.0.24.
+
 - **2026-09-29 — v1.0.23 SHIPPED (one gesture per swipe direction).** The
   user's brief, verbatim in its most important clause: "each swipe
   direction does one distinct thing, without overlap". The viewer's
