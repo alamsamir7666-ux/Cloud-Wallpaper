@@ -191,6 +191,81 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-29 — v1.0.28 SHIPPED (the v1.0.22 restore).** The user
+  called it: five releases of gesture work (v1.0.23-v1.0.27 — arbiter,
+  in-place paging, preload gate, one-writer dispatch, stillness band)
+  never fully killed the held-swipe shiver, so the whole tree is
+  restored to the v1.0.22 tag. 21 files, -2,299/+172 lines: the
+  gesture arbiter, ViewerPreloadGate, ViewerSession and their test
+  suites are gone; the entries describing v1.0.23-v1.0.27 live on in
+  the tagged history (tags v1.0.23..v1.0.27 keep both code and PLAN
+  text if any of it is ever worth mining again). Only the version
+  moves forward — versionCode 29 / versionName 1.0.28 — so the revert
+  installs as a plain in-place update over v1.0.27 (code 23 was taken
+  by the original v1.0.22; Android demands monotonic codes). On screen
+  this means v1.0.22 exactly: paging swaps in place (no
+  gallery-adjacent follow), telephoto flick-to-dismiss is back
+  (v1.0.23 had retired it for the arbiter), and the viewer behaves as
+  the user last accepted it in v1.0.22. Gates on the restored tree:
+  ktlint clean; 669/0 tests (12 network-gated skips — the
+  arbiter/preload/session suites left with their code); release build
+  green on the second attempt (the known R8 daemon-kill, usual pkill
+  recipe); dex audit PASS (5,974 host classes, wallhaven 36 classes /
+  32 external refs / 0 unresolved). The sandbox had been wiped again —
+  env restored via scripts/env-recovery-v112.sh (Temurin 17.0.20.1,
+  SDK 37 / build-tools 36.0.0) before the gates. Ritual: push 0d42e12
+  → CI build + publish-repo green → tag v1.0.28 → release workflow
+  green → Cloudimage-v1.0.28.apk 3,197,115 bytes downloaded +
+  apksigner VERIFIED (CN=Cloudimage, same CA) + badging confirms
+  29/1.0.28; release notes rewritten to say plainly what a stability
+  revert is. CI green on 0d42e12.
+- **2026-09-28 — v1.0.22 SHIPPED (Downloads: the library tab and the
+  honest download button).** The user's two-part brief, shipped whole.
+  **(a) The Library grows a third destination — Downloaded** (order:
+  Favorites, History, Downloaded), riding the same swipe-synced pill
+  pager. It is a masonry grid of every wallpaper downloaded from the
+  app, mirroring the favorites grid's layout exactly (same columns,
+  spacing, card) — tracked in its OWN Room table (downloads, keyed by
+  the favorite's (providerId, wallpaperId) pair with the same snapshot
+  fields) so a download and a favorite stay independent facts: the
+  heart overlay on downloaded cards reflects and toggles favorites
+  (outlined when not favorited, filled when favorited — "still shows
+  the heart icon as filled/active" when both), downloading never
+  favorites, and clearing history never touches downloads. Empty
+  state: "No downloads yet." **The migration is real** — database
+  version 2 retires the pre-1.0 destructive fallback and seeds the new
+  table from the history feed (newest DOWNLOADED row per wallpaper
+  via SQLite's MAX-picks-the-row guarantee), so wallpapers downloaded
+  under v1.0.21 and earlier appear without re-downloading; a
+  full-fidelity Robolectric test builds a v1 file and opens it through
+  Room so the migrated schema is validated for real (it caught the
+  NOT NULL on the autoincrement id on its first run — the test works).
+  **(b) The preview's download button gets the full treatment:** tap
+  it and the icon is REPLACED by a determinate progress ring tracing
+  the circular button's edge clockwise as the bytes land, driven by a
+  new streaming path in CloudimageHttpClient (64 KiB ticks, the
+  Content-Length when the server states one; error pages and
+  Cloudflare challenges stay buffered so a solve-and-replay never
+  emits misleading counts). The size text — "1.2 MB / 4.5 MB",
+  KB/MB/GB formatted like the info sheet — rides as a small label
+  DIRECTLY BELOW the button (the user's call: the button is small and
+  circular), growing leftward so the button never moves. Unknown
+  total degrades honestly: indeterminate ring, running count alone.
+  On success the ring becomes a static checkmark, NOT tappable — once
+  downloaded, always downloaded (isDownloaded streams from the table,
+  so revisiting opens straight into the checkmark); a failure or
+  cancel returns the button to its idle download icon for a fresh-tap
+  retry. The download and share buttons are now true 40dp circular
+  buttons on the FilledTonal palette, separated by twice the row's
+  rhythm (24dp) so they read as distinct actions — the spacing the
+  user asked for. Gates: ktlint clean; **669/0 tests (+15**:
+  3 DAO + 2 migration + 3 streaming client + 5 detail VM incl. a
+  gated mid-flight progress assertion + 3 library VM**)**;
+  assembleRelease 3,184,827 bytes unsigned after the usual daemon-OOM
+  pkill+retry; dex audit PASS 5,974 host classes, wallhaven ABI
+  intact; CI green on dcd0d9d; tag `v1.0.22`;
+  `Cloudimage-v1.0.22.apk` 3,197,115 bytes signed & cert-verified.
+
 - **2026-09-27 — v1.0.21 SHIPPED (two keyless scrapers + honest
   detail info).** Two halves shipped under one version. **(a) Two new
   official keyless providers** in the app tree as buildable
