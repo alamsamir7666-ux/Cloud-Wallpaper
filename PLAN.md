@@ -191,6 +191,75 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-29 — v1.0.26 SHIPPED (one gesture, one writer: the shiver, actually
+  fixed).** The user's report, twice corrected into precision: "When I swipe
+  down on the image, it starts slightly shaking vertically, and when I swipe
+  left or right, it starts slightly shaking horizontally" — and after
+  v1.0.25 still stood: "Still have the same problem... I think which way
+  you implement those functionality those are the problem. So fix it
+  properly." The diagnosis this time went to the sources, not the symptoms:
+  telephoto 0.19.0's actual gesture code (`TappableAndQuickZoomable.kt`,
+  `transformable.kt`, `Zoomable.kt`, `ZoomableImage.kt`, `FlickToDismiss`'s
+  `dragGestureDetector.kt`, fetched from Maven Central) was read line by
+  line, alongside Compose foundation 1.12.1's `waitForUpOrCancellation`
+  (disassembled from the cached AAR to confirm it does NOT consume
+  in-slop moves). **Root cause: the arbiter's stand-down check read
+  `change.isConsumed` on the Initial pass — where only an ANCESTOR's
+  consumption can ever be seen. The zoomable is the arbiter's CHILD, and
+  children claim gestures on the Main pass, which a parent sees only
+  AFTER its Initial look.** So whenever telephoto took a drag mid-flight
+  — a quick zoom armed by an earlier release landing in the double-tap
+  window (the normal rhythm of paging: `awaitSecondDown` eats the next
+  down within ~400ms and `minimumTouchTargetSize` of the last up), or a
+  double-tap zoom that fires via `onDoubleClick` WITHOUT consuming a
+  single event — the arbiter never learned of it and kept writing drag
+  offsets while the zoomable animated its own transform over the same
+  finger. Two interleaved per-frame writers on one image read exactly as
+  the user described: a shiver along whichever axis was being dragged.
+  v1.0.25 had moved consumption to Initial (making the arbiter's claims
+  visible to the child — arming did stop) but that made the child's
+  claims INVISIBLE to the arbiter: one blind spot traded for the other.
+  **The fix follows the discipline of telephoto's own `FlickToDismiss`**:
+  the arbiter now watches every event on BOTH passes — it still consumes
+  locked moves in Initial (a swipe's release keeps reading as a swipe,
+  not a tap), then awaits the SAME event again on the Main pass, which
+  the zoomable's parent sees only after the image dispatched it: a move
+  consumed there was claimed by the image's own gesture layer, and the
+  arbiter yields the finger AT ONCE — before its own 10dp lock ever
+  writes an offset (platform slop ~8dp claims first, which is why
+  LOCK_SLOP > touch slop now matters structurally, not just for
+  diagonals). The double-tap zoom that consumes nothing is caught by a
+  per-event `zoomFraction() > 0.001` stand-down fed straight off
+  `zoomableState.zoomFraction` (the `zoomedOut` MutableState is kept
+  only for the chrome). One gesture, one writer, always. The drag itself
+  also changed how it moves the image: **whole-pixel layout offsets**
+  (`Modifier.offset { IntOffset(roundToInt(), roundToInt()) }`, flick's
+  own path) instead of a sub-pixel `graphicsLayer` translation that
+  re-sampled the sub-sampled tiles at a fresh fractional position every
+  frame; the fade stays a draw-phase `graphicsLayer { alpha }`. Real
+  taps, double-tap zoom, quick zoom and pinches are untouched. Gates:
+  ktlint clean; **709/0 tests** (no new unit tests — the change is in
+  the pointer-dispatch choreography, which the JVM suite cannot see);
+  assembleRelease 3,184,827 bytes unsigned; dex audit PASS (5,973 host
+  classes, wallhaven ABI intact); CI green on feb3505; tag `v1.0.26`;
+  `Cloudimage-v1.0.26.apk` 3,197,115 bytes signed & cert-verified,
+  badging confirms versionCode 27 / 1.0.26.
+
+- **2026-09-29 — v1.0.25 SHIPPED (the shiver, first attempt — superseded
+  same day by v1.0.26).** Read the interleave as stacked restore springs:
+  the stand-down that fired when the zoomable claimed a drag spawned one
+  restore per pointer move, and the stacked springs' interleaved offset
+  writes read as the shiver. Made restore single-flight (a newer restore
+  replaces its predecessor; a superseded one never clears `animating`),
+  critically damped the page-enter spring, and moved the arbiter's move
+  consumption from Main to **Initial** so a swipe's release stopped
+  counting as a tap that armed telephoto's double-tap window (the real
+  v1.0.23/24 arming path). All true — but the stand-down check stayed on
+  the Initial pass, where a child's claim can never be seen. The user
+  reported the shiver persisting; v1.0.26 found and closed the actual
+  hole. `Cloudimage-v1.0.25.apk` 3,197,115 bytes, code 26; its PLAN entry
+  was owed by the session that was cut short — this is it.
+
 - **2026-09-29 — v1.0.24 SHIPPED (flicker-free in-place paging).** The user
   reported the v1.0.23 page swap flickered: "the image now
   flickers/blinks during the swipe transition (visible as a flash where
