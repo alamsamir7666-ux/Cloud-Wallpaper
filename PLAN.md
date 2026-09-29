@@ -191,6 +191,52 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-29 — v1.0.23 SHIPPED (one gesture per swipe direction).** The
+  user's brief, verbatim in its most important clause: "each swipe
+  direction does one distinct thing, without overlap". The viewer's
+  gesture layer is rebuilt around a **dominant-axis arbiter** — a pure,
+  21-test state machine fed raw pointer positions: past a 10dp slop a
+  drag locks to whichever axis traveled further and NEVER revises, so a
+  mostly-horizontal swipe can never half-dismiss and a mostly-downward
+  one can never page ("that last paragraph matters — without it,
+  diagonal swipes will feel janky"). **Swipe down dismisses**: the image
+  translates 1:1 with the finger and fades simultaneously, the black
+  scrim fades toward transparent with it, and the chrome (top bar,
+  carousel, action row, snackbars) rides the same fade — with NO
+  scaling, skewing or resizing at any point. Released past 35% of the
+  screen's height (or at a 2000dp/s fling) the close continues on its
+  own; released earlier everything springs back to position and full
+  opacity. **Swipe left / right pages in place** through the list the
+  viewer was opened from — the browse feed (home tabs and search grid),
+  any library tab (favorites, history, downloads), or the "More like
+  this" row (a tap there prepends the current wallpaper, so
+  "previous" from the first lookalike steps back to it). A new
+  `ViewerSession` singleton is the hand-off: each grid parks its list +
+  tapped index right before navigating; the detail ViewModel snapshots
+  and owns it — back-stack safe by construction (stacked viewers never
+  cross-talk), and with nothing parked (process death) the lookalike
+  row stands in, led by the wallpaper on screen. Edges rubber-band at a
+  quarter of the follow and refuse to commit — no wrap-around. **Swipe
+  up opens the details panel** with the pill's own haptic, the image
+  offering a capped half-speed nudge as feedback. Zoomed in, panning
+  owns the finger exactly as before (the arbiter stands down; a second
+  finger hands everything to the pinch). Paging swaps the wallpaper in
+  place: history, recommendations and details reload for the image that
+  lands (in-flight loads for the one that leaves are cancelled), the
+  favorite/downloaded observers re-bind through flatMapLatest, and the
+  zoom resets with the image — the drag offsets live above the
+  per-wallpaper key, so the exit → swap → enter slide animation
+  finishes across the swap. telephoto's flick is retired (dependency
+  removed) — its scaled dismiss is exactly what the new spec rules
+  out. Gates: ktlint clean; **701/0 tests (+32: 21 arbiter + 6 session
+  + 5 detail VM)**; assembleRelease 3,184,827 bytes unsigned after the
+  usual daemon-OOM pkill+retry; dex audit PASS 5,965 host classes,
+  wallhaven ABI intact; CI green on 7cd96b5 (publish-repo green too —
+  the toml touch re-packaged the same providers); tag `v1.0.23`;
+  `Cloudimage-v1.0.23.apk` 3,197,115 bytes signed & cert-verified
+  (same size as v1.0.22 by coincidence — badging confirms versionCode
+  24 / 1.0.23).
+
 - **2026-09-28 — v1.0.22 SHIPPED (Downloads: the library tab and the
   honest download button).** The user's two-part brief, shipped whole.
   **(a) The Library grows a third destination — Downloaded** (order:
