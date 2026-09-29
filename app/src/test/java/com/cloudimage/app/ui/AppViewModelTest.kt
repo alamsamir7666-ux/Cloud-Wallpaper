@@ -1,7 +1,6 @@
 package com.cloudimage.app.ui
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
-import com.cloudimage.core.data.viewer.ViewerSession
 import com.cloudimage.core.datastore.UserPreferencesRepository
 import com.cloudimage.core.model.UserPreferences
 import com.cloudimage.core.testing.MainDispatcherRule
@@ -26,7 +25,7 @@ class AppViewModelTest {
         runTest {
             val preferences = newPreferences()
 
-            val viewModel = AppViewModel(preferences, ViewerSession())
+            val viewModel = AppViewModel(preferences)
 
             assertNull(viewModel.preferences.value)
             assertEquals(UserPreferences(), viewModel.preferences.first { it != null })
@@ -36,7 +35,7 @@ class AppViewModelTest {
     fun completingOnboardingPersistsTheSfwChoice() =
         runTest {
             val preferences = newPreferences()
-            val viewModel = AppViewModel(preferences, ViewerSession())
+            val viewModel = AppViewModel(preferences)
 
             viewModel.completeOnboarding(sfwOnly = false)
 
@@ -48,7 +47,7 @@ class AppViewModelTest {
     fun completingOnboardingKeepsTheDefaultSfwChoice() =
         runTest {
             val preferences = newPreferences()
-            val viewModel = AppViewModel(preferences, ViewerSession())
+            val viewModel = AppViewModel(preferences)
 
             viewModel.completeOnboarding(sfwOnly = true)
 

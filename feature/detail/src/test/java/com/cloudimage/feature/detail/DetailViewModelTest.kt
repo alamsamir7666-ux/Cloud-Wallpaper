@@ -9,7 +9,6 @@ import com.cloudimage.core.data.repository.SaveError
 import com.cloudimage.core.data.repository.SaveResult
 import com.cloudimage.core.data.repository.SourceCapability
 import com.cloudimage.core.data.repository.SourceInfo
-import com.cloudimage.core.data.viewer.ViewerSession
 import com.cloudimage.core.model.Downloaded
 import com.cloudimage.core.model.Favorite
 import com.cloudimage.core.model.HistoryAction
@@ -31,7 +30,6 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -75,10 +73,7 @@ class DetailViewModelTest {
             capabilities = setOf(SourceCapability.SEARCH, SourceCapability.TAGS),
         )
 
-    private fun createViewModel(
-        encoded: String?,
-        session: ViewerSession = ViewerSession(),
-    ): DetailViewModel =
+    private fun createViewModel(encoded: String?): DetailViewModel =
         DetailViewModel(
             savedStateHandle = SavedStateHandle(mapOf(DetailDestination.arg to encoded)),
             applier = applier,
@@ -87,7 +82,6 @@ class DetailViewModelTest {
             historyRepository = history,
             downloadsRepository = downloads,
             sources = sources,
-            viewerSession = session,
         )
 
     @Test
@@ -508,153 +502,5 @@ class DetailViewModelTest {
                 assertEquals(OperationState.Failed(DetailError.STORAGE), viewModel.state.value.shareOp)
                 assertEquals(DetailEvent.ActionFailed(DetailAction.SHARE, DetailError.STORAGE), awaitItem())
             }
-        }
-
-    @Test
-    fun pagingSwapsTheWallpaperAndRecordsEachViewedImage() =
-        runTest {
-            val next = wallpaper.copy(id = "next-one")
-            val last = wallpaper.copy(id = "last-one")
-            val session = ViewerSession()
-            session.open(listOf(wallpaper, next, last), index = 0)
-            val viewModel = createViewModel(DetailDestination.encode(wallpaper), session)
-            advanceUntilIdle()
-
-            assertTrue(viewModel.state.value.hasNext)
-            assertFalse(viewModel.state.value.hasPrevious)
-
-            viewModel.onNavigate(+1)
-            advanceUntilIdle()
-
-            assertEquals(next, viewModel.state.value.wallpaper)
-            assertTrue(viewModel.state.value.hasPrevious)
-            assertTrue(viewModel.state.value.hasNext)
-            assertEquals(
-                listOf(wallpaper, next),
-                history.entries.map { it.wallpaper },
-            )
-            assertEquals(
-                listOf(HistoryAction.VIEWED, HistoryAction.VIEWED),
-                history.entries.map { it.action },
-            )
-        }
-
-    @Test
-    fun pagingPastEitherEndRefusesInsteadOfWrapping() =
-        runTest {
-            val next = wallpaper.copy(id = "next-one")
-            val session = ViewerSession()
-            session.open(listOf(wallpaper, next), index = 0)
-            val viewModel = createViewModel(DetailDestination.encode(wallpaper), session)
-            advanceUntilIdle()
-
-            viewModel.onNavigate(-1)
-            advanceUntilIdle()
-            assertEquals(wallpaper, viewModel.state.value.wallpaper)
-
-            viewModel.onNavigate(+1)
-            viewModel.onNavigate(+1)
-            advanceUntilIdle()
-            assertEquals(next, viewModel.state.value.wallpaper)
-            assertEquals(
-                listOf(HistoryAction.VIEWED, HistoryAction.VIEWED),
-                history.entries.map { it.action },
-            )
-        }
-
-    @Test
-    fun withoutASessionTheLookalikesBecomeTheBrowsingList() =
-        runTest {
-            sources.setSources(capableSource)
-            val lookalike = taggedWallpaper.copy(id = "zzz999")
-            sources.enqueueSearch(
-                NetworkResult.Success(Page(wallpapers = listOf(lookalike), nextPage = null)),
-            )
-            // The paged-in lookalike runs its own recommendation query; the
-            // single-tag broadening step makes it two when the first is empty.
-            sources.enqueueSearch(
-                NetworkResult.Success(Page(wallpapers = emptyList(), nextPage = null)),
-            )
-            sources.enqueueSearch(
-                NetworkResult.Success(Page(wallpapers = emptyList(), nextPage = null)),
-            )
-            val viewModel = createViewModel(DetailDestination.encode(taggedWallpaper))
-            advanceUntilIdle()
-
-            // Nothing was parked for this screen: the row itself stands in,
-            // led by the wallpaper on screen.
-            assertTrue(viewModel.state.value.hasNext)
-
-            viewModel.onNavigate(+1)
-            advanceUntilIdle()
-
-            assertEquals(lookalike, viewModel.state.value.wallpaper)
-        }
-
-    @Test
-    fun favoriteAndDownloadedFlagsFollowThePagedWallpaper() =
-        runTest {
-            val next = wallpaper.copy(id = "next-one")
-            favorites.setFavorites(listOf(Favorite(next, addedAtMillis = 1L)))
-            val session = ViewerSession()
-            session.open(listOf(wallpaper, next), index = 0)
-            val viewModel = createViewModel(DetailDestination.encode(wallpaper), session)
-            advanceUntilIdle()
-            assertFalse(viewModel.state.value.isFavorite)
-
-            viewModel.onNavigate(+1)
-            advanceUntilIdle()
-
-            assertEquals(next, viewModel.state.value.wallpaper)
-            assertTrue(viewModel.state.value.isFavorite)
-            assertFalse(viewModel.state.value.isDownloaded)
-        }
-
-    @Test
-    fun peekNeighborSpotsThePageTargetWithoutMoving() =
-        runTest {
-            val next = wallpaper.copy(id = "next-one")
-            val session = ViewerSession()
-            session.open(listOf(wallpaper, next), index = 0)
-            val viewModel = createViewModel(DetailDestination.encode(wallpaper), session)
-            advanceUntilIdle()
-
-            assertEquals(next, viewModel.peekNeighbor(+1))
-            assertNull(viewModel.peekNeighbor(-1))
-            assertEquals(wallpaper, viewModel.state.value.wallpaper)
-
-            viewModel.onNavigate(+1)
-            advanceUntilIdle()
-
-            assertEquals(wallpaper, viewModel.peekNeighbor(-1))
-            assertNull(viewModel.peekNeighbor(+1))
-        }
-
-    @Test
-    fun pagingResetsTheDetailsOfTheImageThatLeft() =
-        runTest {
-            sources.setSources(capableSource)
-            val undimensioned = wallpaper.copy(width = null, height = null)
-            val record =
-                WallpaperDetails(
-                    wallpaper = undimensioned,
-                    resolution = "1920x1080",
-                    fileSizeBytes = 10L,
-                )
-            sources.enqueueDetails(NetworkResult.Success(record))
-            val dimensioned = wallpaper.copy(id = "dimensioned")
-            val session = ViewerSession()
-            session.open(listOf(undimensioned, dimensioned), index = 0)
-            val viewModel = createViewModel(DetailDestination.encode(undimensioned), session)
-            advanceUntilIdle()
-            assertEquals(record, viewModel.state.value.details)
-
-            viewModel.onNavigate(+1)
-            advanceUntilIdle()
-
-            // The image that lands states its own dimensions, so nothing is
-            // fetched — and the one that left takes its record with it.
-            assertNull(viewModel.state.value.details)
-            assertEquals(listOf(undimensioned), sources.detailsCalls)
         }
 }

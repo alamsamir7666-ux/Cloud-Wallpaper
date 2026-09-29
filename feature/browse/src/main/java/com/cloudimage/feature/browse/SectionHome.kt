@@ -50,9 +50,7 @@ import com.cloudimage.core.model.Wallpaper
  * with the pager's drag instead of waiting for the settle. The pages swipe
  * through a HorizontalPager, and every section page is a staggered grid
  * fed by the section's own pagination — one feed at a time, nothing
- * stacked. Since v1.0.23 every card hands its whole list (and the tapped
- * index) up with the click, so the fullscreen viewer can page through the
- * feed with sideways swipes.
+ * stacked.
  *
  * Tab selection lives in the ViewModel ([BrowseUiState.selectedHomeTab]):
  * taps and settled swipes both land in [onTabSelected], so the bar and the
@@ -66,7 +64,7 @@ internal fun SectionsHome(
     selectedTab: HomeTab?,
     onTabSelected: (String) -> Unit,
     activeGridState: MutableState<LazyStaggeredGridState?>,
-    onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
+    onWallpaperClick: (Wallpaper) -> Unit,
     onLoadMoreSection: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -146,7 +144,7 @@ private fun RecentlyAppliedGrid(
     wallpapers: List<Wallpaper>,
     isCurrentPage: Boolean,
     activeGridState: MutableState<LazyStaggeredGridState?>,
-    onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
+    onWallpaperClick: (Wallpaper) -> Unit,
 ) {
     val gridState = rememberSaveable(saver = LazyStaggeredGridState.Saver) { LazyStaggeredGridState() }
     LaunchedEffect(isCurrentPage) {
@@ -171,7 +169,7 @@ private fun SectionTabGrid(
     section: BrowseSectionState,
     isCurrentPage: Boolean,
     activeGridState: MutableState<LazyStaggeredGridState?>,
-    onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
+    onWallpaperClick: (Wallpaper) -> Unit,
     onLoadMore: () -> Unit,
 ) {
     val gridState = rememberSaveable(saver = LazyStaggeredGridState.Saver) { LazyStaggeredGridState() }
@@ -261,15 +259,15 @@ private fun HomeStaggeredGrid(
 /** The feed cards — one per wallpaper, keyed by provider and id. */
 private fun LazyStaggeredGridScope.wallpaperItems(
     wallpapers: List<Wallpaper>,
-    onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
+    onWallpaperClick: (Wallpaper) -> Unit,
 ) {
     items(
-        count = wallpapers.size,
-        key = { index -> "${wallpapers[index].providerId}:${wallpapers[index].id}" },
-    ) { index ->
+        wallpapers,
+        key = { "${it.providerId}:${it.id}" },
+    ) { wallpaper ->
         WallpaperCard(
-            wallpaper = wallpapers[index],
-            onClick = { onWallpaperClick(wallpapers, index) },
+            wallpaper = wallpaper,
+            onClick = { onWallpaperClick(wallpaper) },
         )
     }
 }

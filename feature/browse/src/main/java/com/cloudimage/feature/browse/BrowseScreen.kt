@@ -102,7 +102,7 @@ import com.cloudimage.core.model.Wallpaper
  */
 @Composable
 fun BrowseScreen(
-    onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
+    onWallpaperClick: (Wallpaper) -> Unit,
     onOpenExtensions: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: BrowseViewModel = hiltViewModel(),
@@ -779,7 +779,7 @@ private fun SourceSheetRow(
 private fun BrowseGrid(
     state: BrowseUiState,
     gridState: LazyStaggeredGridState,
-    onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
+    onWallpaperClick: (Wallpaper) -> Unit,
     onLoadMore: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -827,7 +827,7 @@ private fun BrowseGrid(
             val wallpaper = state.wallpapers[index]
             WallpaperCard(
                 wallpaper = wallpaper,
-                onClick = { onWallpaperClick(state.wallpapers, index) },
+                onClick = { onWallpaperClick(wallpaper) },
                 providerLabel =
                     if (showProviderLabels) {
                         providerNames[wallpaper.providerId] ?: wallpaper.providerId.substringAfterLast('.')

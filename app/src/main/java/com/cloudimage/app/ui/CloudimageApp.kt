@@ -10,7 +10,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -20,7 +19,6 @@ import com.cloudimage.app.navigation.TopLevelDestination
 
 @Composable
 fun CloudimageApp(modifier: Modifier = Modifier) {
-    val viewModel: AppViewModel = hiltViewModel()
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
@@ -59,7 +57,6 @@ fun CloudimageApp(modifier: Modifier = Modifier) {
     ) { innerPadding ->
         CloudimageNavHost(
             navController = navController,
-            viewerSession = viewModel.viewerSession,
             modifier = Modifier.padding(innerPadding),
         )
     }

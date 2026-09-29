@@ -23,6 +23,7 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil)
     implementation(libs.telephoto.zoomable.image.coil)
+    implementation(libs.telephoto.flick)
     implementation(project(":core:network"))
     implementation(libs.kotlinx.serialization.json)
 
