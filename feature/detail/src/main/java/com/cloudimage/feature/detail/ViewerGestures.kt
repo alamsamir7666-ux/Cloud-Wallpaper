@@ -311,17 +311,22 @@ internal class ViewerMotionState(
     }
 
     /**
-     * Pages to the neighbor [onNavigate][delta] points at: the current
-     * image exits in the swipe's direction, the state swaps the instant it
-     * is gone, and the next image slides in from the opposite side.
+     * Pages to the neighbor [delta] points at: the incoming image first
+     * gets [awaitReady] to warm up offscreen (v1.0.24) — the release holds
+     * the image at its dragged offset until the neighbor can paint, so the
+     * swap never flashes a blank — then the current image exits in the
+     * swipe's direction, the state swaps the instant it is gone, and the
+     * next image slides in from the opposite side.
      */
     fun animateNavigate(
         delta: Int,
         onSwap: () -> Unit,
+        awaitReady: (suspend () -> Unit)? = null,
     ) {
         scope.launch {
             animating.value = true
             try {
+                awaitReady?.invoke()
                 animate(
                     initialValue = offsetX.floatValue,
                     targetValue = -delta * viewportWidthPx,

@@ -38,6 +38,12 @@ class ViewerSession
             val hasPrevious: Boolean get() = index > 0
 
             val hasNext: Boolean get() = index < wallpapers.lastIndex
+
+            /**
+             * The wallpaper [delta] steps away, or null past either end —
+             * the spot a swipe would land on, without moving there.
+             */
+            fun neighbor(delta: Int): Wallpaper? = wallpapers.getOrNull(index + delta)
         }
 
         private var pending: Frame? = null

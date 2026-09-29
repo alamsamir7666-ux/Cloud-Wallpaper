@@ -183,6 +183,7 @@ fun DetailScreen(
                     onOpenInfo = { showInfoSheet = true },
                     hasNext = state.hasNext,
                     hasPrevious = state.hasPrevious,
+                    navigateTarget = viewModel::peekNeighbor,
                 )
             }
             DetailTopBar(

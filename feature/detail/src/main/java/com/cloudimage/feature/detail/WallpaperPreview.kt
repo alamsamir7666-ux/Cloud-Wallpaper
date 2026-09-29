@@ -57,11 +57,14 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.core.network.ImageProgressRegistry
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import me.saket.telephoto.zoomable.ZoomSpec
 import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import java.util.Locale
+import kotlin.math.abs
 
 /**
  * Fullscreen wallpaper preview, gallery-grade (v1.0.17, reworked v1.0.23):
@@ -88,6 +91,11 @@ import java.util.Locale
  * - the zoomable states are keyed by wallpaper, so paging resets the zoom
  *   without touching the drag offsets hoisted in [motion] — an in-flight
  *   page animation finishes across the swap;
+ * - paging never trades the old image for a blank (v1.0.24): the neighbor a
+ *   swipe points at warms up offscreen through the same image stack, the
+ *   release holds until it can paint, and the loading furniture (blurred
+ *   backdrop, progress chip) only shows after a grace period instead of
+ *   blinking on every swap;
  * - zoomed in, panning owns the finger and none of the above fire.
  *
  * [zoomedOut] and [imageDisplayed] report the zoom and load state upward
@@ -105,6 +113,7 @@ internal fun ZoomableWallpaperPreview(
     onOpenInfo: () -> Unit,
     hasNext: Boolean,
     hasPrevious: Boolean,
+    navigateTarget: (Int) -> Wallpaper?,
     modifier: Modifier = Modifier,
 ) {
     var retryAttempt by remember { mutableIntStateOf(0) }
@@ -122,6 +131,12 @@ internal fun ZoomableWallpaperPreview(
     val currentOnOpenInfo by rememberUpdatedState(onOpenInfo)
     val currentHasNext by rememberUpdatedState(hasNext)
     val currentHasPrevious by rememberUpdatedState(hasPrevious)
+    val currentNavigateTarget by rememberUpdatedState(navigateTarget)
+
+    // The readiness gate (v1.0.24): the neighbor a sideways drag points at
+    // warms up offscreen, and the page transition waits for it to paint —
+    // see [ViewerPreloadGate].
+    val preloadGate = remember { ViewerPreloadGate() }
 
     // Leave the registry clean for the next wallpaper.
     DisposableEffect(url) {
@@ -138,8 +153,23 @@ internal fun ZoomableWallpaperPreview(
         snapshotFlow { imageState.isImageDisplayed }.collect { imageDisplayed.value = it }
     }
 
+    // Loading furniture shows itself only after a grace period (v1.0.24):
+    // a warm swap paints the incoming image before the furniture could
+    // ever appear, which is what used to flash — the blurred backdrop
+    // pulsing in and out and the corner chip blinking — on every page turn.
+    // A genuinely slow original still gets the full treatment, just
+    // without the false alarm at the start.
+    var showLoadingFurniture by remember { mutableStateOf(false) }
+    LaunchedEffect(url, imageDisplayed.value) {
+        if (imageDisplayed.value) {
+            showLoadingFurniture = false
+        } else {
+            delay(LOADING_FURNITURE_GRACE_MS)
+            if (!imageDisplayed.value) showLoadingFurniture = true
+        }
+    }
     val backdropAlpha by animateFloatAsState(
-        targetValue = if (imageDisplayed.value) 0f else 1f,
+        targetValue = if (showLoadingFurniture) 1f else 0f,
         animationSpec = tween(durationMillis = 350),
         label = "backdrop-alpha",
     )
@@ -155,6 +185,15 @@ internal fun ZoomableWallpaperPreview(
                 // transparent in step with the dismiss drag.
                 .drawBehind { drawRect(color = Color.Black, alpha = 1f - motion.dismissProgress) },
     ) {
+        // The offscreen warmer: a sideways drag points at the neighbor it
+        // would page to, and that one loads here, beneath everything,
+        // through the same image stack that will show it. The page
+        // transition waits for this to paint, so the swap never trades
+        // the old image for a blank beat (v1.0.24).
+        preloadGate.armed.value?.let { warming ->
+            PreloadedViewerImage(wallpaper = warming, gate = preloadGate)
+        }
+
         // Everything the finger moves travels together — the backdrop, the
         // image and its loading furniture — with the offsets and fade read
         // at draw time so the drag itself never recomposes.
@@ -208,9 +247,11 @@ internal fun ZoomableWallpaperPreview(
                         .fillMaxSize()
                         .pointerInputGestures(
                             motion = motion,
+                            gate = preloadGate,
                             zoomedOut = zoomedOut,
                             hasNext = { currentHasNext },
                             hasPrevious = { currentHasPrevious },
+                            navigateTarget = { delta -> currentNavigateTarget(delta) },
                             onDismiss = { currentOnDismiss() },
                             onNavigate = { delta -> currentOnNavigate(delta) },
                             onOpenInfo = {
@@ -224,7 +265,10 @@ internal fun ZoomableWallpaperPreview(
                         ImageRequest
                             .Builder(context)
                             .data(wallpaper.fullUrl)
-                            .crossfade(durationMillis = 250)
+                            // No crossfade on purpose (v1.0.24): the page
+                            // transition's motion is the enter spring, and a
+                            // fade from transparent over the black scrim is
+                            // exactly the blink this rework removes.
                             // Bumping the attempt re-executes the request; the
                             // memoryCacheKey changes with it so retries re-fetch.
                             .setParameter("retry", retryAttempt, memoryCacheKey = "retry-$retryAttempt")
@@ -242,7 +286,7 @@ internal fun ZoomableWallpaperPreview(
             }
 
             // Corner loading chip: how much of the original has arrived.
-            if (!imageDisplayed.value && !loadFailed) {
+            if (showLoadingFurniture && !loadFailed) {
                 ProgressChip(
                     progress = progress.value,
                     modifier =
@@ -278,9 +322,11 @@ internal fun ZoomableWallpaperPreview(
  */
 private fun Modifier.pointerInputGestures(
     motion: ViewerMotionState,
+    gate: ViewerPreloadGate,
     zoomedOut: MutableState<Boolean>,
     hasNext: () -> Boolean,
     hasPrevious: () -> Boolean,
+    navigateTarget: (Int) -> Wallpaper?,
     onDismiss: () -> Unit,
     onNavigate: (Int) -> Unit,
     onOpenInfo: () -> Unit,
@@ -292,6 +338,7 @@ private fun Modifier.pointerInputGestures(
 
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
+                val navigateCommitPx = size.width * NAVIGATE_COMMIT_FRACTION
                 val arbiter =
                     ViewerGestureArbiter(
                         lockSlopPx = LOCK_SLOP.toPx(),
@@ -299,7 +346,7 @@ private fun Modifier.pointerInputGestures(
                         dismissFlingPx = DISMISS_FLING_VELOCITY.toPx(),
                         detailsCommitPx = DETAILS_COMMIT_DISTANCE.toPx(),
                         detailsFlingPx = DETAILS_FLING_VELOCITY.toPx(),
-                        navigateCommitPx = size.width * NAVIGATE_COMMIT_FRACTION,
+                        navigateCommitPx = navigateCommitPx,
                         navigateFlingPx = NAVIGATE_FLING_VELOCITY.toPx(),
                     )
                 arbiter.onDown(down.position.x, down.position.y)
@@ -308,6 +355,11 @@ private fun Modifier.pointerInputGestures(
                 motion.snapIfIdle()
 
                 var tracking = !zoomedOut.value && !motion.animating.value
+
+                // The direction this drag has already asked the warmer to
+                // prepare for, so the preloader never flip-flops between
+                // the two neighbors while the finger wavers.
+                var warmingDirection = 0
                 while (true) {
                     val event = awaitPointerEvent()
                     if (event.changes.size > 1) {
@@ -315,6 +367,7 @@ private fun Modifier.pointerInputGestures(
                         // takes the rest of this gesture.
                         if (tracking) motion.animateRestore()
                         tracking = false
+                        gate.clear()
                         continue
                     }
                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -335,12 +388,37 @@ private fun Modifier.pointerInputGestures(
                                 ViewerRelease.ShowDetails -> {
                                     onOpenInfo()
                                     motion.animateRestore()
+                                    gate.clear()
                                 }
 
-                                is ViewerRelease.Navigate ->
-                                    motion.animateNavigate(release.delta) { onNavigate(release.delta) }
+                                is ViewerRelease.Navigate -> {
+                                    val target = navigateTarget(release.delta)
+                                    if (target == null) {
+                                        // The arbiter already refuses edge-pointing
+                                        // releases; this is the same answer for a
+                                        // frame that vanished underneath.
+                                        motion.animateRestore()
+                                    } else {
+                                        // Arm first — a fast fling never crosses
+                                        // the warm threshold mid-drag — then hold
+                                        // the image at its dragged offset until
+                                        // the neighbor can paint. The
+                                        // exit->swap->enter that follows starts
+                                        // on a ready image, never on a blank
+                                        // (v1.0.24).
+                                        gate.arm(target)
+                                        motion.animateNavigate(
+                                            delta = release.delta,
+                                            awaitReady = { gate.await(target, PRELOAD_TIMEOUT_MS) },
+                                            onSwap = { onNavigate(release.delta) },
+                                        )
+                                    }
+                                }
 
-                                ViewerRelease.RestorePosition -> motion.animateRestore()
+                                ViewerRelease.RestorePosition -> {
+                                    motion.animateRestore()
+                                    gate.clear()
+                                }
                             }
                         }
                         break
@@ -352,9 +430,23 @@ private fun Modifier.pointerInputGestures(
                         // zoom began) — settle home and stay out of it.
                         tracking = false
                         motion.animateRestore()
+                        gate.clear()
                         continue
                     }
                     if (arbiter.onMove(change.position.x, change.position.y) != ViewerGesture.NONE) {
+                        // A sideways drag most of the way to a commit points
+                        // at a real neighbor: warm it now, while the finger is
+                        // still travelling, so the transition that follows
+                        // the release gets a head start on the load.
+                        if (arbiter.gesture == ViewerGesture.HORIZONTAL) {
+                            val direction = if (arbiter.totalX < 0f) +1 else -1
+                            if (direction != warmingDirection &&
+                                abs(arbiter.totalX) >= navigateCommitPx * PRELOAD_ARM_FRACTION
+                            ) {
+                                navigateTarget(direction)?.let(gate::arm)
+                                warmingDirection = direction
+                            }
+                        }
                         motion.offsetX.floatValue =
                             arbiter.followX(hasNext = hasNext(), hasPrevious = hasPrevious())
                         motion.offsetY.floatValue = arbiter.followY(detailsNudgeCapPx)
@@ -364,6 +456,57 @@ private fun Modifier.pointerInputGestures(
             }
         },
     )
+
+/**
+ * The offscreen half of the preload gate (v1.0.24): an invisible copy of
+ * the viewer's own image stack for the wallpaper a swipe points at. It
+ * shares the real request's shape — same URL, same retry-0 cache key,
+ * same layout size — so whatever loads here is exactly what the incoming
+ * preview paints, and the moment it draws, the gate knows the page
+ * transition can run without a blank beat. A neighbor that fails instead
+ * unlocks the page immediately — the swap lands on the retry overlay,
+ * the same answer a slow load gets.
+ */
+@Composable
+private fun PreloadedViewerImage(
+    wallpaper: Wallpaper,
+    gate: ViewerPreloadGate,
+) {
+    val context = LocalContext.current
+    val zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = MAX_ZOOM))
+    val imageState = rememberZoomableImageState(zoomableState)
+
+    LaunchedEffect(imageState) {
+        snapshotFlow { imageState.isImageDisplayed }.first { it }
+        gate.report(wallpaper, displayed = true)
+    }
+
+    Box(
+        modifier =
+            Modifier
+                .fillMaxSize()
+                // Almost fully transparent: enough to be laid out and drawn
+                // (so telephoto actually loads it), far too little to be
+                // seen over the wallpaper on screen.
+                .graphicsLayer { alpha = PRELOAD_ALPHA },
+    ) {
+        ZoomableAsyncImage(
+            model =
+                ImageRequest
+                    .Builder(context)
+                    .data(wallpaper.fullUrl)
+                    // The retry-0 key matches the fresh preview this warms,
+                    // so its result is the one reused on swap.
+                    .setParameter("retry", 0, memoryCacheKey = "retry-0")
+                    .listener(
+                        onError = { _, _ -> gate.report(wallpaper, displayed = false) },
+                    ).build(),
+            contentDescription = null,
+            state = imageState,
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
 
 /**
  * A compact glass chip reporting image download progress: a determinate
@@ -495,3 +638,15 @@ private const val NAVIGATE_COMMIT_FRACTION = 0.25f
 
 /** A sideways fling this fast pages even without the distance. */
 private val NAVIGATE_FLING_VELOCITY = 1400.dp
+
+/** How far into a commit a sideways drag must be before its neighbor warms up. */
+private const val PRELOAD_ARM_FRACTION = 0.4f
+
+/** How long a release holds the image waiting for an unwarmed neighbor. */
+private const val PRELOAD_TIMEOUT_MS = 600L
+
+/** The offscreen warmer's opacity: drawn, but never seen. */
+private const val PRELOAD_ALPHA = 0.02f
+
+/** Grace before the blurred backdrop and progress chip show themselves. */
+private const val LOADING_FURNITURE_GRACE_MS = 150L

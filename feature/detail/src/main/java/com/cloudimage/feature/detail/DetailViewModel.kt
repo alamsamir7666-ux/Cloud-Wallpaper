@@ -204,6 +204,14 @@ class DetailViewModel
         }
 
         /**
+         * The wallpaper a [delta] step would page to, without paging (v1.0.24):
+         * the viewer warms this one up offscreen while the swipe is still being
+         * decided. Null at the frame's edges or without one — the same refusal
+         * [onNavigate] would make.
+         */
+        fun peekNeighbor(delta: Int): Wallpaper? = frame?.neighbor(delta)
+
+        /**
          * Pages the viewer through its list (v1.0.23): +1 is the next
          * image (a leftward swipe), -1 the previous (a rightward one). The
          * wallpaper swaps in place — history, recommendations and details

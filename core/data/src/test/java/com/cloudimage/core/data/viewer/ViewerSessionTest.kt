@@ -87,4 +87,24 @@ class ViewerSessionTest {
         assertFalse(empty.hasNext)
         assertNull(empty.current)
     }
+
+    @Test
+    fun neighborsSpotThePageTargetWithoutWrapping() {
+        val middle = ViewerSession.Frame(list, index = 1)
+        assertEquals(wallpaper("a"), middle.neighbor(-1))
+        assertEquals(wallpaper("c"), middle.neighbor(+1))
+
+        val first = ViewerSession.Frame(list, index = 0)
+        assertNull(first.neighbor(-1))
+        assertEquals(wallpaper("b"), first.neighbor(+1))
+
+        val last = ViewerSession.Frame(list, index = 2)
+        assertEquals(wallpaper("b"), last.neighbor(-1))
+        assertNull(last.neighbor(+1))
+
+        // An empty frame never throws, however it was built.
+        val empty = ViewerSession.Frame(emptyList(), index = 0)
+        assertNull(empty.neighbor(0))
+        assertNull(empty.neighbor(+1))
+    }
 }

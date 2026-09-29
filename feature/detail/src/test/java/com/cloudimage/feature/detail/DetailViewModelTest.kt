@@ -611,6 +611,26 @@ class DetailViewModelTest {
         }
 
     @Test
+    fun peekNeighborSpotsThePageTargetWithoutMoving() =
+        runTest {
+            val next = wallpaper.copy(id = "next-one")
+            val session = ViewerSession()
+            session.open(listOf(wallpaper, next), index = 0)
+            val viewModel = createViewModel(DetailDestination.encode(wallpaper), session)
+            advanceUntilIdle()
+
+            assertEquals(next, viewModel.peekNeighbor(+1))
+            assertNull(viewModel.peekNeighbor(-1))
+            assertEquals(wallpaper, viewModel.state.value.wallpaper)
+
+            viewModel.onNavigate(+1)
+            advanceUntilIdle()
+
+            assertEquals(wallpaper, viewModel.peekNeighbor(-1))
+            assertNull(viewModel.peekNeighbor(+1))
+        }
+
+    @Test
     fun pagingResetsTheDetailsOfTheImageThatLeft() =
         runTest {
             sources.setSources(capableSource)
