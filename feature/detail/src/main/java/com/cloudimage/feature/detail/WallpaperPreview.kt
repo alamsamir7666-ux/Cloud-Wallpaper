@@ -1,11 +1,14 @@
 package com.cloudimage.feature.detail
 
+import androidx.compose.animation.core.SnapSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -87,29 +90,42 @@ import kotlin.math.roundToInt
  *   HorizontalPager owns left/right paging natively.
  *
  * The gesture choreography that makes the vertical drag coexist with
- * telephoto's zoomable without ever fighting it: the invisible gesture
- * layer sits BELOW the image in dispatch order — it is this Box's first
- * child while the moving image Box is its sibling on top. Compose
- * dispatches the Main pass to the topmost sibling first, so telephoto
- * sees every event before this layer does; a drag the zoomable claims
- * (a zoomed-in pan, a pinch, a quick zoom) therefore arrives here
- * already consumed, and the layer stands down the moment it sees one.
- * The layer's own consumption, in turn, is visible to the pager above —
- * ancestors dispatch after descendants — so a locked vertical drag
- * switches the pager off for the rest of the gesture. One gesture, one
- * writer, always, with no Initial-pass choreography to get wrong.
+ * telephoto's zoomable: the gesture layer is the PARENT of everything that
+ * moves — a wrapper Box whose pointer input sits above the image in the
+ * tree (and therefore below it in the Main-pass dispatch order). The
+ * detector consumes the vertical touch-slop event itself, which is the
+ * exact handshake telephoto is built to honor: its forked transformable
+ * watches for exactly that consumption while it waits for its own slop
+ * and stands down the moment it sees it, and the pager above — dispatched
+ * after descendants — finds the moves consumed and stops paging for the
+ * rest of the gesture. One gesture, one writer, with the slop race, not
+ * interleaved bookkeeping, deciding who owns the finger:
  *
- * The layer also stands down for the gestures telephoto claims WITHOUT
- * consuming: a down landing inside the double-tap window of a recent up
- * (a double-tap or a quick-zoom hold in the making) is left entirely to
- * the zoomable, and any zoom fraction at all — the double-tap zoom
- * animates without consuming a single event — disqualifies the gesture
- * before the lock ever writes.
+ * - a pinch grabs the zoomable first (multi-pointer events cross its slop
+ *   unconditionally, and children dispatch first), so the layer never
+ *   even locks;
+ * - a double-tap-and-hold drag (quick zoom) is claimed by the zoomable's
+ *   own second-down slop detector — again child-first — before this
+ *   layer's slop can fire;
+ * - a zoomed-in pan has pan room, so the zoomable consumes every move and
+ *   this layer's slop helper sees them consumed and stands down (and
+ *   while zoomed at all, the layer declines to participate from the
+ *   first down);
+ * - a horizontal swipe never crosses vertical slop, so the pager's own
+ *   horizontal slop wins the race and pages.
+ *
+ * This is the choreography telephoto's own media-viewer sample and its
+ * FlickToDismiss() component use (v1.0.22 of this app did too) — adopted
+ * here directly after the below-sibling variant of v1.0.29 starved on
+ * real devices: a layer that only consumes after its own private lock
+ * engages too late, after the zoomable's nodes have already claimed the
+ * gesture in the child-first dispatch order.
  */
 @Composable
 internal fun WallpaperViewerPage(
     wallpaper: Wallpaper,
     motion: ViewerMotionState,
+    isActivePage: Boolean,
     onDismiss: () -> Unit,
     onOpenInfo: () -> Unit,
     onZoomedChange: (Boolean) -> Unit,
@@ -140,6 +156,16 @@ internal fun WallpaperViewerPage(
             .distinctUntilChanged()
             .collect { currentOnZoomedChange(it) }
     }
+
+    // A page that stops being the settled one snaps its zoom back to rest:
+    // swiping away from a zoomed page and later returning never lands on
+    // a page whose zoom would freeze the pager mid-settle.
+    if (!isActivePage) {
+        LaunchedEffect(zoomableState) {
+            zoomableState.resetZoom(animationSpec = SnapSpec())
+        }
+    }
+
     val imageDisplayed = imageState.isImageDisplayed
 
     // Loading furniture shows itself only after a grace period: a warm
@@ -172,16 +198,15 @@ internal fun WallpaperViewerPage(
                 // window behind it as the image travels down.
                 .drawBehind { drawRect(color = Color.Black, alpha = motion.contentAlpha) },
     ) {
-        // The gesture layer — this Box's FIRST child, i.e. the BOTTOM
-        // sibling in dispatch order. Invisible, stationary (never inside
-        // the moving Box, whose offset would feed the drag's own writes
-        // back into the pointer coordinates), and below the image: see
-        // the choreography note above.
+        // The gesture wrapper — the PARENT of everything the finger moves.
+        // Stationary itself (never inside the moving Box, whose offset
+        // would feed the drag's own writes back into the pointer
+        // coordinates): see the choreography note above.
         Box(
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .verticalDragGestures(
+                    .verticalDismissDrag(
                         motion = motion,
                         zoomFraction = { zoomableState.zoomFraction ?: 0f },
                         onDismiss = { currentOnDismiss() },
@@ -190,258 +215,219 @@ internal fun WallpaperViewerPage(
                             currentOnOpenInfo()
                         },
                     ),
-        )
-
-        // Everything the finger moves travels together — the backdrop, the
-        // image and its loading furniture — on whole pixels, through the
-        // LAYOUT (a sub-pixel layer translation would re-sample the
-        // sub-sampled tiles at a fresh fractional position every frame,
-        // which reads as a faint shimmer along the drag axis). The fade
-        // stays a draw-phase concern. Translation and alpha are the only
-        // two effects the dismiss ever applies — never a scale.
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .offset { IntOffset(x = 0, y = motion.offsetY.floatValue.roundToInt()) }
-                    .graphicsLayer { alpha = motion.contentAlpha },
         ) {
-            // Blurred thumbnail backdrop: something rich fills the screen
-            // while (and only while) the original is on its way.
-            if (backdropAlpha > 0.01f) {
-                Box(
-                    modifier =
-                        Modifier
-                            .fillMaxSize()
-                            .graphicsLayer { alpha = backdropAlpha },
-                ) {
-                    AsyncImage(
-                        model =
-                            ImageRequest
-                                .Builder(context)
-                                .data(wallpaper.thumbUrl)
-                                .build(),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier =
-                            Modifier
-                                .fillMaxSize()
-                                .blur(BACKDROP_BLUR_RADIUS),
-                    )
+            // Everything the finger moves travels together — the backdrop,
+            // the image and its loading furniture — on whole pixels,
+            // through the LAYOUT (a sub-pixel layer translation would
+            // re-sample the sub-sampled tiles at a fresh fractional
+            // position every frame, which reads as a faint shimmer along
+            // the drag axis). The fade stays a draw-phase concern.
+            // Translation and alpha are the only two effects the dismiss
+            // ever applies — never a scale.
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .offset { IntOffset(x = 0, y = motion.offsetY.floatValue.roundToInt()) }
+                        .graphicsLayer { alpha = motion.contentAlpha },
+            ) {
+                // Blurred thumbnail backdrop: something rich fills the screen
+                // while (and only while) the original is on its way.
+                if (backdropAlpha > 0.01f) {
                     Box(
                         modifier =
                             Modifier
                                 .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.35f)),
+                                .graphicsLayer { alpha = backdropAlpha },
+                    ) {
+                        AsyncImage(
+                            model =
+                                ImageRequest
+                                    .Builder(context)
+                                    .data(wallpaper.thumbUrl)
+                                    .build(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier =
+                                Modifier
+                                    .fillMaxSize()
+                                    .blur(BACKDROP_BLUR_RADIUS),
+                        )
+                        Box(
+                            modifier =
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.35f)),
+                        )
+                    }
+                }
+
+                ZoomableAsyncImage(
+                    model =
+                        ImageRequest
+                            .Builder(context)
+                            .data(wallpaper.fullUrl)
+                            // No crossfade on purpose: the pager's own page
+                            // motion is the transition, and a fade from
+                            // transparent over the black scrim reads as a
+                            // blink on every swipe.
+                            // Bumping the attempt re-executes the request; the
+                            // memoryCacheKey changes with it so retries re-fetch.
+                            .setParameter("retry", retryAttempt, memoryCacheKey = "retry-$retryAttempt")
+                            .listener(
+                                onError = { _, _ -> loadFailed = true },
+                                onSuccess = { _, _ ->
+                                    loadFailed = false
+                                    ImageProgressRegistry.finish(url)
+                                },
+                            ).build(),
+                    contentDescription = stringResource(R.string.detail_preview),
+                    state = imageState,
+                    modifier = Modifier.fillMaxSize(),
+                )
+
+                // Corner loading chip: how much of the original has arrived.
+                if (showLoadingFurniture && !loadFailed) {
+                    ProgressChip(
+                        progress = progress.value,
+                        modifier =
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .statusBarsPadding()
+                                .padding(top = PROGRESS_CHIP_TOP_PADDING, end = 16.dp),
                     )
                 }
-            }
 
-            ZoomableAsyncImage(
-                model =
-                    ImageRequest
-                        .Builder(context)
-                        .data(wallpaper.fullUrl)
-                        // No crossfade on purpose: the pager's own page
-                        // motion is the transition, and a fade from
-                        // transparent over the black scrim reads as a
-                        // blink on every swipe.
-                        // Bumping the attempt re-executes the request; the
-                        // memoryCacheKey changes with it so retries re-fetch.
-                        .setParameter("retry", retryAttempt, memoryCacheKey = "retry-$retryAttempt")
-                        .listener(
-                            onError = { _, _ -> loadFailed = true },
-                            onSuccess = { _, _ ->
-                                loadFailed = false
-                                ImageProgressRegistry.finish(url)
-                            },
-                        ).build(),
-                contentDescription = stringResource(R.string.detail_preview),
-                state = imageState,
-                modifier = Modifier.fillMaxSize(),
-            )
-
-            // Corner loading chip: how much of the original has arrived.
-            if (showLoadingFurniture && !loadFailed) {
-                ProgressChip(
-                    progress = progress.value,
-                    modifier =
-                        Modifier
-                            .align(Alignment.TopEnd)
-                            .statusBarsPadding()
-                            .padding(top = PROGRESS_CHIP_TOP_PADDING, end = 16.dp),
-                )
-            }
-
-            if (loadFailed) {
-                RetryOverlay(
-                    onRetry = {
-                        loadFailed = false
-                        retryAttempt += 1
-                    },
-                    modifier =
-                        Modifier
-                            .align(Alignment.Center)
-                            .padding(16.dp),
-                )
+                if (loadFailed) {
+                    RetryOverlay(
+                        onRetry = {
+                            loadFailed = false
+                            retryAttempt += 1
+                        },
+                        modifier =
+                            Modifier
+                                .align(Alignment.Center)
+                                .padding(16.dp),
+                    )
+                }
             }
         }
     }
 }
 
 /**
- * The vertical half of the viewer's gestures as a modifier: a dominant
- * downward drag dismisses (1:1 translate plus fade, no scaling ever) and
- * a dominant upward one opens details. This layer is passive by
- * construction — it runs BELOW the zoomable image in the Main-pass
- * dispatch order, so it only ever claims a drag the image demonstrably
- * ignored, and it consumes nothing until its lock has been taken past
- * the slop:
- *
- * - a second pointer (pinch intent) stands it down at once;
- * - a move the image claimed (zoomed pan, pinch, quick zoom) arrives
- *   consumed and stands it down at once;
- * - any zoom fraction at all — the double-tap zoom animates without
- *   consuming events — disqualifies the gesture, checked before every
- *   lock and again before every write;
- * - a down inside the double-tap window of a recent up is skipped
- *   outright: that finger belongs to telephoto's double-tap / quick-zoom
- *   detectors, which is exactly the interleaving the old arbiter fought;
- * - a drag that leans sideways past the slop yields the whole gesture —
- *   the surrounding pager owns horizontal movement, and the layer's
- *   locked moves are consumed so the pager stands down for it instead.
- *
- * Real taps, double-tap zoom, quick zoom and pinches are untouched — the
- * layer never consumes downs or ups, and by the time its 10dp lock
- * engages, the image's own tap detectors (platform slop is smaller) have
- * already given up on the gesture being a tap.
+ * The vertical half of the viewer's gestures as a modifier on the wrapper
+ * that parents the zoomable image: a dominant downward drag dismisses
+ * (1:1 translate plus fade, no scaling ever) and a dominant upward one
+ * opens details. The lock is compose's own vertical touch slop, consumed
+ * as it is crossed — the handshake telephoto's zoomable honors by
+ * standing down, and the pager honors by finding the moves consumed.
+ * Everything the zoomable genuinely wants (a pinch, a quick zoom, a
+ * zoomed-in pan) it takes first as the child, and this layer never
+ * engages at all; everything the pager wants (sideways) never crosses
+ * vertical slop. Real taps, double-tap zoom, quick zoom and pinches are
+ * untouched.
  */
-private fun Modifier.verticalDragGestures(
+private fun Modifier.verticalDismissDrag(
     motion: ViewerMotionState,
     zoomFraction: () -> Float,
     onDismiss: () -> Unit,
     onOpenInfo: () -> Unit,
 ): Modifier =
     pointerInput(motion) {
-        val lockSlopPx = LOCK_SLOP.toPx()
         val dismissFlingPx = DISMISS_FLING_VELOCITY.toPx()
         val detailsCommitPx = DETAILS_COMMIT_DISTANCE.toPx()
         val detailsFlingPx = DETAILS_FLING_VELOCITY.toPx()
         val detailsNudgeCapPx = DETAILS_NUDGE_CAP.toPx()
-        val doubleTapWindowMs = viewConfiguration.doubleTapTimeoutMillis.toLong()
-        val doubleTapRadiusPx = DOUBLE_TAP_RADIUS.toPx()
         val velocityTracker = VelocityTracker()
-
-        // The up that ended the previous gesture, watched for the window
-        // inside which a new down is really the second half of a
-        // double-tap or a quick-zoom hold — telephoto's finger, not ours.
-        var lastUpMillis = 0L
-        var lastUpX = 0f
-        var lastUpY = 0f
 
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
+
+            // While the image is zoomed (or the dismiss exit owns the
+            // screen), this layer does not participate at all: telephoto's
+            // pan owns the finger for the whole gesture.
+            if (zoomFraction() > ZOOMED_FRACTION || motion.dismissing.value) {
+                return@awaitEachGesture
+            }
+
+            // The lock: vertical touch slop, consumed as it is crossed.
+            // A null return means the finger lifted without crossing it (a
+            // tap, or nothing), or that the zoomable consumed the moves
+            // first (a pinch taking shape, a zoomed-in pan) — either way,
+            // this gesture is not ours.
+            val slopChange =
+                awaitVerticalTouchSlopOrCancellation(down.id) { change, _ ->
+                    // The consumption IS the handshake: telephoto's
+                    // transformable sees it on its Final pass while still
+                    // waiting for its own slop and stands down, and the
+                    // pager above sees the moves consumed and stops paging
+                    // for the rest of the gesture.
+                    change.consume()
+                } ?: return@awaitEachGesture
+
             val arbiter =
                 VerticalDragArbiter(
-                    lockSlopPx = lockSlopPx,
                     dismissCommitPx = motion.dismissDistancePx,
                     dismissFlingPx = dismissFlingPx,
                     detailsCommitPx = detailsCommitPx,
                     detailsFlingPx = detailsFlingPx,
                 )
             arbiter.onDown(down.position.x, down.position.y)
+            arbiter.onLocked(downward = slopChange.position.y > down.position.y)
+            arbiter.onMove(slopChange.position.x, slopChange.position.y)
+
             velocityTracker.resetTracking()
             velocityTracker.addPosition(down.uptimeMillis, down.position)
+            velocityTracker.addPosition(slopChange.uptimeMillis, slopChange.position)
 
-            val withinDoubleTapWindow =
-                down.uptimeMillis - lastUpMillis <= doubleTapWindowMs &&
-                    squaredDistance(down.position.x, down.position.y, lastUpX, lastUpY) <=
-                    doubleTapRadiusPx * doubleTapRadiusPx
+            // The first locked write takes over from whatever the offset is
+            // right now (a settle animation in flight stops dead here), so
+            // the follow is continuous with the image on screen — no snap.
+            motion.cancelAnimations()
+            motion.offsetY.floatValue =
+                arbiter.followY(
+                    currentOffsetY = motion.offsetY.floatValue,
+                    detailsNudgeCapPx = detailsNudgeCapPx,
+                )
 
-            // The dismiss exit is untouchable: it finishes in its own
-            // 220ms and the screen pops with it.
-            var tracking =
-                !withinDoubleTapWindow &&
-                    !motion.dismissing.value &&
-                    zoomFraction() <= ZOOM_STAND_DOWN_FRACTION
+            // The lock's tail: every further move of this pointer is
+            // consumed, so the zoomable and the pager both stay stood down
+            // until the finger lifts. If someone consumes one first (a
+            // pinch joining mid-drag), the drag is cancelled and everything
+            // settles home — never a fight.
+            val completedNormally =
+                drag(pointerId = slopChange.id) { change ->
+                    velocityTracker.addPosition(change.uptimeMillis, change.position)
+                    arbiter.onMove(change.position.x, change.position.y)
+                    motion.offsetY.floatValue =
+                        arbiter.followY(
+                            currentOffsetY = motion.offsetY.floatValue,
+                            detailsNudgeCapPx = detailsNudgeCapPx,
+                        )
+                    change.consume()
+                }
 
-            while (true) {
-                val event = awaitPointerEvent()
-                if (event.changes.size > 1) {
-                    // A second finger is pinch intent: the zoomable takes
-                    // the rest of this gesture.
-                    if (tracking) {
-                        tracking = false
+            if (completedNormally) {
+                val velocity = velocityTracker.calculateVelocity()
+                val velocityY = if (velocity.y.isNaN()) 0f else velocity.y
+                when (arbiter.onUp(velocityY)) {
+                    VerticalRelease.DismissViewer -> motion.animateDismiss(onDismiss)
+
+                    VerticalRelease.ShowDetails -> {
+                        onOpenInfo()
                         motion.animateRestore()
                     }
-                    continue
-                }
-                val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                if (!change.pressed) {
-                    lastUpMillis = change.uptimeMillis
-                    lastUpX = change.position.x
-                    lastUpY = change.position.y
-                    if (tracking) {
-                        val velocity = velocityTracker.calculateVelocity()
-                        when (arbiter.onUp(velocity.y)) {
-                            VerticalRelease.DismissViewer -> motion.animateDismiss(onDismiss)
 
-                            VerticalRelease.ShowDetails -> {
-                                onOpenInfo()
-                                motion.animateRestore()
-                            }
-
-                            VerticalRelease.RestorePosition -> motion.animateRestore()
-                        }
-                    }
-                    break
+                    VerticalRelease.RestorePosition -> motion.animateRestore()
                 }
-                velocityTracker.addPosition(change.uptimeMillis, change.position)
-                if (!tracking) continue
-                if (change.isConsumed || zoomFraction() > ZOOM_STAND_DOWN_FRACTION) {
-                    // The image's own gesture layer claimed this drag
-                    // mid-flight (a zoomed pan, a pinch taking shape) —
-                    // settle home once and stay out of it.
-                    tracking = false
-                    motion.animateRestore()
-                    continue
-                }
-
-                when (arbiter.onMove(change.position.x, change.position.y)) {
-                    VerticalGesture.DISMISS, VerticalGesture.DETAILS -> {
-                        // The first locked write takes over from whatever
-                        // the offset is right now (a settle animation in
-                        // flight stops dead here), so the follow is
-                        // continuous with the image on screen — no snap.
-                        motion.cancelAnimations()
-                        motion.offsetY.floatValue =
-                            arbiter.followY(
-                                currentOffsetY = motion.offsetY.floatValue,
-                                detailsNudgeCapPx = detailsNudgeCapPx,
-                            )
-                        // The pager above sees this consumption on its own
-                        // Main dispatch: a locked vertical drag switches
-                        // horizontal paging off for the rest of the gesture.
-                        change.consume()
-                    }
-
-                    VerticalGesture.YIELDED, VerticalGesture.NONE -> Unit
-                }
+            } else {
+                // Someone else claimed the gesture mid-flight — settle
+                // home and stay out of it.
+                motion.animateRestore()
             }
         }
     }
-
-/** Squared euclidean distance between two points. */
-private fun squaredDistance(
-    x1: Float,
-    y1: Float,
-    x2: Float,
-    y2: Float,
-): Float {
-    val dx = x1 - x2
-    val dy = y1 - y2
-    return dx * dx + dy * dy
-}
 
 /**
  * A compact glass chip reporting image download progress: a determinate
@@ -548,22 +534,12 @@ private fun formatMegabytes(bytes: Long): String = String.format(Locale.US, "%.1
 /** Fraction of the zoom range past which the surrounding chrome steps aside. */
 internal const val ZOOMED_FRACTION = 0.04f
 
-/**
- * Any zoom at all mid-gesture means the zoomable took the finger (the
- * double-tap listener animates without consuming events) — the gesture
- * layer stands down the moment the fraction leaves zero.
- */
-private const val ZOOM_STAND_DOWN_FRACTION = 0.001f
-
 private val BACKDROP_BLUR_RADIUS = 24.dp
 private val PROGRESS_CHIP_TOP_PADDING = 60.dp
 private const val MIB = 1024.0
 
 /** Zoom ceiling for the preview, relative to the image's native size. */
 private const val MAX_ZOOM = 5f
-
-/** Movement (either axis) after which the drag locks to its dominant axis. */
-private val LOCK_SLOP = 10.dp
 
 /** A downward fling this fast dismisses even without the distance. */
 private val DISMISS_FLING_VELOCITY = 1250.dp
@@ -574,13 +550,6 @@ private val DETAILS_FLING_VELOCITY = 800.dp
 
 /** How far the details nudge may lift the image while the finger drags up. */
 private val DETAILS_NUDGE_CAP = 24.dp
-
-/**
- * A down within this radius of the previous up, inside the double-tap
- * timeout, is treated as the second half of a double-tap / quick-zoom
- * and left entirely to the zoomable.
- */
-private val DOUBLE_TAP_RADIUS = 64.dp
 
 /** Grace before the blurred backdrop and progress chip show themselves. */
 private const val LOADING_FURNITURE_GRACE_MS = 150L

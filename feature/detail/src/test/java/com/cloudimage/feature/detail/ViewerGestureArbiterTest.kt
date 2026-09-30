@@ -6,11 +6,9 @@ import org.junit.Test
 /**
  * The vertical gesture arbiter's contract, straight from the product spec:
  *
- * - past a small slop, a drag whose vertical travel dominates locks to
- *   dismiss (down) or details (up) by sign and never changes its mind,
+ * - the drag's direction latches at the lock (settled by the pointer
+ *   layer's vertical touch-slop race) and never changes its mind,
  *   however far the finger wanders afterwards;
- * - a drag whose horizontal travel dominates yields the whole gesture —
- *   the pager owns sideways, and nothing here writes another offset;
  * - releases decide by crossed distance OR fling velocity;
  * - the dismiss follow is 1:1 with the finger from the lock point
  *   onward, continuous with a mid-flight baseline, and never negative;
@@ -20,19 +18,23 @@ import org.junit.Test
 class ViewerGestureArbiterTest {
     private val arbiter =
         VerticalDragArbiter(
-            lockSlopPx = 30f,
             dismissCommitPx = 800f,
             dismissFlingPx = 3000f,
             detailsCommitPx = 180f,
             detailsFlingPx = 1200f,
         )
 
-    /** Feeds a drag as absolute positions, the way the pointer layer does. */
+    /**
+     * Feeds a drag the way the pointer layer does: a down, the lock's
+     * direction (from the slop-crossing event), and then absolute
+     * positions — the slop move first, further moves after.
+     */
     private fun drag(
         dx: Float,
         dy: Float,
     ) {
         arbiter.onDown(x = 100f, y = 100f)
+        arbiter.onLocked(downward = dy > 0f)
         arbiter.onMove(x = 100f + dx, y = 100f + dy)
     }
 
@@ -49,18 +51,11 @@ class ViewerGestureArbiterTest {
     }
 
     @Test
-    fun aSidewaysDragYieldsToThePager() {
-        drag(dx = 60f, dy = 5f)
-        assertEquals(VerticalGesture.YIELDED, arbiter.gesture)
-        // A yielded release never acts, however far or fast it ended.
-        assertEquals(VerticalRelease.RestorePosition, arbiter.onUp(velocityY = 4000f))
-    }
-
-    @Test
-    fun noLockHappensBeforeTheSlop() {
-        drag(dx = 8f, dy = 12f)
+    fun withoutALockNothingEverActs() {
+        arbiter.onDown(x = 100f, y = 100f)
+        arbiter.onMove(x = 108f, y = 112f)
         assertEquals(VerticalGesture.NONE, arbiter.gesture)
-        // And a release that early never acts, however fast the fling.
+        // A release without a lock never acts, however fast the fling.
         assertEquals(
             VerticalRelease.RestorePosition,
             arbiter.onUp(velocityY = 4000f),
@@ -76,11 +71,10 @@ class ViewerGestureArbiterTest {
     }
 
     @Test
-    fun aYieldSurvivesTheFingerPlungingDownward() {
-        drag(dx = 60f, dy = 5f)
-        // The finger now plunges downward — still the pager's gesture.
-        arbiter.onMove(x = 100f + 60f, y = 100f + 5f + 400f)
-        assertEquals(VerticalGesture.YIELDED, arbiter.gesture)
+    fun aDetailsLockSurvivesTheFingerCurvingSideways() {
+        drag(dx = 5f, dy = -60f)
+        arbiter.onMove(x = 100f + 5f - 200f, y = 100f - 60f)
+        assertEquals(VerticalGesture.DETAILS, arbiter.gesture)
     }
 
     @Test
@@ -120,10 +114,18 @@ class ViewerGestureArbiterTest {
     }
 
     @Test
+    fun anUpwardFlingNeverDismissesHoweverFast() {
+        drag(dx = 5f, dy = -40f)
+        assertEquals(
+            VerticalRelease.ShowDetails,
+            arbiter.onUp(velocityY = -12000f),
+        )
+    }
+
+    @Test
     fun theDismissFollowTracksTheFingerOneToOneFromTheLock() {
         drag(dx = 0f, dy = 60f)
-        // The follow counts from the lock point (slop 30), not the down:
-        // the move that crossed the slop is where tracking begins, so the
+        // The move that crossed the slop is where tracking begins, so the
         // image never jumps by the slop's worth of travel.
         assertEquals(0f, arbiter.followY(currentOffsetY = 0f, detailsNudgeCapPx = 80f))
         arbiter.onMove(x = 100f, y = 100f + 160f)
@@ -167,10 +169,9 @@ class ViewerGestureArbiterTest {
     }
 
     @Test
-    fun aYieldedOrUnlockedDragWritesNoFollow() {
-        drag(dx = 60f, dy = 5f)
-        assertEquals(42f, arbiter.followY(currentOffsetY = 42f, detailsNudgeCapPx = 80f))
-        drag(dx = 5f, dy = 8f)
+    fun anUnlockedDragWritesNoFollow() {
+        arbiter.onDown(x = 100f, y = 100f)
+        arbiter.onMove(x = 160f, y = 105f)
         assertEquals(42f, arbiter.followY(currentOffsetY = 42f, detailsNudgeCapPx = 80f))
     }
 

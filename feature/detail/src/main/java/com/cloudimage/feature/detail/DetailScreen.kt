@@ -217,6 +217,7 @@ fun DetailScreen(
                 WallpaperViewerPage(
                     wallpaper = pageWallpaper,
                     motion = motion,
+                    isActivePage = pagerState.settledPage == page,
                     onDismiss = onBack,
                     onOpenInfo = { showInfoSheet = true },
                     onZoomedChange = { pageZoomed[page] = it },

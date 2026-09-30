@@ -10,13 +10,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.abs
-import kotlin.math.max
 
 /**
- * The one vertical gesture a drag settles into. Sideways is deliberately
- * absent: the pager owns horizontal movement natively, so this arbiter
- * only ever arbitrates the vertical axis and [YIELDS] the whole gesture
- * to the pager the moment a drag leans sideways past the slop.
+ * The one vertical gesture a locked drag is. Sideways is deliberately
+ * absent: the pager owns horizontal movement natively, and the vertical
+ * touch-slop race (compose's own slop helper against the pager's
+ * horizontal one) has already settled which axis won before anything
+ * here is ever consulted.
  */
 internal enum class VerticalGesture {
     NONE,
@@ -26,9 +26,6 @@ internal enum class VerticalGesture {
 
     /** Dragging up — opens the details panel on release. */
     DETAILS,
-
-    /** The drag leaned sideways — the pager owns it for the rest of the gesture. */
-    YIELDED,
 }
 
 /** What the viewer should do when the finger lifts. */
@@ -44,17 +41,19 @@ internal sealed interface VerticalRelease {
 }
 
 /**
- * Pure vertical-gesture disambiguation for the fullscreen viewer: fed raw
- * pointer positions, it decides whether a drag is a dismiss, a details
- * swipe, or somebody else's problem. No Compose, no clocks — plain
- * arithmetic, which is what keeps the rules honest and testable.
+ * Pure vertical-gesture bookkeeping for the fullscreen viewer: fed raw
+ * pointer positions once a drag has locked, it decides whether the
+ * release means dismiss, details, or nothing at all. No Compose, no
+ * clocks — plain arithmetic, which is what keeps the rules honest and
+ * testable.
  *
- * The rules, per the product spec:
+ * The lock itself is not this class's business anymore. The pointer
+ * layer locks through compose's vertical touch-slop helper (consuming
+ * the slop event — the handshake telephoto's zoomable is built to
+ * honor), and simply tells the arbiter which way the drag leaned via
+ * [onLocked]. From there:
  *
- * - past a small slop, a drag whose vertical travel dominates locks to
- *   [DISMISS] or [DETAILS] by sign and never changes its mind; a drag
- *   whose horizontal travel dominates [YIELDS] permanently — the pager
- *   takes over and nothing here writes another offset;
+ * - the direction latches at the lock and never changes its mind;
  * - releases decide by crossed distance OR fling velocity;
  * - the dismiss follow is 1:1 with the finger from the lock point
  *   onward, never negative (the image never rises above its resting
@@ -69,7 +68,6 @@ internal sealed interface VerticalRelease {
  *   is filtered out, never travel.
  */
 internal class VerticalDragArbiter(
-    private val lockSlopPx: Float,
     private val dismissCommitPx: Float,
     private val dismissFlingPx: Float,
     private val detailsCommitPx: Float,
@@ -90,7 +88,10 @@ internal class VerticalDragArbiter(
     private var lastX = 0f
     private var lastY = 0f
 
-    /** Travel at the moment the lock was taken — the follow's zero point. */
+    /** True between [onLocked] and the first [onMove] that follows it. */
+    private var awaitingLockLatch = false
+
+    /** Travel at the moment the lock latched — the follow's zero point. */
     private var totalYAtLock = 0f
 
     /**
@@ -115,42 +116,43 @@ internal class VerticalDragArbiter(
         totalY = 0f
         lastX = x
         lastY = y
+        awaitingLockLatch = false
         totalYAtLock = 0f
         baselineY = null
         appliedFollowY = 0f
     }
 
     /**
-     * Feeds one pointer move and returns the gesture that owns it. The
-     * lock is taken the first time either axis clears [lockSlopPx] and
-     * is never revised: a mostly-downward swipe stays a dismiss however
-     * far the finger wanders sideways afterwards, and a mostly-sideways
-     * one stays yielded however far it later plunges.
+     * Latches the drag's direction, as settled by the pointer layer's
+     * vertical touch-slop race. The next [onMove] becomes the follow's
+     * zero point: the slop-crossing move itself moves the image none,
+     * so the follow never jumps by the slop's worth of travel.
      */
+    fun onLocked(downward: Boolean) {
+        gesture = if (downward) VerticalGesture.DISMISS else VerticalGesture.DETAILS
+        awaitingLockLatch = true
+    }
+
+    /** Feeds one pointer move, accumulating the drag's total travel. */
     fun onMove(
         x: Float,
         y: Float,
-    ): VerticalGesture {
+    ) {
         totalX += x - lastX
         totalY += y - lastY
         lastX = x
         lastY = y
-        if (gesture == VerticalGesture.NONE && max(abs(totalX), abs(totalY)) >= lockSlopPx) {
+        if (awaitingLockLatch) {
             totalYAtLock = totalY
-            gesture =
-                when {
-                    abs(totalY) > abs(totalX) -> if (totalY > 0f) VerticalGesture.DISMISS else VerticalGesture.DETAILS
-                    else -> VerticalGesture.YIELDED
-                }
+            awaitingLockLatch = false
         }
-        return gesture
     }
 
     /** What the release of this drag means, given the end-of-drag fling velocity. */
     fun onUp(velocityY: Float): VerticalRelease =
         when (gesture) {
             VerticalGesture.DISMISS ->
-                if (max(0f, totalY) >= dismissCommitPx || velocityY >= dismissFlingPx) {
+                if (maxOf(0f, totalY) >= dismissCommitPx || velocityY >= dismissFlingPx) {
                     VerticalRelease.DismissViewer
                 } else {
                     VerticalRelease.RestorePosition
@@ -163,7 +165,7 @@ internal class VerticalDragArbiter(
                     VerticalRelease.RestorePosition
                 }
 
-            VerticalGesture.YIELDED, VerticalGesture.NONE -> VerticalRelease.RestorePosition
+            VerticalGesture.NONE -> VerticalRelease.RestorePosition
         }
 
     /**
@@ -188,7 +190,7 @@ internal class VerticalDragArbiter(
                     (base + (totalY - totalYAtLock) * DETAILS_FOLLOW_FACTOR)
                         .coerceIn(-detailsNudgeCapPx, 0f)
 
-                else -> return currentOffsetY
+                VerticalGesture.NONE -> return currentOffsetY
             }
         return raw.settledInto(appliedFollowY).also { appliedFollowY = it }
     }

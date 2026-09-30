@@ -191,6 +191,58 @@ Cloudimage), third-party web-search suggestions.
 
 ## Status log
 
+- **2026-09-30 — v1.0.30 SHIPPED (the viewer's vertical gestures,
+  re-parented).** The user's report on v1.0.29, flat and specific:
+  after the image fully loaded, swipe down and swipe up did nothing
+  (sideways paging worked; during loading they worked too). The
+  underlay design was wrong about one thing: it never consumes until
+  its own 10dp arbiter lock engages, and on a loaded image telephoto's
+  gesture nodes — children dispatch first on the Main pass — see every
+  event before the underlay does; whichever interleaving wins on real
+  devices, the underlay starves. The diagnosis came from reading
+  telephoto 0.19.0 end to end: its own media-viewer sample (pager +
+  zoomable + dismiss, the exact stack this app wants) and its
+  FlickToDismiss component — which v1.0.22 used before v1.0.29
+  replaced it — do not underlay at all. **They wrap: the gesture layer
+  is the PARENT of the image, and it consumes the vertical touch-slop
+  event itself.** That consumption is a handshake telephoto is built to
+  honor: its forked transformable (forked from compose.foundation
+  explicitly "to solve incompatibility with FlickToDismiss") watches
+  the Final pass for exactly that consumption while waiting for its own
+  slop and stands down; the pager above finds the moves consumed and
+  stops paging for the gesture. The slop race, not bookkeeping, decides
+  ownership: a pinch crosses the zoomable's multi-pointer slop first
+  (child-first dispatch) and the layer never locks; a double-tap-hold
+  drag is claimed by the zoomable's own second-down slop detector; a
+  zoomed-in pan consumes every move so the layer's slop helper returns
+  null (and while zoomed at all, the layer declines from the first
+  down); a horizontal swipe never crosses vertical slop so the pager
+  pages. So v1.0.30 restructures the page: the invisible gesture Box
+  is now a wrapper that PARENTS the moving content (scrim stays on the
+  outer page; the moving Box with its whole-pixel offset and
+  draw-phase alpha sits inside the wrapper), and its detector is
+  flick's own choreography verbatim — `awaitFirstDown` unconsumed,
+  `awaitVerticalTouchSlopOrCancellation` consuming the slop event,
+  compose's `drag(pointerId)` consuming the tail. The motion semantics
+  are unchanged from the v1.0.29 spec (the part that was right): 1:1
+  down-translate with simultaneous fade and never a scale/skew/resize,
+  commit past 35% of the screen or a 1250dp/s downward flick, the
+  220ms exit tween, critically damped springs home, the capped 24dp
+  half-speed details nudge committing past 64dp or an 800dp/s upward
+  flick (upward can never dismiss — direction is latched at lock), the
+  3px stillness band, the lock-time baseline latch for mid-settle
+  grabs. The arbiter shrinks accordingly: `YIELDED` and the private
+  lock slop are gone (the slop race owns that decision), replaced by
+  `onLocked(downward)`; the double-tap-window and multi-pointer
+  stand-downs are gone (the handshake owns those too). Sample parity
+  one step further: a page that stops being the settled one snaps its
+  zoom back to rest (`resetZoom(SnapSpec())`), so returning to a
+  previously-zoomed neighbor never lands on a frozen, pager-locking
+  page. Gates: ktlint clean; unit tests updated to the halved arbiter
+  contract (lock latching, follow, thresholds, stillness — plus a new
+  upward-flick-never-dismisses case); `assembleDebug` green in CI.
+  versionCode 31 / versionName 1.0.30.
+
 - **2026-09-30 — v1.0.29 SHIPPED (the viewer's gestures, rebuilt on a
   pager).** The user's brief, precise this time: swipe down dismisses
   with a 1:1 translate-and-fade and NO scaling at any point (flick's
