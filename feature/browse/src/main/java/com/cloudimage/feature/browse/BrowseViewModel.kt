@@ -60,28 +60,36 @@ enum class BrowseMode {
  * Where the album UI is drilled into (v1.1.0): the single "Home" tab,
  * one category's album grid, one album's wallpaper grid, or the album-style
  * search results. Navigating forward replaces the scope; the system back
- * unwinds it — Album back to the category it was opened from, then Home.
+ * unwinds it — Album back to the shelf it was opened from, then Home.
  */
 sealed interface AlbumScope {
+    /**
+     * A shelf level (v1.1.1) — a grid of albums an album can be opened
+     * from: Home, a category, or the search results. The distinction
+     * matters on the way back: an album returns to the shelf it was
+     * actually opened on, whatever shelf that was, not always to Home.
+     */
+    sealed interface Shelf : AlbumScope
+
     /** The album home: the source's own homepage selection. */
-    data object Home : AlbumScope
+    data object Home : Shelf
 
     /** One category's albums, opened from the sidebar. */
     data class Category(
         val category: SourceCategory,
-    ) : AlbumScope
+    ) : Shelf
 
-    /** One album's wallpapers. [fromCategory] is the category grid the
-     * album was opened from, when there was one — back unwinds to it. */
+    /** One album's wallpapers. [parent] is the shelf the album was opened
+     * from — back unwinds to it with its cached listing. */
     data class Album(
         val album: SourceAlbum,
-        val fromCategory: SourceCategory? = null,
+        val parent: Shelf = Home,
     ) : AlbumScope
 
     /** Album-style search results for [query]. */
     data class Search(
         val query: String,
-    ) : AlbumScope
+    ) : Shelf
 }
 
 /**
@@ -350,6 +358,14 @@ class BrowseViewModel
 
         /** Category albums by category id, cached for instant back navigation (v1.1.0). */
         private val categoryAlbumsCache = mutableMapOf<String, List<SourceAlbum>>()
+
+        /** Search results by query, cached the same way (v1.1.1) — an album
+         * opened from a search returns to those results, not to Home. */
+        private val searchAlbumsCache = mutableMapOf<String, List<SourceAlbum>>()
+
+        /** One album's wallpapers by album id (v1.1.1) — reopening an album
+         * restores instantly instead of refetching the whole page. */
+        private val albumWallpapersCache = mutableMapOf<String, List<Wallpaper>>()
 
         /** Which source the cached categories belong to (v1.1.0) — switching
          * between two album-style sources must not serve the other's sidebar. */
@@ -951,6 +967,8 @@ class BrowseViewModel
             albumJob?.cancel()
             categoriesJob?.cancel()
             categoryAlbumsCache.clear()
+            searchAlbumsCache.clear()
+            albumWallpapersCache.clear()
             homeAlbumsCache = emptyList()
             homeAlbumsLoaded = false
             albumGeneration++
@@ -1074,18 +1092,26 @@ class BrowseViewModel
                 }
         }
 
-        /** The user opened an album — its wallpapers replace the grid. */
+        /**
+         * The user opened an album — its wallpapers replace the grid. The
+         * album carries the shelf it was opened on (v1.1.1): a category,
+         * the search results, or Home — so back returns the user to the
+         * grid they left, not always to the top of Home. A previously
+         * loaded album restores from cache instead of refetching.
+         */
         fun onAlbumSelected(album: SourceAlbum) {
             if (_state.value.mode != BrowseMode.ALBUMS) return
             albumJob?.cancel()
-            val fromCategory = (_state.value.albumScope as? AlbumScope.Category)?.category
+            val parent = _state.value.albumScope as? AlbumScope.Shelf ?: AlbumScope.Home
+            val scope = AlbumScope.Album(album, parent)
+            val cached = albumWallpapersCache[album.id]
             _state.update {
                 it.copy(
-                    albumScope = AlbumScope.Album(album, fromCategory),
-                    albumContent = AlbumContentState(isLoading = true),
+                    albumScope = scope,
+                    albumContent = cachedWallpaperContent(cached),
                 )
             }
-            loadAlbumWallpapers(AlbumScope.Album(album, fromCategory))
+            if (cached == null) loadAlbumWallpapers(scope)
         }
 
         /** Loads (or retries) one album's wallpapers without touching the scope. */
@@ -1099,6 +1125,7 @@ class BrowseViewModel
                         .albumWallpapers(sourceId, scope.album.id)
                         .onSuccess { wallpapers ->
                             if (generation != albumGeneration) return@onSuccess
+                            albumWallpapersCache[scope.album.id] = wallpapers
                             _state.update {
                                 it.copy(albumContent = AlbumContentState(wallpapers = wallpapers, isLoading = false))
                             }
@@ -1141,6 +1168,7 @@ class BrowseViewModel
                         .searchAlbums(sourceId, text)
                         .onSuccess { albums ->
                             if (generation != albumGeneration) return@onSuccess
+                            searchAlbumsCache[text] = albums
                             _state.update { it.copy(albumContent = AlbumContentState(albums = albums, isLoading = false)) }
                         }.onFailure { error ->
                             if (generation != albumGeneration) return@onFailure
@@ -1160,42 +1188,70 @@ class BrowseViewModel
 
         /**
          * The system back inside the album UI: unwinds the scope stack —
-         * an album returns to the category it was opened from (when there
-         * was one), a category or a search returns to Home. Returns false
-         * on Home itself so the caller lets the system back leave the
-         * screen. Cached listings restore instantly; only an uncached
-         * category refetches.
+         * an album returns to the shelf it was opened from (v1.1.1: the
+         * category, the search results, or Home), and a category or a
+         * search returns to Home. Returns false on Home itself so the
+         * caller lets the system back leave the screen. Cached listings
+         * restore instantly; only a never-loaded shelf refetches.
          */
         fun onAlbumBack(): Boolean {
             val scope = _state.value.albumScope
             if (scope is AlbumScope.Home) return false
             albumJob?.cancel()
             when (scope) {
-                is AlbumScope.Album -> {
-                    val category = scope.fromCategory
-                    if (category != null) {
-                        val cached = categoryAlbumsCache[category.id]
-                        _state.update {
-                            it.copy(
-                                albumScope = AlbumScope.Category(category),
-                                albumContent =
-                                    if (cached != null) {
-                                        AlbumContentState(albums = cached, isLoading = false)
-                                    } else {
-                                        AlbumContentState(isLoading = true)
-                                    },
-                            )
-                        }
-                        if (cached == null) loadCategoryAlbums(category)
-                    } else {
-                        backToAlbumHome()
-                    }
-                }
+                is AlbumScope.Album -> restoreShelf(scope.parent)
                 is AlbumScope.Category, is AlbumScope.Search -> backToAlbumHome()
                 is AlbumScope.Home -> return false
             }
             return true
         }
+
+        /**
+         * Puts one shelf back on screen after an album (v1.1.1): the
+         * cached listing restores instantly, so the grid's saved scroll
+         * position lands on real items — only a shelf that was somehow
+         * never loaded (the process died mid-drill) refetches.
+         */
+        private fun restoreShelf(shelf: AlbumScope.Shelf) {
+            when (shelf) {
+                is AlbumScope.Home -> backToAlbumHome()
+                is AlbumScope.Category -> {
+                    val cached = categoryAlbumsCache[shelf.category.id]
+                    _state.update {
+                        it.copy(albumScope = shelf, albumContent = cachedAlbumContent(cached))
+                    }
+                    if (cached == null) loadCategoryAlbums(shelf.category)
+                }
+                is AlbumScope.Search -> {
+                    val cached = searchAlbumsCache[shelf.query]
+                    _state.update {
+                        it.copy(albumScope = shelf, albumContent = cachedAlbumContent(cached))
+                    }
+                    if (cached == null) startAlbumSearch(shelf.query)
+                }
+            }
+        }
+
+        /**
+         * The content state of a cached scope level (v1.1.1): a cached
+         * listing shows immediately — the instant restore is what makes
+         * the grid's saved scroll position land on real items — while a
+         * cache miss falls back to the loading placeholders.
+         */
+        private fun cachedAlbumContent(cached: List<SourceAlbum>?) =
+            if (cached != null) {
+                AlbumContentState(albums = cached, isLoading = false)
+            } else {
+                AlbumContentState(isLoading = true)
+            }
+
+        /** The same instant-restore contract, for one album's wallpapers. */
+        private fun cachedWallpaperContent(cached: List<Wallpaper>?) =
+            if (cached != null) {
+                AlbumContentState(wallpapers = cached, isLoading = false)
+            } else {
+                AlbumContentState(isLoading = true)
+            }
 
         /** Restores the Home scope from its cache, refetching only never-loaded homes. */
         private fun backToAlbumHome() {

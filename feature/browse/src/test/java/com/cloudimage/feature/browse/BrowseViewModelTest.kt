@@ -1439,7 +1439,7 @@ class BrowseViewModelTest {
                 viewModel.state.first { it.albumScope is AlbumScope.Album && !it.albumContent.isLoading }
             val opened = albumState.albumScope as AlbumScope.Album
             assertEquals("one-piece", opened.album.id)
-            assertEquals("anime", opened.fromCategory?.id)
+            assertEquals("anime", (opened.parent as? AlbumScope.Category)?.category?.id)
             assertEquals(listOf("w1", "w2"), albumState.albumContent.wallpapers.map { it.id })
 
             // Back unwinds Album -> Category with the cached listing, no refetch.
@@ -1496,6 +1496,67 @@ class BrowseViewModelTest {
             viewModel.onSearchSubmit()
             val home = viewModel.state.first { it.albumScope is AlbumScope.Home }
             assertEquals(listOf("attack-on-titan"), home.albumContent.albums.map { it.id })
+        }
+
+    @Test
+    fun albumOpenedFromSearchBacksIntoTheCachedSearchResults() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo(
+                    "cloudimage.wallpaperaccess",
+                    "WallpaperAccess",
+                    requiresApiKey = false,
+                    capabilities = setOf(SourceCapability.ALBUMS),
+                ),
+            )
+            fake.scriptedCategories = NetworkResult.Success(listOf(albumCategory("anime")))
+            fake.scriptedHomeAlbums = NetworkResult.Success(listOf(sourceAlbum("attack-on-titan")))
+            fake.scriptedSearchAlbums =
+                NetworkResult.Success(listOf(sourceAlbum("naruto"), sourceAlbum("naruto-shippuden")))
+            fake.scriptedAlbumWallpapers =
+                NetworkResult.Success(listOf(fakeWallpaper("w1"), fakeWallpaper("w2")))
+            val preferences = newPreferences()
+            preferences.setBrowseSourceId("cloudimage.wallpaperaccess")
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            viewModel.state.first { it.mode == BrowseMode.ALBUMS && !it.albumContent.isLoading }
+
+            viewModel.onSearchTextChange("naruto")
+            viewModel.onSearchSubmit()
+            viewModel.state.first { it.albumScope is AlbumScope.Search && !it.albumContent.isLoading }
+
+            // The album remembers it was opened from the search results.
+            viewModel.onAlbumSelected(sourceAlbum("naruto"))
+            val albumState =
+                viewModel.state.first { it.albumScope is AlbumScope.Album && !it.albumContent.isLoading }
+            val opened = albumState.albumScope as AlbumScope.Album
+            assertEquals("naruto", opened.album.id)
+            assertEquals("naruto", (opened.parent as? AlbumScope.Search)?.query)
+
+            // Back unwinds Album -> Search with the cached results — the
+            // search itself is never re-run.
+            assertTrue(viewModel.onAlbumBack())
+            val backToSearch = viewModel.state.value
+            assertTrue(backToSearch.albumScope is AlbumScope.Search)
+            assertEquals("naruto", (backToSearch.albumScope as AlbumScope.Search).query)
+            assertFalse(backToSearch.albumContent.isLoading)
+            assertEquals(listOf("naruto", "naruto-shippuden"), backToSearch.albumContent.albums.map { it.id })
+            assertEquals(listOf("naruto"), fake.searchAlbumCalls)
+
+            // Reopening the same album restores its wallpapers from cache,
+            // without a second request to the source.
+            viewModel.onAlbumSelected(sourceAlbum("naruto"))
+            val reopened =
+                viewModel.state.first { it.albumScope is AlbumScope.Album && !it.albumContent.isLoading }
+            assertEquals(listOf("w1", "w2"), reopened.albumContent.wallpapers.map { it.id })
+            assertEquals(listOf("naruto"), fake.albumWallpaperCalls)
+
+            // From the search results, one more back closes the detour to Home.
+            assertTrue(viewModel.onAlbumBack())
+            assertEquals(AlbumScope.Search::class, viewModel.state.value.albumScope::class)
+            assertTrue(viewModel.onAlbumBack())
+            assertEquals(AlbumScope.Home, viewModel.state.value.albumScope)
+            assertFalse(viewModel.onAlbumBack())
         }
 
     @Test

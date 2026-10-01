@@ -30,6 +30,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +55,13 @@ import com.cloudimage.core.model.Wallpaper
  * fullscreen viewer. Every level is one complete grid, because
  * album-style sites serve their pages whole; the scope chip above the
  * grid is the way back one level (the system back does the same).
+ *
+ * Since v1.1.1 each scope level's grid lives in its own saveable slot:
+ * drilling into an album swaps the branch below, which would otherwise
+ * discard the shelf's LazyGridState — and back would land the user at
+ * the top of a list they had scrolled through. Keyed per level, every
+ * grid finds its saved scroll position waiting for it, and the viewer
+ * round-trip keeps working exactly as before.
  */
 @Composable
 internal fun AlbumsHome(
@@ -66,6 +74,7 @@ internal fun AlbumsHome(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val stateHolder = rememberSaveableStateHolder()
     Column(
         modifier =
             modifier
@@ -84,21 +93,38 @@ internal fun AlbumsHome(
         }
 
         if (scope is AlbumScope.Album) {
-            AlbumWallpaperGrid(
-                content = content,
-                onWallpaperClick = onWallpaperClick,
-                onRetry = onRetry,
-            )
+            stateHolder.SaveableStateProvider(key = albumScopeStateKey(scope)) {
+                AlbumWallpaperGrid(
+                    content = content,
+                    onWallpaperClick = onWallpaperClick,
+                    onRetry = onRetry,
+                )
+            }
         } else {
-            AlbumGrid(
-                content = content,
-                gridColumns = gridColumns,
-                onAlbumClick = onAlbumClick,
-                onRetry = onRetry,
-            )
+            stateHolder.SaveableStateProvider(key = albumScopeStateKey(scope)) {
+                AlbumGrid(
+                    content = content,
+                    gridColumns = gridColumns,
+                    onAlbumClick = onAlbumClick,
+                    onRetry = onRetry,
+                )
+            }
         }
     }
 }
+
+/**
+ * The saveable slot key of one scope level's grid (v1.1.1): shelves key
+ * by what makes them distinct — Home once, each category, each query —
+ * and one album's wallpaper grid by the album itself.
+ */
+private fun albumScopeStateKey(scope: AlbumScope): String =
+    when (scope) {
+        is AlbumScope.Home -> "albums:home"
+        is AlbumScope.Category -> "albums:category:${scope.category.id}"
+        is AlbumScope.Search -> "albums:search:${scope.query}"
+        is AlbumScope.Album -> "albums:album:${scope.album.sourceId}:${scope.album.id}"
+    }
 
 /**
  * The single "Home" tab (v1.1.0) — album-style sources have no swipeable
