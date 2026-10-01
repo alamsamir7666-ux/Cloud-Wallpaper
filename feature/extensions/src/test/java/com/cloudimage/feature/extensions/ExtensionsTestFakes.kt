@@ -1,6 +1,8 @@
 package com.cloudimage.feature.extensions
 
 import com.cloudimage.core.data.repository.SearchOutcome
+import com.cloudimage.core.data.repository.SourceAlbum
+import com.cloudimage.core.data.repository.SourceCategory
 import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.SourceSection
 import com.cloudimage.core.data.repository.WallpaperSources
@@ -129,6 +131,25 @@ class FakeSources : WallpaperSources {
 
     override suspend fun details(wallpaper: Wallpaper): NetworkResult<WallpaperDetails> =
         NetworkResult.Failure(NetworkError.Source("not scripted"))
+
+    override suspend fun categories(sourceId: String): NetworkResult<List<SourceCategory>> = NetworkResult.Success(emptyList())
+
+    override suspend fun homeAlbums(sourceId: String): NetworkResult<List<SourceAlbum>> = NetworkResult.Success(emptyList())
+
+    override suspend fun albums(
+        sourceId: String,
+        categoryId: String,
+    ): NetworkResult<List<SourceAlbum>> = NetworkResult.Success(emptyList())
+
+    override suspend fun albumWallpapers(
+        sourceId: String,
+        albumId: String,
+    ): NetworkResult<List<Wallpaper>> = NetworkResult.Success(emptyList())
+
+    override suspend fun searchAlbums(
+        sourceId: String,
+        query: String,
+    ): NetworkResult<List<SourceAlbum>> = NetworkResult.Success(emptyList())
 }
 
 fun row(id: String = "cloudimage.demo") =

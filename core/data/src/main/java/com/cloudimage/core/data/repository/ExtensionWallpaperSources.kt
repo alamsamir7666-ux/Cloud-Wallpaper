@@ -32,6 +32,8 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.SerializationException
 import javax.inject.Inject
 import javax.inject.Singleton
+import com.cloudimage.provider.api.Album as ProviderAlbum
+import com.cloudimage.provider.api.Category as ProviderCategory
 import com.cloudimage.provider.api.ContentRating as ProviderRating
 import com.cloudimage.provider.api.Page as ProviderPage
 import com.cloudimage.provider.api.Wallpaper as ProviderWallpaper
@@ -507,6 +509,104 @@ class ExtensionWallpaperSources
                 fileSizeBytes = fileSizeBytes,
             )
 
+        /**
+         * The album paradigm (v1.1.0): routes one album call to the pinned
+         * provider. The shared honesty rules of [search] apply — a disabled
+         * or missing source is a Source error, never a connectivity claim —
+         * and a source that does not declare [Capability.ALBUMS] answers
+         * the same way, because the host only ever asks for a source it
+         * believes is album-style and anything else is a stale pin or a
+         * capability change, not a mystery.
+         */
+        private suspend fun <T> albumCall(
+            sourceId: String,
+            call: suspend (WallpaperProvider) -> Result<T>,
+        ): NetworkResult<T> {
+            if (sourceId in disabled.value) {
+                return NetworkResult.Failure(
+                    NetworkError.Source("source '$sourceId' is disabled — enable it in the Extensions tab"),
+                )
+            }
+            val provider =
+                readyProviders().firstOrNull { it.first == sourceId }?.second
+                    ?: return NetworkResult.Failure(
+                        NetworkError.Source("source '$sourceId' is not installed or not usable — see the Extensions tab"),
+                    )
+            if (Capability.ALBUMS !in provider.capabilities) {
+                return NetworkResult.Failure(
+                    NetworkError.Source("source '$sourceId' does not organize its content in albums"),
+                )
+            }
+            return runCatching { call(provider) }.fold(
+                { outcome ->
+                    outcome.fold(
+                        { value -> NetworkResult.Success(value) },
+                        { failure -> NetworkResult.Failure(failure.toNetworkError()) },
+                    )
+                },
+                { failure -> NetworkResult.Failure(failure.toNetworkError()) },
+            )
+        }
+
+        override suspend fun categories(sourceId: String): NetworkResult<List<SourceCategory>> =
+            albumCall(sourceId) { provider ->
+                runCatching { provider.categories() }.mapCatching { categories ->
+                    if (categories.isEmpty()) {
+                        error("source '$sourceId' declared album support but serves no categories")
+                    } else {
+                        categories.map { it.toSourceCategory() }
+                    }
+                }
+            }
+
+        override suspend fun homeAlbums(sourceId: String): NetworkResult<List<SourceAlbum>> =
+            albumCall(sourceId) { provider ->
+                provider.homeAlbums().mapCatching { albums -> albums.map { it.toSourceAlbum(sourceId) } }
+            }
+
+        override suspend fun albums(
+            sourceId: String,
+            categoryId: String,
+        ): NetworkResult<List<SourceAlbum>> =
+            albumCall(sourceId) { provider ->
+                provider.albums(categoryId).mapCatching { albums -> albums.map { it.toSourceAlbum(sourceId) } }
+            }
+
+        override suspend fun albumWallpapers(
+            sourceId: String,
+            albumId: String,
+        ): NetworkResult<List<Wallpaper>> =
+            albumCall(sourceId) { provider ->
+                provider.albumWallpapers(albumId).mapCatching { wallpapers ->
+                    wallpapers.map { it.toCore() }
+                }
+            }
+
+        override suspend fun searchAlbums(
+            sourceId: String,
+            query: String,
+        ): NetworkResult<List<SourceAlbum>> =
+            albumCall(sourceId) { provider ->
+                provider.searchAlbums(query).mapCatching { albums -> albums.map { it.toSourceAlbum(sourceId) } }
+            }
+
+        private fun ProviderCategory.toSourceCategory(): SourceCategory =
+            SourceCategory(
+                id = id,
+                name = name,
+                iconEmoji = iconEmoji,
+                coverUrl = coverUrl,
+            )
+
+        private fun ProviderAlbum.toSourceAlbum(sourceId: String): SourceAlbum =
+            SourceAlbum(
+                id = id,
+                sourceId = sourceId,
+                title = title,
+                coverUrl = coverUrl,
+                wallpaperCount = wallpaperCount,
+            )
+
         private fun Capability.toSourceCapability(): SourceCapability =
             when (this) {
                 Capability.POPULAR -> SourceCapability.POPULAR
@@ -515,6 +615,7 @@ class ExtensionWallpaperSources
                 Capability.TAGS -> SourceCapability.TAGS
                 Capability.RANDOM -> SourceCapability.RANDOM
                 Capability.FILTERS -> SourceCapability.FILTERS
+                Capability.ALBUMS -> SourceCapability.ALBUMS
             }
 
         private fun Set<Capability>.toSourceCapabilities(): Set<SourceCapability> = mapTo(HashSet()) { it.toSourceCapability() }

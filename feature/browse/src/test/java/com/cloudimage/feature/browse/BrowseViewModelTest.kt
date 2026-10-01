@@ -1,6 +1,9 @@
 package com.cloudimage.feature.browse
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import com.cloudimage.core.data.repository.SourceAlbum
+import com.cloudimage.core.data.repository.SourceCapability
+import com.cloudimage.core.data.repository.SourceCategory
 import com.cloudimage.core.data.repository.SourceFailure
 import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.SourceSection
@@ -1336,6 +1339,221 @@ class BrowseViewModelTest {
             val merged = viewModel.state.first { it.wallpapers.isNotEmpty() }
 
             assertFalse(merged.showTryAllSourcesCta)
+        }
+
+    // ------------------------------------------------------------------
+    // The album paradigm (v1.1.0): a pinned album-style source swaps the
+    // sectioned home for its own — one "Home" tab of homepage albums, a
+    // category sidebar, album drill-in with stack-walking back, and
+    // album-style search.
+    // ------------------------------------------------------------------
+
+    private fun albumCategory(
+        id: String,
+        name: String = id.replaceFirstChar { it.uppercase() },
+    ) = SourceCategory(id = id, name = name, iconEmoji = "💥")
+
+    private fun sourceAlbum(
+        id: String,
+        count: Int = 12,
+    ) = SourceAlbum(
+        id = id,
+        sourceId = "cloudimage.wallpaperaccess",
+        title = id.replace('-', ' ').replaceFirstChar { it.uppercase() },
+        coverUrl = "https://example.test/thumb/$id.jpg",
+        wallpaperCount = count,
+    )
+
+    @Test
+    fun albumPinnedSourceDrivesTheAlbumHome() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo(
+                    "cloudimage.wallpaperaccess",
+                    "WallpaperAccess",
+                    requiresApiKey = false,
+                    capabilities = setOf(SourceCapability.ALBUMS),
+                ),
+            )
+            fake.scriptedCategories =
+                NetworkResult.Success(listOf(albumCategory("anime"), albumCategory("games")))
+            fake.scriptedHomeAlbums = NetworkResult.Success(listOf(sourceAlbum("attack-on-titan", count = 70)))
+            val preferences = newPreferences()
+            preferences.setBrowseSourceId("cloudimage.wallpaperaccess")
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+
+            val state =
+                viewModel.state.first {
+                    it.mode == BrowseMode.ALBUMS && !it.albumContent.isLoading && it.categories.isNotEmpty()
+                }
+
+            assertEquals(BrowseMode.ALBUMS, state.mode)
+            assertEquals(AlbumScope.Home, state.albumScope)
+            assertEquals(listOf("attack-on-titan"), state.albumContent.albums.map { it.id })
+            assertEquals(
+                70,
+                state.albumContent.albums
+                    .single()
+                    .wallpaperCount,
+            )
+            assertEquals(listOf("anime", "games"), state.categories.map { it.id })
+            assertEquals("cloudimage.wallpaperaccess", fake.albumSourceCalls.first())
+            // The flat grid pipeline never fired under the album pin.
+            assertTrue(fake.searchCalls.isEmpty())
+        }
+
+    @Test
+    fun albumScopeStackWalksBackThroughCategoryToHome() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo(
+                    "cloudimage.wallpaperaccess",
+                    "WallpaperAccess",
+                    requiresApiKey = false,
+                    capabilities = setOf(SourceCapability.ALBUMS),
+                ),
+            )
+            fake.scriptedCategories = NetworkResult.Success(listOf(albumCategory("anime")))
+            fake.scriptedHomeAlbums = NetworkResult.Success(listOf(sourceAlbum("attack-on-titan")))
+            fake.scriptedAlbums = NetworkResult.Success(listOf(sourceAlbum("one-piece"), sourceAlbum("bleach")))
+            fake.scriptedAlbumWallpapers =
+                NetworkResult.Success(listOf(fakeWallpaper("w1"), fakeWallpaper("w2")))
+            val preferences = newPreferences()
+            preferences.setBrowseSourceId("cloudimage.wallpaperaccess")
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            viewModel.state.first { it.mode == BrowseMode.ALBUMS && !it.albumContent.isLoading }
+
+            val anime = albumCategory("anime")
+            viewModel.onCategorySelected(anime)
+            viewModel.state.first { it.albumScope is AlbumScope.Category && !it.albumContent.isLoading }
+            assertEquals(
+                listOf("one-piece", "bleach"),
+                viewModel.state.value.albumContent.albums
+                    .map { it.id },
+            )
+
+            viewModel.onAlbumSelected(sourceAlbum("one-piece"))
+            val albumState =
+                viewModel.state.first { it.albumScope is AlbumScope.Album && !it.albumContent.isLoading }
+            val opened = albumState.albumScope as AlbumScope.Album
+            assertEquals("one-piece", opened.album.id)
+            assertEquals("anime", opened.fromCategory?.id)
+            assertEquals(listOf("w1", "w2"), albumState.albumContent.wallpapers.map { it.id })
+
+            // Back unwinds Album -> Category with the cached listing, no refetch.
+            assertTrue(viewModel.onAlbumBack())
+            val backToCategory = viewModel.state.value
+            assertTrue(backToCategory.albumScope is AlbumScope.Category)
+            assertFalse(backToCategory.albumContent.isLoading)
+            assertEquals(1, fake.albumsCategoryCalls.size)
+
+            // Then Category -> Home, again from cache.
+            assertTrue(viewModel.onAlbumBack())
+            val backToHome = viewModel.state.value
+            assertEquals(AlbumScope.Home, backToHome.albumScope)
+            assertFalse(backToHome.albumContent.isLoading)
+            assertEquals(listOf("attack-on-titan"), backToHome.albumContent.albums.map { it.id })
+
+            // Home itself lets the system back leave the screen.
+            assertFalse(viewModel.onAlbumBack())
+        }
+
+    @Test
+    fun albumSearchAnswersAlbumsAndBlankReturnsHome() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo(
+                    "cloudimage.wallpaperaccess",
+                    "WallpaperAccess",
+                    requiresApiKey = false,
+                    capabilities = setOf(SourceCapability.ALBUMS),
+                ),
+            )
+            fake.scriptedCategories = NetworkResult.Success(listOf(albumCategory("anime")))
+            fake.scriptedHomeAlbums = NetworkResult.Success(listOf(sourceAlbum("attack-on-titan")))
+            fake.scriptedSearchAlbums = NetworkResult.Success(listOf(sourceAlbum("naruto"), sourceAlbum("naruto-shippuden")))
+            val preferences = newPreferences()
+            preferences.setBrowseSourceId("cloudimage.wallpaperaccess")
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            viewModel.state.first { it.mode == BrowseMode.ALBUMS && !it.albumContent.isLoading }
+
+            viewModel.onSearchTextChange("naruto")
+            viewModel.onSearchSubmit()
+            val searched =
+                viewModel.state.first { it.albumScope is AlbumScope.Search && !it.albumContent.isLoading }
+
+            assertEquals("naruto", (searched.albumScope as AlbumScope.Search).query)
+            assertEquals(listOf("naruto", "naruto-shippuden"), searched.albumContent.albums.map { it.id })
+            assertEquals(listOf("naruto"), fake.searchAlbumCalls)
+            // Album search never touches the flat grid's query pipeline.
+            assertEquals("", searched.query.text)
+            assertTrue(fake.searchCalls.isEmpty())
+
+            viewModel.onSearchTextChange("")
+            viewModel.onSearchSubmit()
+            val home = viewModel.state.first { it.albumScope is AlbumScope.Home }
+            assertEquals(listOf("attack-on-titan"), home.albumContent.albums.map { it.id })
+        }
+
+    @Test
+    fun albumHomeFailureSurfacesErrorAndRetryReloads() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo(
+                    "cloudimage.wallpaperaccess",
+                    "WallpaperAccess",
+                    requiresApiKey = false,
+                    capabilities = setOf(SourceCapability.ALBUMS),
+                ),
+            )
+            fake.scriptedCategories = NetworkResult.Success(listOf(albumCategory("anime")))
+            fake.scriptedHomeAlbums =
+                NetworkResult.Failure(NetworkError.Source("wallpaperaccess is having a moment"))
+            val preferences = newPreferences()
+            preferences.setBrowseSourceId("cloudimage.wallpaperaccess")
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val failed =
+                viewModel.state.first { it.mode == BrowseMode.ALBUMS && !it.isFirstLoading && it.albumContent.error != null }
+
+            assertEquals(BrowseError.SOURCE, failed.albumContent.error)
+            assertEquals("wallpaperaccess is having a moment", failed.albumContent.errorDetail)
+
+            fake.scriptedHomeAlbums = NetworkResult.Success(listOf(sourceAlbum("attack-on-titan")))
+            viewModel.onRetry()
+            val recovered =
+                viewModel.state.first { it.albumContent.albums.isNotEmpty() && it.albumContent.error == null }
+            assertEquals(listOf("attack-on-titan"), recovered.albumContent.albums.map { it.id })
+        }
+
+    @Test
+    fun leavingTheAlbumSourceReturnsToTheFlatFeed() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            fake.setSources(
+                SourceInfo(
+                    "cloudimage.wallpaperaccess",
+                    "WallpaperAccess",
+                    requiresApiKey = false,
+                    capabilities = setOf(SourceCapability.ALBUMS),
+                ),
+            )
+            fake.scriptedCategories = NetworkResult.Success(listOf(albumCategory("anime")))
+            fake.scriptedHomeAlbums = NetworkResult.Success(listOf(sourceAlbum("attack-on-titan")))
+            val preferences = newPreferences()
+            preferences.setBrowseSourceId("cloudimage.wallpaperaccess")
+            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            viewModel.state.first { it.mode == BrowseMode.ALBUMS && !it.albumContent.isLoading }
+
+            fake.enqueueSearch(page(ids = listOf("m1"), nextPage = null))
+            viewModel.onSourceSelected(null)
+            val merged = viewModel.state.first { it.mode != BrowseMode.ALBUMS && it.selectedSourceId == null && !it.isFirstLoading }
+
+            assertEquals(BrowseMode.GRID, merged.mode)
+            assertEquals(listOf("m1"), merged.wallpapers.map { it.id })
         }
 
     private fun newViewModel(

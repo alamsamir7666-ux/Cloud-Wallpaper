@@ -18,7 +18,9 @@ import com.cloudimage.extensions.core.InstallResult
 import com.cloudimage.extensions.core.InstalledExtension
 import com.cloudimage.extensions.core.LoadResult
 import com.cloudimage.extensions.core.ProviderTransportException
+import com.cloudimage.provider.api.Album
 import com.cloudimage.provider.api.Capability
+import com.cloudimage.provider.api.Category
 import com.cloudimage.provider.api.Filters
 import com.cloudimage.provider.api.HomeSection
 import com.cloudimage.provider.api.ProviderHttpException
@@ -62,6 +64,11 @@ class ExtensionWallpaperSourcesTest {
         private val tagsError: Throwable? = null,
         private val detailsRecord: com.cloudimage.provider.api.WallpaperDetails? = null,
         private val detailsError: Throwable? = null,
+        private val albumCategories: List<Category>? = null,
+        private val homeAlbums: List<Album>? = null,
+        private val categoryAlbums: Map<String, List<Album>> = emptyMap(),
+        private val albumWalls: Map<String, List<com.cloudimage.provider.api.Wallpaper>> = emptyMap(),
+        private val searchedAlbums: List<Album>? = null,
     ) : WallpaperProvider {
         val calls = mutableListOf<String>()
 
@@ -112,6 +119,31 @@ class ExtensionWallpaperSourcesTest {
         }
 
         override suspend fun random(): Result<List<com.cloudimage.provider.api.Wallpaper>> = Result.success(emptyList())
+
+        override suspend fun categories(): List<Category> {
+            calls += "categories"
+            return albumCategories.orEmpty()
+        }
+
+        override suspend fun homeAlbums(): Result<List<Album>> {
+            calls += "homeAlbums"
+            return Result.success(homeAlbums.orEmpty())
+        }
+
+        override suspend fun albums(categoryId: String): Result<List<Album>> {
+            calls += "albums:$categoryId"
+            return Result.success(categoryAlbums[categoryId].orEmpty())
+        }
+
+        override suspend fun albumWallpapers(albumId: String): Result<List<com.cloudimage.provider.api.Wallpaper>> {
+            calls += "albumWallpapers:$albumId"
+            return Result.success(albumWalls[albumId].orEmpty())
+        }
+
+        override suspend fun searchAlbums(query: String): Result<List<Album>> {
+            calls += "searchAlbums:$query"
+            return Result.success(searchedAlbums.orEmpty())
+        }
 
         private fun outcome(page: ProviderPage?): Result<ProviderPage> =
             error?.let { Result.failure(it) } ?: Result.success(page ?: ProviderPage(emptyList(), null))
@@ -1191,4 +1223,136 @@ class ExtensionWallpaperSourcesTest {
             name = id.substringAfterLast('.').replaceFirstChar { it.uppercase() },
             versionName = "1.0.0",
         )
+
+    // ------------------------------------------------------------------
+    // The album paradigm (v1.1.0): categories, albums and album wallpapers
+    // route to the pinned provider, translate to the source-side types,
+    // and refuse honestly for disabled, missing or non-album sources.
+    // ------------------------------------------------------------------
+
+    private fun album(
+        id: String,
+        count: Int = 0,
+    ): Album =
+        Album(
+            id = id,
+            providerId = "cloudimage.wallpaperaccess",
+            title = id.replace('-', ' ').replaceFirstChar { it.uppercase() },
+            coverUrl = "https://example.com/thumb/$id.jpg",
+            wallpaperCount = count,
+        )
+
+    @Test
+    fun `album calls route to the pinned provider and translate`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallpaperaccess"),
+                    capabilities = setOf(Capability.ALBUMS, Capability.SEARCH),
+                    albumCategories =
+                        listOf(
+                            Category(id = "anime", name = "Anime", iconEmoji = "💥"),
+                            Category(id = "games", name = "Games", iconEmoji = "🎮"),
+                        ),
+                    homeAlbums = listOf(album("attack-on-titan", count = 70)),
+                    categoryAlbums = mapOf("anime" to listOf(album("one-piece", count = 61))),
+                    albumWalls =
+                        mapOf(
+                            "one-piece" to
+                                listOf(
+                                    sourceWallpaper("w1").copy(providerId = "cloudimage.wallpaperaccess"),
+                                    sourceWallpaper("w2").copy(providerId = "cloudimage.wallpaperaccess"),
+                                ),
+                        ),
+                    searchedAlbums = listOf(album("naruto")),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallpaperaccess"))
+            val sources = sources(engine)
+
+            val categories = sources.categories("cloudimage.wallpaperaccess")
+            val home = sources.homeAlbums("cloudimage.wallpaperaccess")
+            val albums = sources.albums("cloudimage.wallpaperaccess", "anime")
+            val walls = sources.albumWallpapers("cloudimage.wallpaperaccess", "one-piece")
+            val searched = sources.searchAlbums("cloudimage.wallpaperaccess", "naruto")
+
+            assertEquals(
+                listOf("anime" to "💥", "games" to "🎮"),
+                (categories as NetworkResult.Success).value.map { it.id to it.iconEmoji },
+            )
+            val homeValue = (home as NetworkResult.Success).value
+            assertEquals(listOf("attack-on-titan" to 70), homeValue.map { it.id to it.wallpaperCount })
+            assertEquals("cloudimage.wallpaperaccess", homeValue.single().sourceId)
+            assertEquals(listOf("one-piece"), (albums as NetworkResult.Success).value.map { it.id })
+            val wallValue = (walls as NetworkResult.Success).value
+            assertEquals(listOf("w1", "w2"), wallValue.map { it.id })
+            assertEquals("cloudimage.wallpaperaccess", wallValue.first().providerId)
+            assertEquals(listOf("naruto"), (searched as NetworkResult.Success).value.map { it.id })
+            assertEquals(
+                listOf("categories", "homeAlbums", "albums:anime", "albumWallpapers:one-piece", "searchAlbums:naruto"),
+                provider.calls,
+            )
+        }
+
+    @Test
+    fun `album calls refuse a source without the albums capability`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.POPULAR, Capability.SEARCH),
+                )
+            val engine = FakeEngine(provider)
+            engine.publish(extension("cloudimage.wallhaven"))
+            val sources = sources(engine)
+
+            val result = sources.homeAlbums("cloudimage.wallhaven")
+
+            val failure = result as NetworkResult.Failure
+            val error = failure.error as NetworkError.Source
+            assertTrue(error.reason.contains("albums"))
+            assertTrue(provider.calls.isEmpty())
+        }
+
+    @Test
+    fun `album calls refuse a source that is not installed`() =
+        runTest {
+            val engine = FakeEngine()
+            engine.publish(extension("cloudimage.wallhaven"))
+            val sources = sources(engine)
+
+            val result = sources.categories("cloudimage.wallpaperaccess")
+
+            val failure = result as NetworkResult.Failure
+            val error = failure.error as NetworkError.Source
+            assertTrue(error.reason.contains("not installed"))
+        }
+
+    @Test
+    fun `album calls keep provider failures as source errors`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallpaperaccess"),
+                    capabilities = setOf(Capability.ALBUMS),
+                )
+            val engine =
+                FakeEngine(
+                    object : WallpaperProvider by provider {
+                        override val meta = provider.meta
+                        override val capabilities = provider.capabilities
+
+                        override suspend fun homeAlbums(): Result<List<Album>> =
+                            Result.failure(ProviderHttpException("wallpaperaccess answered HTTP 503"))
+                    },
+                )
+            engine.publish(extension("cloudimage.wallpaperaccess"))
+            val sources = sources(engine)
+
+            val result = sources.homeAlbums("cloudimage.wallpaperaccess")
+
+            val failure = result as NetworkResult.Failure
+            val error = failure.error as NetworkError.Source
+            assertTrue(error.reason.contains("503"))
+        }
 }

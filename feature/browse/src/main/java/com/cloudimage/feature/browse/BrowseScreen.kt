@@ -1,5 +1,6 @@
 package com.cloudimage.feature.browse
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -68,6 +69,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -86,6 +88,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.cloudimage.core.designsystem.CategorySidebar
+import com.cloudimage.core.designsystem.CategorySidebarEntry
+import com.cloudimage.core.designsystem.CategorySidebarHandle
 import com.cloudimage.core.designsystem.WallpaperCard
 import com.cloudimage.core.model.Wallpaper
 
@@ -112,6 +117,11 @@ fun BrowseScreen(
     var showFilters by remember { mutableStateOf(false) }
     var showSourceSheet by remember { mutableStateOf(false) }
     var showClearHistoryDialog by remember { mutableStateOf(false) }
+
+    // The album paradigm's sidebar (v1.1.0): survives configuration
+    // changes, closes on outside tap, back gesture or a category pick.
+    var sidebarOpen by rememberSaveable { mutableStateOf(false) }
+    val albumMode = state.mode == BrowseMode.ALBUMS
 
     // Hoisted so the source FAB can react to the feed's scroll direction —
     // whichever list is on screen.
@@ -165,6 +175,7 @@ fun BrowseScreen(
                 onSearchFocusChange = viewModel::onSearchFocusChange,
                 onOpenFilters = { showFilters = true },
                 filtersActive = state.filtersActive,
+                showFilters = !albumMode,
             )
 
             if (state.mode == BrowseMode.GRID && state.scopeTitle != null) {
@@ -195,6 +206,17 @@ fun BrowseScreen(
                     )
 
                 state.showNoSources -> NoSources()
+
+                state.mode == BrowseMode.ALBUMS ->
+                    AlbumsHome(
+                        scope = state.albumScope,
+                        content = state.albumContent,
+                        gridColumns = state.gridColumns,
+                        onAlbumClick = viewModel::onAlbumSelected,
+                        onWallpaperClick = onWallpaperClick,
+                        onBack = { viewModel.onAlbumBack() },
+                        onRetry = viewModel::onRetry,
+                    )
 
                 state.mode == BrowseMode.SECTIONS && state.sections.isNotEmpty() ->
                     SectionsHome(
@@ -288,6 +310,36 @@ fun BrowseScreen(
                 modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
             )
         }
+
+        // The album paradigm's category sidebar (v1.1.0): the edge handle
+        // floats on the right whenever the album UI is showing, and the
+        // Realme-style panel carries the source's own categories — icon
+        // circles with their names underneath.
+        if (albumMode && !state.showApiKeyPrompt) {
+            CategorySidebarHandle(
+                onClick = { sidebarOpen = true },
+                modifier = Modifier.align(Alignment.CenterEnd),
+            )
+            CategorySidebar(
+                expanded = sidebarOpen,
+                entries =
+                    state.categories.map { category ->
+                        CategorySidebarEntry(
+                            id = category.id,
+                            label = category.name,
+                            iconEmoji = category.iconEmoji,
+                        )
+                    },
+                selectedCategoryId = (state.albumScope as? AlbumScope.Category)?.category?.id,
+                onCategorySelected = { category ->
+                    sidebarOpen = false
+                    state.categories
+                        .firstOrNull { it.id == category.id }
+                        ?.let(viewModel::onCategorySelected)
+                },
+                onDismissRequest = { sidebarOpen = false },
+            )
+        }
     }
 
     if (showSourceSheet) {
@@ -301,6 +353,18 @@ fun BrowseScreen(
             },
             onDismiss = { showSourceSheet = false },
         )
+    }
+
+    // The album scope stack unwinds on the system back (v1.1.0): an
+    // album returns to its category, a category or search to Home, and
+    // Home itself lets the back leave the screen. The sidebar closes
+    // first when it is open — registered after the scope handler so it
+    // wins the gesture.
+    BackHandler(enabled = albumMode && state.albumScope !is AlbumScope.Home) {
+        viewModel.onAlbumBack()
+    }
+    BackHandler(enabled = albumMode && sidebarOpen) {
+        sidebarOpen = false
     }
 
     if (showClearHistoryDialog) {
@@ -346,6 +410,7 @@ private fun SearchBarRow(
     onOpenFilters: () -> Unit,
     filtersActive: Boolean,
     modifier: Modifier = Modifier,
+    showFilters: Boolean = true,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -377,18 +442,23 @@ private fun SearchBarRow(
                     .testTag("browse:search")
                     .onFocusChanged { onSearchFocusChange(it.isFocused) },
         )
-        BadgedBox(
-            badge = {
-                if (filtersActive) {
-                    Badge()
+        // The album paradigm has no host-vocabulary filters — its sources
+        // organize through their own categories, so the sheet stays shut
+        // and the Tune action hides (v1.1.0).
+        if (showFilters) {
+            BadgedBox(
+                badge = {
+                    if (filtersActive) {
+                        Badge()
+                    }
+                },
+            ) {
+                IconButton(onClick = onOpenFilters) {
+                    Icon(
+                        Icons.Rounded.Tune,
+                        contentDescription = stringResource(R.string.browse_open_filters),
+                    )
                 }
-            },
-        ) {
-            IconButton(onClick = onOpenFilters) {
-                Icon(
-                    Icons.Rounded.Tune,
-                    contentDescription = stringResource(R.string.browse_open_filters),
-                )
             }
         }
     }

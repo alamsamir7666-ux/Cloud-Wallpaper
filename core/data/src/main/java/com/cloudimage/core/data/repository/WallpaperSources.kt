@@ -12,7 +12,8 @@ import kotlinx.coroutines.flow.StateFlow
  * What an installed source can do, mirrored from the provider contract so
  * the UI can gate affordances without touching plugin classes (v1.0.9).
  * [SEARCH] and [TAGS] together drive the detail screen's "More like this"
- * row; the rest are carried for future surfaces.
+ * row; [ALBUMS] swaps the browse home for the album paradigm's sidebar UI
+ * (v1.1.0); the rest are carried for future surfaces.
  */
 enum class SourceCapability {
     POPULAR,
@@ -21,6 +22,7 @@ enum class SourceCapability {
     TAGS,
     RANDOM,
     FILTERS,
+    ALBUMS,
 }
 
 /**
@@ -83,6 +85,32 @@ data class SourceSection(
      * can be labeled with the source name in the merged view.
      */
     val isDefault: Boolean = false,
+)
+
+/**
+ * One category of an album-style source (v1.1.0), mirrored from the
+ * provider contract for the browse sidebar: [iconEmoji] renders inside a
+ * tinted circle with [name] underneath, the way the source's own website
+ * navigation lists them.
+ */
+data class SourceCategory(
+    val id: String,
+    val name: String,
+    val iconEmoji: String? = null,
+    val coverUrl: String? = null,
+)
+
+/**
+ * One album of an album-style source (v1.1.0) — a titled collection of
+ * wallpapers with a cover and an advisory count, mirrored from the
+ * provider contract for the album grids.
+ */
+data class SourceAlbum(
+    val id: String,
+    val sourceId: String,
+    val title: String,
+    val coverUrl: String,
+    val wallpaperCount: Int = 0,
 )
 
 /**
@@ -172,4 +200,50 @@ interface WallpaperSources {
      * when the listing's dimensions are missing.
      */
     suspend fun details(wallpaper: Wallpaper): NetworkResult<WallpaperDetails>
+
+    /**
+     * The album paradigm (v1.1.0): the pinned source's category list for
+     * the browse sidebar. Called only for a source that declares
+     * [SourceCapability.ALBUMS]; a disabled or missing source answers the
+     * same honest [NetworkError.Source] taxonomy [search] uses.
+     */
+    suspend fun categories(sourceId: String): NetworkResult<List<SourceCategory>>
+
+    /**
+     * The album selection the album UI's single "Home" tab shows (v1.1.0) —
+     * the source's own homepage. Same gating and honesty rules as
+     * [categories].
+     */
+    suspend fun homeAlbums(sourceId: String): NetworkResult<List<SourceAlbum>>
+
+    /**
+     * Every album of one category (v1.1.0), in the source's own order —
+     * complete, because album-style sites serve their category pages whole.
+     * Same gating and honesty rules as [categories].
+     */
+    suspend fun albums(
+        sourceId: String,
+        categoryId: String,
+    ): NetworkResult<List<SourceAlbum>>
+
+    /**
+     * The wallpapers of one album (v1.1.0) — ordinary feed citizens the
+     * preview/apply/download flows treat exactly like search results.
+     * Same gating and honesty rules as [categories].
+     */
+    suspend fun albumWallpapers(
+        sourceId: String,
+        albumId: String,
+    ): NetworkResult<List<Wallpaper>>
+
+    /**
+     * Search, album-style (v1.1.0): the source's own search answer — albums
+     * the user drills into, not loose wallpapers. The flat [search] keeps
+     * serving the merged all-sources feed. Same gating and honesty rules
+     * as [categories].
+     */
+    suspend fun searchAlbums(
+        sourceId: String,
+        query: String,
+    ): NetworkResult<List<SourceAlbum>>
 }

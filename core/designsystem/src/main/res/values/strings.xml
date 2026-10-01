@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="wallpaper_card">Wallpaper %1$s</string>
+    <string name="album_card">Album %1$s</string>
+    <plurals name="album_wallpaper_count">
+        <item quantity="one">%1$d wallpaper</item>
+        <item quantity="other">%1$d wallpapers</item>
+    </plurals>
+    <string name="category_sidebar_open">Browse categories</string>
+    <string name="category_sidebar_entry">Category %1$s</string>
 </resources>

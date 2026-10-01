@@ -32,6 +32,18 @@ enum class Capability {
     TAGS,
     RANDOM,
     FILTERS,
+
+    /**
+     * The provider is album-style (v1.1.0): its content is organized as
+     * categories → albums → wallpapers. The host swaps the sectioned home
+     * for the album UI — a single "Home" tab fed by
+     * [WallpaperProvider.homeAlbums] and a category sidebar fed by
+     * [WallpaperProvider.categories] — and routes search through
+     * [WallpaperProvider.searchAlbums]. Providers without this capability
+     * keep the flat-feed home; the album methods below are never called
+     * for them.
+     */
+    ALBUMS,
 }
 
 /** Content classification used by the global SFW/NSFW switch (default: SFW). */
@@ -185,4 +197,67 @@ interface WallpaperProvider {
     suspend fun details(id: String): Result<WallpaperDetails>
 
     suspend fun random(): Result<List<Wallpaper>>
+
+    /**
+     * The album paradigm's category list (v1.1.0) — what the host's
+     * category sidebar shows when the feed is pinned to an album-style
+     * source ([Capability.ALBUMS]).
+     *
+     * Additive default, exactly like [sections]: providers compiled against
+     * the earlier V1 contract do not implement this, the default below
+     * answers nothing, [ProviderApi.VERSION] stays 1 and old packages keep
+     * loading. The host never calls it for a source that does not declare
+     * [Capability.ALBUMS].
+     *
+     * Keep it cheap and offline-friendly: the host asks once per album
+     * session, and a provider that ships a baked-in category list as a
+     * fallback (refreshing it from the first page it fetches) keeps the
+     * sidebar alive even when the network is not.
+     */
+    suspend fun categories(): List<Category> = emptyList()
+
+    /**
+     * The album selection the album UI's single "Home" tab shows (v1.1.0) —
+     * for a site like WallpaperAccess this is its own homepage: the newest
+     * or featured albums.
+     *
+     * Additive default like [categories]; gated on [Capability.ALBUMS].
+     */
+    suspend fun homeAlbums(): Result<List<Album>> = Result.success(emptyList())
+
+    /**
+     * Every album of one category (v1.1.0), in the source's own order —
+     * what the site's category page shows. Album-style sources in the wild
+     * serve their category pages complete (no pagination), so the contract
+     * returns the whole list; a provider whose site paginates walks its own
+     * pages here and answers with the concatenation.
+     *
+     * Additive default like [categories]; gated on [Capability.ALBUMS].
+     */
+    suspend fun albums(categoryId: String): Result<List<Album>> = Result.success(emptyList())
+
+    /**
+     * The wallpapers of one album (v1.1.0). Same completeness rule as
+     * [albums]: the sources this models serve an album's walls in a single
+     * page, so the contract returns the whole list.
+     *
+     * The returned [Wallpaper]s are ordinary feed citizens — the host's
+     * preview, apply and download flows treat them exactly like search
+     * results, routing [details] and downloads by [Wallpaper.providerId].
+     *
+     * Additive default like [categories]; gated on [Capability.ALBUMS].
+     */
+    suspend fun albumWallpapers(albumId: String): Result<List<Wallpaper>> = Result.success(emptyList())
+
+    /**
+     * Search, album-style (v1.1.0): what the source's own search answers —
+     * albums, not loose wallpapers (WallpaperAccess's "naruto" search is a
+     * list of Naruto albums). The host's album UI renders these as album
+     * cards the user drills into; the flat [search] keeps serving the
+     * merged all-sources feed and older hosts, where an album-style source
+     * contributes its wallpapers.
+     *
+     * Additive default like [categories]; gated on [Capability.ALBUMS].
+     */
+    suspend fun searchAlbums(query: String): Result<List<Album>> = Result.success(emptyList())
 }

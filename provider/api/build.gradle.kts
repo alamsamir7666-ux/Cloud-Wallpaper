@@ -14,4 +14,6 @@ dependencies {
     api(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)
+    // ProviderApiTest exercises the contract's suspend defaults (v1.1.0).
+    testImplementation(libs.kotlinx.coroutines.test)
 }

@@ -1,5 +1,6 @@
 package com.cloudimage.provider.api
 
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -118,5 +119,64 @@ class ProviderApiTest {
         assertEquals(left, right)
         assertEquals(left.hashCode(), right.hashCode())
         assertFalse(left == other)
+    }
+
+    /**
+     * The album paradigm's contract surface (v1.1.0) is additive: a
+     * provider compiled against the plain V1 interface — no album methods
+     * overridden — must compile, load and answer the defaults, so old
+     * packages keep working on the new host and [ProviderApi.VERSION]
+     * stays 1.
+     */
+    @Test
+    fun albumMethodsHaveEmptyDefaults() =
+        runTest {
+            val plain =
+                object : WallpaperProvider {
+                    override val meta = ProviderMeta(id = "cloudimage.plain", name = "Plain", versionName = "1.0.0")
+                    override val capabilities = setOf(Capability.POPULAR)
+
+                    override suspend fun popular(
+                        page: Int,
+                        filters: Filters,
+                    ) = Result.success(Page(emptyList(), null))
+
+                    override suspend fun search(
+                        query: String,
+                        page: Int,
+                        filters: Filters,
+                    ) = Result.success(Page(emptyList(), null))
+
+                    override suspend fun details(id: String) = Result.success(WallpaperDetails(wallpaper.copy(id = id)))
+
+                    override suspend fun random(): Result<List<Wallpaper>> = Result.success(emptyList())
+                }
+
+            assertTrue(plain.categories().isEmpty())
+            assertTrue(plain.homeAlbums().getOrThrow().isEmpty())
+            assertTrue(plain.albums("anime").getOrThrow().isEmpty())
+            assertTrue(plain.albumWallpapers("attack-on-titan").getOrThrow().isEmpty())
+            assertTrue(plain.searchAlbums("naruto").getOrThrow().isEmpty())
+        }
+
+    @Test
+    fun categoryAndAlbumCarryTheirIdentity() {
+        val category =
+            Category(id = "anime", name = "Anime", iconEmoji = "💥", coverUrl = "https://example.com/cover.jpg")
+        val album =
+            Album(
+                id = "attack-on-titan",
+                providerId = "cloudimage.wallpaperaccess",
+                title = "Attack On Titan",
+                coverUrl = "https://example.com/thumb/36626.jpg",
+                wallpaperCount = 70,
+            )
+
+        assertEquals("anime", category.id)
+        assertEquals("💥", category.iconEmoji)
+        assertNull(Category(id = "other", name = "Other").iconEmoji)
+        assertEquals(0, Album(id = "x", providerId = "p", title = "X", coverUrl = "c").wallpaperCount)
+        assertEquals("attack-on-titan", album.id)
+        assertEquals(70, album.wallpaperCount)
     }
 }

@@ -1,6 +1,8 @@
 package com.cloudimage.core.testing
 
 import com.cloudimage.core.data.repository.SearchOutcome
+import com.cloudimage.core.data.repository.SourceAlbum
+import com.cloudimage.core.data.repository.SourceCategory
 import com.cloudimage.core.data.repository.SourceFailure
 import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.SourceSection
@@ -50,6 +52,25 @@ class FakeWallpaperSources : WallpaperSources {
 
     /** Every wallpaper details() was called with, in order (v1.0.21). */
     val detailsCalls = mutableListOf<Wallpaper>()
+
+    /** What the album-paradigm calls answer (v1.1.0), by method. */
+    var scriptedCategories: NetworkResult<List<SourceCategory>> = NetworkResult.Success(emptyList())
+    var scriptedHomeAlbums: NetworkResult<List<SourceAlbum>> = NetworkResult.Success(emptyList())
+    var scriptedAlbums: NetworkResult<List<SourceAlbum>> = NetworkResult.Success(emptyList())
+    var scriptedAlbumWallpapers: NetworkResult<List<Wallpaper>> = NetworkResult.Success(emptyList())
+    var scriptedSearchAlbums: NetworkResult<List<SourceAlbum>> = NetworkResult.Success(emptyList())
+
+    /** The sourceId every album-paradigm call saw, in order (v1.1.0). */
+    val albumSourceCalls = mutableListOf<String>()
+
+    /** The categoryId every albums() call saw, in order (v1.1.0). */
+    val albumsCategoryCalls = mutableListOf<String>()
+
+    /** The albumId every albumWallpapers() call saw, in order (v1.1.0). */
+    val albumWallpaperCalls = mutableListOf<String>()
+
+    /** The query every searchAlbums() call saw, in order (v1.1.0). */
+    val searchAlbumCalls = mutableListOf<String>()
 
     private var scriptedSections: NetworkResult<List<SourceSection>> =
         NetworkResult.Success(emptyList())
@@ -128,5 +149,42 @@ class FakeWallpaperSources : WallpaperSources {
         // a test that expects details must script them.
         return scriptedDetails.removeFirstOrNull()
             ?: NetworkResult.Failure(NetworkError.Source("no scripted details for ${wallpaper.id}"))
+    }
+
+    override suspend fun categories(sourceId: String): NetworkResult<List<SourceCategory>> {
+        albumSourceCalls += sourceId
+        return scriptedCategories
+    }
+
+    override suspend fun homeAlbums(sourceId: String): NetworkResult<List<SourceAlbum>> {
+        albumSourceCalls += sourceId
+        return scriptedHomeAlbums
+    }
+
+    override suspend fun albums(
+        sourceId: String,
+        categoryId: String,
+    ): NetworkResult<List<SourceAlbum>> {
+        albumSourceCalls += sourceId
+        albumsCategoryCalls += categoryId
+        return scriptedAlbums
+    }
+
+    override suspend fun albumWallpapers(
+        sourceId: String,
+        albumId: String,
+    ): NetworkResult<List<Wallpaper>> {
+        albumSourceCalls += sourceId
+        albumWallpaperCalls += albumId
+        return scriptedAlbumWallpapers
+    }
+
+    override suspend fun searchAlbums(
+        sourceId: String,
+        query: String,
+    ): NetworkResult<List<SourceAlbum>> {
+        albumSourceCalls += sourceId
+        searchAlbumCalls += query
+        return scriptedSearchAlbums
     }
 }

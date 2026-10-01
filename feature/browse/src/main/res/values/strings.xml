@@ -53,6 +53,11 @@
     <string name="browse_recently_applied">Recently applied</string>
     <string name="browse_scope_close">Back to sections</string>
 
+    <string name="browse_album_home">Home</string>
+    <string name="browse_album_empty">Nothing here yet</string>
+    <string name="browse_album_search_results">Results for “%1$s”</string>
+    <string name="browse_album_scope_close">Go back</string>
+
     <string name="browse_suggestions_title">Suggested tags</string>
     <string name="browse_suggestions_loading">Finding tags…</string>
     <string name="browse_history_title">Recent searches</string>

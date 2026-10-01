@@ -3,6 +3,9 @@ package com.cloudimage.feature.browse
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cloudimage.core.data.repository.HistoryRepository
+import com.cloudimage.core.data.repository.SourceAlbum
+import com.cloudimage.core.data.repository.SourceCapability
+import com.cloudimage.core.data.repository.SourceCategory
 import com.cloudimage.core.data.repository.SourceFailure
 import com.cloudimage.core.data.repository.SourceInfo
 import com.cloudimage.core.data.repository.SourceSection
@@ -43,12 +46,58 @@ enum class BrowseError {
 
 /**
  * What the browse screen is showing: the sectioned home (v1.0.9, the
- * CloudStream `mainPage` model) or the flat staggered grid.
+ * CloudStream `mainPage` model), the flat staggered grid, or — when the
+ * feed is pinned to an album-style source (v1.1.0) — the album paradigm's
+ * own home with its category sidebar.
  */
 enum class BrowseMode {
     SECTIONS,
     GRID,
+    ALBUMS,
 }
+
+/**
+ * Where the album UI is drilled into (v1.1.0): the single "Home" tab,
+ * one category's album grid, one album's wallpaper grid, or the album-style
+ * search results. Navigating forward replaces the scope; the system back
+ * unwinds it — Album back to the category it was opened from, then Home.
+ */
+sealed interface AlbumScope {
+    /** The album home: the source's own homepage selection. */
+    data object Home : AlbumScope
+
+    /** One category's albums, opened from the sidebar. */
+    data class Category(
+        val category: SourceCategory,
+    ) : AlbumScope
+
+    /** One album's wallpapers. [fromCategory] is the category grid the
+     * album was opened from, when there was one — back unwinds to it. */
+    data class Album(
+        val album: SourceAlbum,
+        val fromCategory: SourceCategory? = null,
+    ) : AlbumScope
+
+    /** Album-style search results for [query]. */
+    data class Search(
+        val query: String,
+    ) : AlbumScope
+}
+
+/**
+ * What the album UI's grid is showing (v1.1.0): whichever list the open
+ * scope serves — albums for Home, Category and Search, wallpapers for
+ * Album — with one shared loading/error state, exactly like a section
+ * row's own first-page state.
+ */
+data class AlbumContentState(
+    val albums: List<SourceAlbum> = emptyList(),
+    val wallpapers: List<Wallpaper> = emptyList(),
+    val isLoading: Boolean = true,
+    val error: BrowseError? = null,
+    /** The source's own failure reason, shown under the error (v1.0.14 style). */
+    val errorDetail: String? = null,
+)
 
 /** One source that failed the last merged search, for the summary chip (v1.0.9). */
 data class FailedSource(
@@ -152,6 +201,13 @@ data class BrowseUiState(
     val searchFocused: Boolean = false,
     /** Sources that failed the last merged grid search (v1.0.9). */
     val sourceFailures: List<FailedSource> = emptyList(),
+    /** The album paradigm's categories (v1.1.0): the pinned source's own
+     * list, for the sidebar; empty until it loads. */
+    val categories: List<SourceCategory> = emptyList(),
+    /** Where the album UI is drilled into (v1.1.0). */
+    val albumScope: AlbumScope = AlbumScope.Home,
+    /** What the album UI's grid shows (v1.1.0). */
+    val albumContent: AlbumContentState = AlbumContentState(),
 ) {
     /** True when the filter sheet holds non-default choices. */
     val filtersActive: Boolean get() = !query.isDefault
@@ -275,6 +331,30 @@ class BrowseViewModel
         /** The in-flight sections-list request; cancelled on every restart. */
         private var sectionsJob: Job? = null
 
+        /** The in-flight album-paradigm content request (v1.1.0). */
+        private var albumJob: Job? = null
+
+        /** The sidebar's category-list request (v1.1.0), one per album session. */
+        private var categoriesJob: Job? = null
+
+        /** Bumped per album navigation; a stale completion must not clobber the
+         * scope it landed after (v1.1.0). */
+        private var albumGeneration = 0
+
+        /** The Home tab's albums, cached for instant back navigation (v1.1.0). */
+        private var homeAlbumsCache: List<SourceAlbum> = emptyList()
+
+        /** True once the Home tab's albums loaded — distinguishes "empty source"
+         * from "never loaded" so back never refetches a known-empty home. */
+        private var homeAlbumsLoaded = false
+
+        /** Category albums by category id, cached for instant back navigation (v1.1.0). */
+        private val categoryAlbumsCache = mutableMapOf<String, List<SourceAlbum>>()
+
+        /** Which source the cached categories belong to (v1.1.0) — switching
+         * between two album-style sources must not serve the other's sidebar. */
+        private var categoriesSourceId: String? = null
+
         /** Per-row page cursors, random-sort seeds and jobs, by section key. */
         private val sectionPages = mutableMapOf<String, Int>()
         private val sectionSeeds = mutableMapOf<String, String>()
@@ -319,6 +399,16 @@ class BrowseViewModel
                         viewModelScope.launch { userPreferencesRepository.setBrowseSourceId(null) }
                     }
                     rebuildSourceBar()
+                    // The album paradigm rides on capabilities, which only
+                    // this flow knows: a pin whose source just gained (or
+                    // lost) ALBUMS switches between the sectioned home and
+                    // the album UI here — exactly one restart, once the
+                    // preferences collector has done its first pass, so the
+                    // classic cold-start race cannot double-fire it
+                    // (v1.1.0).
+                    val albumNow = albumModeActive()
+                    val albumShowing = _state.value.mode == BrowseMode.ALBUMS
+                    if (preferencesSeen && albumNow != albumShowing) restartFeed()
                     // A feed that is empty or failed while sources were
                     // still being discovered gets a second chance once the
                     // engine finishes loading — the classic cold-start race.
@@ -407,12 +497,22 @@ class BrowseViewModel
             val text = _state.value.searchText
             if (text.isBlank()) {
                 when {
+                    _state.value.mode == BrowseMode.ALBUMS -> {
+                        // The blank state of the album UI is its Home scope
+                        // (v1.1.0) — the search was a detour.
+                        if (_state.value.albumScope !is AlbumScope.Home) onAlbumBack()
+                    }
                     _state.value.mode == BrowseMode.GRID && homeIsAvailable() -> onBackToSections()
                     _state.value.mode == BrowseMode.GRID -> {
                         _state.update { it.copy(query = it.query.copy(text = "")) }
                         startGrid()
                     }
                 }
+                return
+            }
+            if (_state.value.mode == BrowseMode.ALBUMS) {
+                if ((_state.value.albumScope as? AlbumScope.Search)?.query == text) return
+                startAlbumSearch(text)
                 return
             }
             if (text == _state.value.query.text) return // the grid already shows it
@@ -482,12 +582,20 @@ class BrowseViewModel
             val text = _state.value.searchText
             if (text.isBlank()) {
                 when {
+                    _state.value.mode == BrowseMode.ALBUMS -> {
+                        if (_state.value.albumScope !is AlbumScope.Home) onAlbumBack()
+                    }
                     _state.value.mode == BrowseMode.GRID && homeIsAvailable() -> onBackToSections()
                     _state.value.mode == BrowseMode.GRID -> {
                         _state.update { it.copy(query = it.query.copy(text = "")) }
                         startGrid()
                     }
                 }
+                return
+            }
+            if (_state.value.mode == BrowseMode.ALBUMS) {
+                startAlbumSearch(text)
+                recordSearch(text)
                 return
             }
             _state.update {
@@ -678,6 +786,7 @@ class BrowseViewModel
         fun onRetry() {
             val current = _state.value
             when {
+                current.mode == BrowseMode.ALBUMS -> retryAlbumContent()
                 current.mode == BrowseMode.SECTIONS -> restartFeed()
                 current.wallpapers.isEmpty() -> restartFeed()
                 else -> loadMore()
@@ -698,6 +807,14 @@ class BrowseViewModel
          * source); the sectioned home reloads its rows.
          */
         private fun restartFeed() {
+            // The album paradigm replaces BOTH homes when the pin points at
+            // an album-style source (v1.1.0) — checked first, so a pin that
+            // lands while a merged grid search is showing switches to the
+            // album UI instead of re-running the flat grid under the pin.
+            if (albumModeActive()) {
+                restartAlbumFeed()
+                return
+            }
             val current = _state.value
             if (current.mode == BrowseMode.GRID) {
                 if (current.scopeTitle != null) {
@@ -805,6 +922,304 @@ class BrowseViewModel
         private fun enterGridFallback() {
             _state.update { it.copy(mode = BrowseMode.GRID, scopeTitle = null, scopeSourceId = null, showApiKeyPrompt = false) }
             startGrid()
+        }
+
+        // --------------------------------------------------------------
+        // The album paradigm (v1.1.0): the pinned source declares
+        // SourceCapability.ALBUMS, so the home becomes the source's own —
+        // a single "Home" tab of its homepage albums plus a category
+        // sidebar — and search answers albums. Scope navigation is a
+        // stack: category → album, unwound by the system back.
+        // --------------------------------------------------------------
+
+        /** True when the pinned source declares the album paradigm. */
+        private fun albumModeActive(): Boolean {
+            val selected = _state.value.selectedSourceId ?: return false
+            val info = _state.value.sources?.firstOrNull { it.id == selected } ?: return false
+            return SourceCapability.ALBUMS in info.capabilities
+        }
+
+        /**
+         * The album home: the source's homepage albums under the single
+         * "Home" tab, and — once per session, and only for the source the
+         * cache belongs to — the sidebar's category list. Category
+         * failures degrade silently (an empty sidebar is a nuisance, not
+         * a dead feed); home failures surface like any feed failure, so
+         * the cold-start rescue can retry them.
+         */
+        private fun restartAlbumFeed() {
+            albumJob?.cancel()
+            categoriesJob?.cancel()
+            categoryAlbumsCache.clear()
+            homeAlbumsCache = emptyList()
+            homeAlbumsLoaded = false
+            albumGeneration++
+            val needsKey = selectedNeedsApiKey()
+            _state.update {
+                it.copy(
+                    mode = BrowseMode.ALBUMS,
+                    albumScope = AlbumScope.Home,
+                    albumContent = AlbumContentState(isLoading = !needsKey),
+                    sections = emptyList(),
+                    wallpapers = emptyList(),
+                    isFirstLoading = !needsKey,
+                    isLoadingMore = false,
+                    endReached = false,
+                    error = null,
+                    errorDetail = null,
+                    showApiKeyPrompt = needsKey,
+                    sourceFailures = emptyList(),
+                    suggestions = emptyList(),
+                    suggestLoading = false,
+                )
+            }
+            if (needsKey) return
+            val sourceId = _state.value.selectedSourceId ?: return
+            if (categoriesSourceId != sourceId) {
+                _state.update { it.copy(categories = emptyList()) }
+                categoriesSourceId = sourceId
+                categoriesJob =
+                    viewModelScope.launch {
+                        sources
+                            .categories(sourceId)
+                            .onSuccess { list -> _state.update { it.copy(categories = list) } }
+                            .onFailure {
+                                // The sidebar stays empty for this session;
+                                // the next feed restart retries it.
+                            }
+                    }
+            }
+            loadHomeAlbums()
+        }
+
+        /** Loads (or retries) the Home tab's albums. */
+        private fun loadHomeAlbums() {
+            albumJob?.cancel()
+            val generation = ++albumGeneration
+            val sourceId = _state.value.selectedSourceId ?: return
+            _state.update { it.copy(albumContent = AlbumContentState(isLoading = true), isFirstLoading = true) }
+            albumJob =
+                viewModelScope.launch {
+                    sources
+                        .homeAlbums(sourceId)
+                        .onSuccess { albums ->
+                            if (generation != albumGeneration) return@onSuccess
+                            homeAlbumsCache = albums
+                            homeAlbumsLoaded = true
+                            _state.update {
+                                it.copy(
+                                    albumContent = AlbumContentState(albums = albums, isLoading = false),
+                                    isFirstLoading = false,
+                                )
+                            }
+                        }.onFailure { error ->
+                            if (generation != albumGeneration) return@onFailure
+                            _state.update {
+                                it.copy(
+                                    albumContent =
+                                        AlbumContentState(
+                                            isLoading = false,
+                                            error = error.toBrowseError(),
+                                            errorDetail = error.failureDetail(),
+                                        ),
+                                    isFirstLoading = false,
+                                )
+                            }
+                        }
+                }
+        }
+
+        /** The user picked a category in the sidebar. */
+        fun onCategorySelected(category: SourceCategory) {
+            if (_state.value.mode != BrowseMode.ALBUMS) return
+            albumJob?.cancel()
+            val generation = ++albumGeneration
+            _state.update {
+                it.copy(
+                    albumScope = AlbumScope.Category(category),
+                    albumContent = AlbumContentState(isLoading = true),
+                )
+            }
+            loadCategoryAlbums(category, generation)
+        }
+
+        /** Loads (or retries) one category's albums. */
+        private fun loadCategoryAlbums(
+            category: SourceCategory,
+            generation: Int = ++albumGeneration,
+        ) {
+            albumJob?.cancel()
+            val sourceId = _state.value.selectedSourceId ?: return
+            albumJob =
+                viewModelScope.launch {
+                    sources
+                        .albums(sourceId, category.id)
+                        .onSuccess { albums ->
+                            if (generation != albumGeneration) return@onSuccess
+                            categoryAlbumsCache[category.id] = albums
+                            _state.update { it.copy(albumContent = AlbumContentState(albums = albums, isLoading = false)) }
+                        }.onFailure { error ->
+                            if (generation != albumGeneration) return@onFailure
+                            _state.update {
+                                it.copy(
+                                    albumContent =
+                                        AlbumContentState(
+                                            isLoading = false,
+                                            error = error.toBrowseError(),
+                                            errorDetail = error.failureDetail(),
+                                        ),
+                                )
+                            }
+                        }
+                }
+        }
+
+        /** The user opened an album — its wallpapers replace the grid. */
+        fun onAlbumSelected(album: SourceAlbum) {
+            if (_state.value.mode != BrowseMode.ALBUMS) return
+            albumJob?.cancel()
+            val fromCategory = (_state.value.albumScope as? AlbumScope.Category)?.category
+            _state.update {
+                it.copy(
+                    albumScope = AlbumScope.Album(album, fromCategory),
+                    albumContent = AlbumContentState(isLoading = true),
+                )
+            }
+            loadAlbumWallpapers(AlbumScope.Album(album, fromCategory))
+        }
+
+        /** Loads (or retries) one album's wallpapers without touching the scope. */
+        private fun loadAlbumWallpapers(scope: AlbumScope.Album) {
+            albumJob?.cancel()
+            val generation = ++albumGeneration
+            val sourceId = _state.value.selectedSourceId ?: return
+            albumJob =
+                viewModelScope.launch {
+                    sources
+                        .albumWallpapers(sourceId, scope.album.id)
+                        .onSuccess { wallpapers ->
+                            if (generation != albumGeneration) return@onSuccess
+                            _state.update {
+                                it.copy(albumContent = AlbumContentState(wallpapers = wallpapers, isLoading = false))
+                            }
+                        }.onFailure { error ->
+                            if (generation != albumGeneration) return@onFailure
+                            _state.update {
+                                it.copy(
+                                    albumContent =
+                                        AlbumContentState(
+                                            isLoading = false,
+                                            error = error.toBrowseError(),
+                                            errorDetail = error.failureDetail(),
+                                        ),
+                                )
+                            }
+                        }
+                }
+        }
+
+        /**
+         * Search, album-style: the source's own answer — albums the user
+         * drills into. The WallpaperQuery is deliberately left untouched;
+         * the album UI does not run through the flat grid's pipeline.
+         */
+        private fun startAlbumSearch(text: String) {
+            albumJob?.cancel()
+            val generation = ++albumGeneration
+            _state.update {
+                it.copy(
+                    albumScope = AlbumScope.Search(text),
+                    albumContent = AlbumContentState(isLoading = true),
+                    suggestions = emptyList(),
+                    suggestLoading = false,
+                )
+            }
+            val sourceId = _state.value.selectedSourceId ?: return
+            albumJob =
+                viewModelScope.launch {
+                    sources
+                        .searchAlbums(sourceId, text)
+                        .onSuccess { albums ->
+                            if (generation != albumGeneration) return@onSuccess
+                            _state.update { it.copy(albumContent = AlbumContentState(albums = albums, isLoading = false)) }
+                        }.onFailure { error ->
+                            if (generation != albumGeneration) return@onFailure
+                            _state.update {
+                                it.copy(
+                                    albumContent =
+                                        AlbumContentState(
+                                            isLoading = false,
+                                            error = error.toBrowseError(),
+                                            errorDetail = error.failureDetail(),
+                                        ),
+                                )
+                            }
+                        }
+                }
+        }
+
+        /**
+         * The system back inside the album UI: unwinds the scope stack —
+         * an album returns to the category it was opened from (when there
+         * was one), a category or a search returns to Home. Returns false
+         * on Home itself so the caller lets the system back leave the
+         * screen. Cached listings restore instantly; only an uncached
+         * category refetches.
+         */
+        fun onAlbumBack(): Boolean {
+            val scope = _state.value.albumScope
+            if (scope is AlbumScope.Home) return false
+            albumJob?.cancel()
+            when (scope) {
+                is AlbumScope.Album -> {
+                    val category = scope.fromCategory
+                    if (category != null) {
+                        val cached = categoryAlbumsCache[category.id]
+                        _state.update {
+                            it.copy(
+                                albumScope = AlbumScope.Category(category),
+                                albumContent =
+                                    if (cached != null) {
+                                        AlbumContentState(albums = cached, isLoading = false)
+                                    } else {
+                                        AlbumContentState(isLoading = true)
+                                    },
+                            )
+                        }
+                        if (cached == null) loadCategoryAlbums(category)
+                    } else {
+                        backToAlbumHome()
+                    }
+                }
+                is AlbumScope.Category, is AlbumScope.Search -> backToAlbumHome()
+                is AlbumScope.Home -> return false
+            }
+            return true
+        }
+
+        /** Restores the Home scope from its cache, refetching only never-loaded homes. */
+        private fun backToAlbumHome() {
+            _state.update {
+                it.copy(
+                    albumScope = AlbumScope.Home,
+                    albumContent =
+                        AlbumContentState(
+                            albums = homeAlbumsCache,
+                            isLoading = !homeAlbumsLoaded,
+                        ),
+                )
+            }
+            if (!homeAlbumsLoaded) loadHomeAlbums()
+        }
+
+        /** The album grid's retry: reloads whatever the open scope serves. */
+        private fun retryAlbumContent() {
+            when (val scope = _state.value.albumScope) {
+                is AlbumScope.Home -> loadHomeAlbums()
+                is AlbumScope.Category -> loadCategoryAlbums(scope.category)
+                is AlbumScope.Album -> loadAlbumWallpapers(scope)
+                is AlbumScope.Search -> startAlbumSearch(scope.query)
+            }
         }
 
         /**
