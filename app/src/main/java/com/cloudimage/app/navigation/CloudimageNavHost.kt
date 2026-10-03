@@ -21,6 +21,7 @@ import com.cloudimage.feature.extensions.ExtensionsScreen
 import com.cloudimage.feature.extensions.InstalledExtensionsScreen
 import com.cloudimage.feature.extensions.RepoDetailScreen
 import com.cloudimage.feature.library.LibraryScreen
+import com.cloudimage.feature.search.SearchScreen
 import com.cloudimage.feature.settings.SettingsScreen
 
 /**
@@ -70,6 +71,13 @@ fun CloudimageNavHost(
         }
         composable(TopLevelDestination.LIBRARY.route) {
             LibraryScreen(
+                onWallpaperClick = { wallpapers: List<Wallpaper>, index: Int ->
+                    openWallpaper(wallpapers, index)
+                },
+            )
+        }
+        composable(TopLevelDestination.SEARCH.route) {
+            SearchScreen(
                 onWallpaperClick = { wallpapers: List<Wallpaper>, index: Int ->
                     openWallpaper(wallpapers, index)
                 },

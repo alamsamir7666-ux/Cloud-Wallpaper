@@ -4,6 +4,7 @@ import androidx.annotation.StringRes
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -11,6 +12,7 @@ import com.cloudimage.app.R
 import com.cloudimage.feature.browse.BrowseDestination
 import com.cloudimage.feature.extensions.ExtensionsDestination
 import com.cloudimage.feature.library.LibraryDestination
+import com.cloudimage.feature.search.SearchDestination
 import com.cloudimage.feature.settings.SettingsDestination
 
 enum class TopLevelDestination(
@@ -27,6 +29,11 @@ enum class TopLevelDestination(
         route = LibraryDestination.route,
         labelRes = R.string.tab_library,
         icon = Icons.Rounded.PhotoLibrary,
+    ),
+    SEARCH(
+        route = SearchDestination.route,
+        labelRes = R.string.tab_search,
+        icon = Icons.Rounded.Search,
     ),
     EXTENSIONS(
         route = ExtensionsDestination.route,
