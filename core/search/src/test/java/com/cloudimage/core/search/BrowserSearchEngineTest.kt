@@ -108,10 +108,19 @@ class BrowserSearchEngineTest {
             assertEquals(true, page.hasMore)
             assertEquals(1, page.page)
             val first = page.results[0]
+            val expectedBase = server.url("/").toString().trimEnd('/')
             assertEquals("gs:https://z-cdn.example.com/mountain.jpg", first.id)
             assertEquals(GLOBAL_SEARCH_PROVIDER_ID, first.providerId)
-            assertEquals("https://z-cdn.example.com/mountain.jpg", first.thumbUrl)
-            assertEquals(first.thumbUrl, first.fullUrl)
+            // v1.2.1: thumbnails ride the backend's image proxy at 640px.
+            assertTrue(
+                "thumbUrl should ride the proxy at 640px, was: ${first.thumbUrl}",
+                first.thumbUrl.startsWith("$expectedBase/api/proxy-image?"),
+            )
+            assertTrue(first.thumbUrl.contains("url="))
+            assertTrue(first.thumbUrl.contains("w=640"))
+            // The full URL stays as the original — quality is the whole
+            // point of the detail screen, downloads and share.
+            assertEquals("https://z-cdn.example.com/mountain.jpg", first.fullUrl)
             assertEquals("Unsplash", first.title)
             assertEquals(3000, first.width)
             assertEquals(2003, first.height)
@@ -329,5 +338,51 @@ class BrowserSearchEngineTest {
             val outcome = deadEngine.search("q", 1, GlobalSearchFilters())
 
             assertEquals(ImageSearchError.NETWORK, (outcome as Failure).error)
+        }
+
+    @Test
+    fun networkFailureInvalidatesTheConfigSoTheNextSearchReFetches() =
+        runTest {
+            // Stand up a mock config server that records each fetch.
+            val deadSearchServer = MockWebServer().apply { start() }
+            val deadUrl = deadSearchServer.url("/").toString().trimEnd('/')
+            deadSearchServer.shutdown() // now deadUrl is unreachable
+
+            val configServer =
+                MockWebServer().apply {
+                    // Two enqueued responses: one per expected fetch.
+                    enqueue(MockResponse().setBody("""{"baseUrl": "$deadUrl"}"""))
+                    enqueue(MockResponse().setBody("""{"baseUrl": "$deadUrl"}"""))
+                    start()
+                }
+
+            val config =
+                SearchBackendConfig(
+                    baseClient = OkHttpClient(),
+                    json = json,
+                    remoteUrl = configServer.url("/config.json").toString(),
+                    defaultBaseUrl = "http://127.0.0.1:1",
+                )
+            val engine =
+                BrowserSearchEngine(
+                    config = config,
+                    baseClient = OkHttpClient(),
+                    json = json,
+                    // overrideBaseUrl stays null — we want config to drive the URL.
+                )
+
+            // First search: fetches config (1), gets deadUrl, search fails
+            // with NETWORK, config is invalidated.
+            val first = engine.search("q", 1, GlobalSearchFilters())
+            assertEquals(ImageSearchError.NETWORK, (first as Failure).error)
+            assertEquals(1, configServer.requestCount)
+
+            // Second search: config is stale (invalidate() reset the TTL),
+            // so baseUrl() re-fetches (2).
+            val second = engine.search("q", 1, GlobalSearchFilters())
+            assertEquals(ImageSearchError.NETWORK, (second as Failure).error)
+            assertEquals(2, configServer.requestCount)
+
+            configServer.shutdown()
         }
 }

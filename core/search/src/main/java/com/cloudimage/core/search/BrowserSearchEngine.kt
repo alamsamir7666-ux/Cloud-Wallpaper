@@ -40,6 +40,14 @@ import java.util.concurrent.TimeUnit
  * extra tier token stacks with them — every page then leans toward the
  * size the user asked for, while the exact verification still refuses
  * anything the dims cannot prove.
+ *
+ * v1.2.1: the bridge's address is mortal, so failures that a live bridge
+ * would not produce (transport errors, timeouts, HTTP error statuses)
+ * now tell the [SearchBackendConfig] it is stale — the next search
+ * re-fetches the remote override and follows a republished address
+ * without waiting for a process restart. The grid's thumbnails also ride
+ * the backend's image proxy at card width, so the phone stops paying
+ * full-resolution bytes for images it shows at a few hundred pixels.
  */
 class BrowserSearchEngine(
     private val config: SearchBackendConfig,
@@ -77,6 +85,8 @@ class BrowserSearchEngine(
                 )
             }
             val base = (overrideBaseUrl ?: config.baseUrl()).trimEnd('/')
+            // base is captured here so the parser can build proxy thumb
+            // URLs that share the bridge that served the search results.
             val payload =
                 json.encodeToString(
                     SearchRequestDto.serializer(),
@@ -97,11 +107,20 @@ class BrowserSearchEngine(
                 try {
                     slowClient.newCall(request).execute()
                 } catch (e: SocketTimeoutException) {
+                    // A bridge that cannot answer inside 160 s is not slow —
+                    // it is gone. Mark the config stale so the next search
+                    // re-fetches the remote override before trusting the
+                    // address again.
+                    if (overrideBaseUrl == null) config.invalidate()
                     return@withContext ImageSearchResult.Failure(
                         error = ImageSearchError.TIMEOUT,
                         detail = e.message,
                     )
                 } catch (e: IOException) {
+                    // UnknownHostException and friends are the exact
+                    // signature of a re-published tunnel: the old address
+                    // simply stops resolving. Same cure as a timeout.
+                    if (overrideBaseUrl == null) config.invalidate()
                     return@withContext ImageSearchResult.Failure(
                         error = ImageSearchError.NETWORK,
                         detail = e.message,
@@ -114,13 +133,20 @@ class BrowserSearchEngine(
                     answered.code == HTTP_TOO_MANY_REQUESTS ->
                         ImageSearchResult.Failure(error = ImageSearchError.RATE_LIMITED)
 
-                    !answered.isSuccessful ->
+                    !answered.isSuccessful -> {
+                        // The recycled workspace answered 410 Gone; a dead
+                        // tunnel answers 5xx. A live bridge answers 2xx (or
+                        // 429 above) — so anything else means the address
+                        // is suspect and the config is stale until the
+                        // next fetch proves otherwise.
+                        if (overrideBaseUrl == null) config.invalidate()
                         ImageSearchResult.Failure(
                             error = ImageSearchError.SERVER,
                             detail = "HTTP ${answered.code}",
                         )
+                    }
 
-                    else -> parse(body, filters)
+                    else -> parse(body, filters, base)
                 }
             }
         }
@@ -128,6 +154,7 @@ class BrowserSearchEngine(
     private fun parse(
         body: String,
         filters: GlobalSearchFilters,
+        base: String,
     ): ImageSearchResult {
         val dto =
             try {
@@ -149,7 +176,7 @@ class BrowserSearchEngine(
                 .asSequence()
                 .filter { it.originalUrl.isNotBlank() }
                 .distinctBy { it.originalUrl }
-                .map { it.toWallpaper() }
+                .map { it.toWallpaper(base) }
                 .filter { filters.sizeTier.matches(it.width, it.height) }
                 .toList()
         return ImageSearchResult.Success(
@@ -162,11 +189,16 @@ class BrowserSearchEngine(
         )
     }
 
-    private fun ImageResultDto.toWallpaper(): Wallpaper =
+    private fun ImageResultDto.toWallpaper(base: String): Wallpaper =
         Wallpaper(
             id = "$ID_PREFIX$originalUrl",
             providerId = GLOBAL_SEARCH_PROVIDER_ID,
-            thumbUrl = originalUrl,
+            // v1.2.1: thumbnails ride the backend's image proxy at card
+            // width — the phone stops paying for full-resolution originals
+            // it will only ever show a few hundred pixels wide. The detail
+            // screen, downloads and share keep the untouched original,
+            // where quality is the whole point.
+            thumbUrl = buildProxyUrl(base, originalUrl, THUMB_WIDTH),
             fullUrl = originalUrl,
             // The backend searches with ranking off for speed, so captions
             // arrive empty and `source` — the site's name — is the title
@@ -229,6 +261,13 @@ class BrowserSearchEngine(
         private const val GL = "us"
         private const val RESULTS_PER_PAGE = 20
         private const val HTTP_TOO_MANY_REQUESTS = 429
+
+        /**
+         * The width the grid's thumbnails ask the backend proxy for — the
+         * Medium variant's own 640, comfortably above a 2-column card on
+         * a dense phone while a fraction of the original's bytes.
+         */
+        private const val THUMB_WIDTH = 640
 
         /** The backend's own CLI budget is 120s; read timeout sits above it. */
         private const val CONNECT_TIMEOUT_S = 15L

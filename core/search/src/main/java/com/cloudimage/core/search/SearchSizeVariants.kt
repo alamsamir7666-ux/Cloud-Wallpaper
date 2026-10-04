@@ -98,11 +98,17 @@ fun Wallpaper.withSizeVariant(variant: SearchSizeVariant): Wallpaper =
     }
 
 /** The backend proxy's contract: `?url=&w=&q=&fmt=`, JPEG at quality 90. */
-private fun proxyUrl(
+internal fun buildProxyUrl(
     base: String,
     url: String,
     width: Int,
 ): String = "$base/$PROXY_PATH?url=${encodeQueryValue(url)}&w=$width&q=$JPEG_QUALITY&fmt=jpeg"
+
+private fun proxyUrl(
+    base: String,
+    url: String,
+    width: Int,
+): String = buildProxyUrl(base, url, width)
 
 /**
  * Percent-encoding for one query value — [URLEncoder]'s form-data `+` for

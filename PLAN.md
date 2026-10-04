@@ -1049,3 +1049,60 @@ Cloudimage), third-party web-search suggestions.
   and recovered per the handoff recipe — JDK is now Temurin
   17.0.12 at /home/z/jdks/jdk-17.0.12 (the Azul CDN URL 404s now).
   CI green on f9f27f6.
+
+- **2026-10-04 — v1.2.0 SHIPPED (global image search: a field, the
+  whole web behind it).** Three commits land a new module pair
+  (`:core:search` + `:feature:search`) that adds a Search tab to
+  the bottom nav. The engine talks to a "Browser repo system"
+  backend bridge that wraps the z-ai image-search service — the
+  service is reachable only inside the sandbox, so the bridge
+  exposes it over HTTPS. Pagination is query-modifier based: each
+  page re-searches the query with a different modifier appended
+  ("hd", "high resolution", "wallpaper", "4k"…) to surface a
+  fresh batch, and the caller deduplicates by URL. Result ids
+  are derived from the image URL, so the same image found under
+  two modifiers collapses into one card. Download sizes (Small
+  320 / Medium 640 / Large 1024 / HD 1920 / Original) ride the
+  backend's image proxy; the size tier also biases the query
+  itself, while the exact client-side verification refuses
+  anything the dimensions cannot prove. The bridge's address is
+  a deployment constant that can change when the sandbox is
+  recycled, so `SearchBackendConfig` prefers a remote override
+  fetched from the app's own GitHub repo — editing that one
+  file repoints every installed app instantly. The shipped
+  address (`https://ws-a49020ba-862e-49d0-bdae-c0a4764d68ea.space-z.ai`)
+  was a workspace URL that answered 410 by ship time, then a
+  Cloudflare Quick Tunnel URL (`swimming-preference-cosmetics-
+  enabled.trycloudflare.com`) that died with the tunnel process
+  — both fixed in v1.2.1.
+
+- **2026-10-04 — v1.2.1 SHIPPED (the bridge that heals itself).**
+  A dead backend address no longer strands a running app. Three
+  fixes ship together: (a) `SearchBackendConfig` no longer caches
+  the remote override for the whole process — a 10-minute TTL
+  plus an `invalidate()` call from the engine on transport
+  failures, timeouts and HTTP error statuses forces the next
+  search to re-fetch `search-backend.json` and follow a
+  republished address without waiting for a process restart or
+  an app update. (b) The grid's thumbnails now ride the backend's
+  `api/proxy-image?url=…&w=640` instead of loading full-resolution
+  originals — the phone stops paying for pixels it will only ever
+  show a few hundred wide. The detail screen, downloads and share
+  keep the untouched original, where quality is the whole point.
+  (c) `search-backend.json` is repointed at a working bridge
+  address; the bridge server itself (`scripts/search-bridge/
+  server.js`) is committed to the repo so the operator can run
+  it on demand. The bridge wraps the z-ai image-search CLI and
+  exposes the two routes the app expects (`POST /api/search` and
+  `GET /api/proxy-image`), with the OSS-hosted result URLs the
+  SDK returns being reachable from any phone. versionCode 35 /
+  versionName "1.2.1". Tests: `SearchBackendConfigTest` covers
+  the TTL and invalidate paths (fresh-within-TTL reuses the
+  fetch; past-TTL re-fetches; invalidate forces re-fetch even
+  when fresh; invalidate falls back to the default until the
+  next fetch succeeds); `BrowserSearchEngineTest` covers the
+  proxy thumbnail URL (starts with `{base}/api/proxy-image?`,
+  carries `url=` and `w=640`) and the invalidate-on-network-
+  failure path (two searches against a dead bridge trigger two
+  config fetches — the second one only happens because the
+  first failure invalidated the cache).
