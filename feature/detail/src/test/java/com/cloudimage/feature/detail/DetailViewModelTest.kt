@@ -18,6 +18,9 @@ import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.core.model.WallpaperDetails
 import com.cloudimage.core.network.NetworkError
 import com.cloudimage.core.network.NetworkResult
+import com.cloudimage.core.search.GLOBAL_SEARCH_PROVIDER_ID
+import com.cloudimage.core.search.SearchBackendConfig
+import com.cloudimage.core.search.SearchVariantName
 import com.cloudimage.core.testing.FakeDownloadsRepository
 import com.cloudimage.core.testing.FakeFavoritesRepository
 import com.cloudimage.core.testing.FakeHistoryRepository
@@ -30,6 +33,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -52,6 +57,27 @@ class DetailViewModelTest {
     private val downloads = FakeDownloadsRepository()
     private val sources = FakeWallpaperSources()
     private val viewerSession = ViewerSession()
+
+    /** The backend config as tests need it: the remote fetch refuses instantly, the default stands. */
+    private val backendConfig =
+        SearchBackendConfig(
+            baseClient = OkHttpClient(),
+            json = Json { ignoreUnknownKeys = true },
+            remoteUrl = "http://127.0.0.1:1/config.json",
+            defaultBaseUrl = "https://bridge.test",
+        )
+
+    /** A search result the way the engine mints them. */
+    private val searchResult =
+        Wallpaper(
+            id = "gs:https://z-cdn.example.com/mountain.jpg",
+            providerId = GLOBAL_SEARCH_PROVIDER_ID,
+            thumbUrl = "https://z-cdn.example.com/mountain.jpg",
+            fullUrl = "https://z-cdn.example.com/mountain.jpg",
+            title = "Unsplash",
+            width = 2560,
+            height = 1600,
+        )
 
     private val wallpaper =
         Wallpaper(
@@ -83,6 +109,7 @@ class DetailViewModelTest {
             savedStateHandle = SavedStateHandle(mapOf(DetailDestination.arg to encoded)),
             applier = applier,
             saver = saver,
+            backendConfig = backendConfig,
             favoritesRepository = favorites,
             historyRepository = history,
             downloadsRepository = downloads,
@@ -569,6 +596,85 @@ class DetailViewModelTest {
             viewModel.onSave()
             advanceUntilIdle()
             assertEquals(OperationState.Succeeded, viewModel.state.value.saveOp)
+        }
+
+    @Test
+    fun searchResultsExposeTheProxyBackedSizeVariants() =
+        runTest {
+            val viewModel = createViewModel(DetailDestination.encode(searchResult))
+            advanceUntilIdle()
+
+            val variants = viewModel.state.value.sizeVariants
+            assertEquals(
+                listOf(
+                    SearchVariantName.SMALL,
+                    SearchVariantName.MEDIUM,
+                    SearchVariantName.LARGE,
+                    SearchVariantName.HD,
+                    SearchVariantName.ORIGINAL,
+                ),
+                variants.map { it.name },
+            )
+            assertEquals(
+                "https://bridge.test/api/proxy-image?url=https%3A%2F%2Fz-cdn.example.com%2Fmountain.jpg&w=320&q=90&fmt=jpeg",
+                variants.first().downloadUrl,
+            )
+            assertEquals(searchResult.fullUrl, variants.last().downloadUrl)
+        }
+
+    @Test
+    fun unverifiedSizesOfferOnlyTheOriginalSoTheSaveStaysDirect() =
+        runTest {
+            val viewModel =
+                createViewModel(
+                    DetailDestination.encode(searchResult.copy(width = null, height = null)),
+                )
+            advanceUntilIdle()
+
+            assertEquals(
+                listOf(SearchVariantName.ORIGINAL),
+                viewModel.state.value.sizeVariants
+                    .map { it.name },
+            )
+        }
+
+    @Test
+    fun otherProvidersExposeNoVariants() =
+        runTest {
+            val viewModel = createViewModel(DetailDestination.encode(wallpaper))
+            advanceUntilIdle()
+
+            assertTrue(
+                viewModel.state.value.sizeVariants
+                    .isEmpty(),
+            )
+        }
+
+    @Test
+    fun savingAVariantDownloadsTheProxyUrlAndRecordsTheOriginalIdentity() =
+        runTest {
+            val viewModel = createViewModel(DetailDestination.encode(searchResult))
+            advanceUntilIdle()
+            val large = viewModel.state.value.sizeVariants[2]
+
+            viewModel.events.test {
+                viewModel.onSaveVariant(large)
+                advanceUntilIdle()
+
+                assertEquals(OperationState.Succeeded, viewModel.state.value.saveOp)
+                // The saver saw the proxy URL carrying the variant's size...
+                val saved = saver.galleryCalls.single()
+                assertEquals(large.downloadUrl, saved.fullUrl)
+                assertEquals(1024, saved.width)
+                assertEquals(640, saved.height)
+                // ...while the download record keys on the image's identity.
+                assertEquals(listOf(searchResult.id), downloads.downloads.map { it.wallpaper.id })
+                assertEquals(
+                    listOf(HistoryAction.VIEWED, HistoryAction.DOWNLOADED),
+                    history.entries.map { it.action },
+                )
+                assertEquals(DetailEvent.WallpaperSaved, awaitItem())
+            }
         }
 
     @Test

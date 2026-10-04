@@ -35,6 +35,11 @@ import java.util.concurrent.TimeUnit
  * Everything the app needs to know about a result is already in the
  * backend's answer — including exact pixel dimensions — which keeps the
  * [SearchSizeTier] an exact client-side verification rather than a hope.
+ * A chosen tier also biases the query itself (see [SearchSizeTier.queryToken]):
+ * the backend's own pagination already rides query modifiers, so an
+ * extra tier token stacks with them — every page then leans toward the
+ * size the user asked for, while the exact verification still refuses
+ * anything the dims cannot prove.
  */
 class BrowserSearchEngine(
     private val config: SearchBackendConfig,
@@ -75,7 +80,11 @@ class BrowserSearchEngine(
             val payload =
                 json.encodeToString(
                     SearchRequestDto.serializer(),
-                    SearchRequestDto(query = query, count = RESULTS_PER_PAGE, page = page),
+                    SearchRequestDto(
+                        query = filters.sizeTier.queryToken()?.let { "$query $it" } ?: query,
+                        count = RESULTS_PER_PAGE,
+                        page = page,
+                    ),
                 )
             val request =
                 Request

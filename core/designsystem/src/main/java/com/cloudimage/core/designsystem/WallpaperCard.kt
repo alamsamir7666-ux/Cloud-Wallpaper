@@ -40,6 +40,10 @@ import com.cloudimage.core.model.Wallpaper
  * CloudStream's per-result `apiName` analog — so provenance stays visible
  * wherever rows from different sources interleave. Null (the default)
  * renders no overlay.
+ *
+ * [dimensionLabel] (v1.2.0) overlays the image's true pixel size at the
+ * opposite corner — the global search's Google-Images-style "1920 × 1080".
+ * Null (the default) renders nothing, exactly as before.
  */
 @Composable
 fun WallpaperCard(
@@ -47,6 +51,7 @@ fun WallpaperCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     providerLabel: String? = null,
+    dimensionLabel: String? = null,
 ) {
     val description = stringResource(R.string.wallpaper_card, wallpaper.id)
     Card(
@@ -86,6 +91,22 @@ fun WallpaperCard(
                 ) {
                     Text(
                         text = providerLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 3.dp, bottom = 3.dp),
+                    )
+                }
+            }
+            if (dimensionLabel != null) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.55f),
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(topStart = 10.dp),
+                    modifier = Modifier.align(Alignment.BottomEnd),
+                ) {
+                    Text(
+                        text = dimensionLabel,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,

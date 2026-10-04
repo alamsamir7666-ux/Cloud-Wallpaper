@@ -107,6 +107,8 @@ import coil.request.ImageRequest
 import com.cloudimage.core.data.repository.ApplyTarget
 import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.core.model.WallpaperDetails
+import com.cloudimage.core.search.SearchSizeVariant
+import com.cloudimage.core.search.SearchVariantName
 import java.io.File
 import java.util.Locale
 
@@ -138,6 +140,7 @@ fun DetailScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showTargetSheet by remember { mutableStateOf(false) }
     var showInfoSheet by remember { mutableStateOf(false) }
+    var showSizeSheet by remember { mutableStateOf(false) }
     val wallpaper = state.wallpaper
 
     // The browsing list: the grid this viewer was opened from (parked in
@@ -250,7 +253,13 @@ fun DetailScreen(
                 },
                 onOpenInfo = { showInfoSheet = true },
                 onSetWallpaper = { showTargetSheet = true },
-                onSave = viewModel::onSave,
+                // A search result with honest smaller sizes to offer opens
+                // the size picker instead of saving outright; everything
+                // else — every other wallpaper, an unverifiable size —
+                // downloads exactly as it always did.
+                onSave = {
+                    if (state.sizeVariants.size > 1) showSizeSheet = true else viewModel.onSave()
+                },
                 onShare = viewModel::onShare,
                 modifier =
                     Modifier
@@ -284,6 +293,16 @@ fun DetailScreen(
             wallpaper = wallpaper,
             details = state.details,
             onDismiss = { showInfoSheet = false },
+        )
+    }
+    if (showSizeSheet && wallpaper != null) {
+        SizePickerSheet(
+            variants = state.sizeVariants,
+            onPick = { variant ->
+                showSizeSheet = false
+                viewModel.onSaveVariant(variant)
+            },
+            onDismiss = { showSizeSheet = false },
         )
     }
 }
@@ -765,6 +784,81 @@ private fun TargetSheet(
         Spacer(Modifier.height(24.dp))
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SizePickerSheet(
+    variants: List<SearchSizeVariant>,
+    onPick: (SearchSizeVariant) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Text(
+            text = stringResource(R.string.detail_size_title),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+        )
+        // Every row IS the download: the user tapped the download button to
+        // get here, so picking a size starts it — one tap, no confirm step.
+        variants.forEach { variant ->
+            ListItem(
+                headlineContent = { Text(variant.name.label()) },
+                supportingContent = { Text(variant.subtitle()) },
+                trailingContent = {
+                    Icon(Icons.Rounded.Download, contentDescription = null)
+                },
+                modifier =
+                    Modifier
+                        .clickable { onPick(variant) }
+                        .testTag("detail:size:${variant.name}"),
+            )
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+/** The user-facing name of a download size. */
+@Composable
+private fun SearchVariantName.label(): String =
+    stringResource(
+        when (this) {
+            SearchVariantName.SMALL -> R.string.detail_size_small
+            SearchVariantName.MEDIUM -> R.string.detail_size_medium
+            SearchVariantName.LARGE -> R.string.detail_size_large
+            SearchVariantName.HD -> R.string.detail_size_hd
+            SearchVariantName.ORIGINAL -> R.string.detail_size_original
+        },
+    )
+
+/**
+ * "1024 × 640 · ~320 KB · Server-resized JPEG" — the size, the honest
+ * estimate (dropped when unknowable), and where those pixels come from.
+ */
+@Composable
+private fun SearchSizeVariant.subtitle(): String {
+    val parts =
+        buildList {
+            add("$width × $height")
+            if (estKb > 0) add(stringResource(R.string.detail_size_estimate, formatEstimateKb(estKb)))
+            add(
+                stringResource(
+                    if (isOriginal) R.string.detail_size_original_hint else R.string.detail_size_scaled_hint,
+                ),
+            )
+        }
+    return parts.joinToString(" · ")
+}
+
+/** An estimate the way estimates read: "~320 KB", "~1.9 MB" — never false precision. */
+private fun formatEstimateKb(kb: Int): String =
+    if (kb >= 1024) {
+        String.format(Locale.US, "%.1f MB", kb / 1024.0)
+    } else {
+        "$kb KB"
+    }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable

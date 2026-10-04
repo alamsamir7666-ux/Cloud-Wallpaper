@@ -4,6 +4,8 @@ import com.cloudimage.core.search.ImageSearchResult.Failure
 import com.cloudimage.core.search.ImageSearchResult.Success
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -193,6 +195,57 @@ class BrowserSearchEngineTest {
             assertEquals(
                 listOf("gs:https://z-cdn.example.com/mountain.jpg", "gs:https://z-cdn.example.com/stringy.jpg"),
                 page.results.map { it.id },
+            )
+        }
+
+    @Test
+    fun aTierBiasesTheQueryTowardItsOwnModifiers() =
+        runTest {
+            val biasByTier =
+                mapOf(
+                    SearchSizeTier.HD to "mountain hd",
+                    SearchSizeTier.FHD to "mountain high resolution",
+                    SearchSizeTier.QHD to "mountain 4k",
+                    SearchSizeTier.UHD to "mountain 4k",
+                )
+            biasByTier.forEach { (tier, biasedQuery) ->
+                server.enqueue(MockResponse().setBody(onePageOfResults).setHeader("Content-Type", "application/json"))
+                engine.search("mountain", 1, GlobalSearchFilters(sizeTier = tier))
+
+                val sent = server.takeRequest().body.readUtf8()
+                assertEquals(
+                    biasedQuery,
+                    Json
+                        .parseToJsonElement(sent)
+                        .jsonObject["query"]!!
+                        .jsonPrimitive.content,
+                )
+            }
+        }
+
+    @Test
+    fun theAnyTierSendsTheQueryVerbatim() =
+        runTest {
+            server.enqueue(MockResponse().setBody(onePageOfResults).setHeader("Content-Type", "application/json"))
+
+            engine.search("mountain mist", 3, GlobalSearchFilters(sizeTier = SearchSizeTier.ANY))
+
+            val sent = server.takeRequest().body.readUtf8()
+            assertEquals(
+                "mountain mist",
+                Json
+                    .parseToJsonElement(sent)
+                    .jsonObject["query"]!!
+                    .jsonPrimitive.content,
+            )
+            // The page number rides alongside, untouched by the biasing.
+            assertEquals(
+                3,
+                Json
+                    .parseToJsonElement(sent)
+                    .jsonObject["page"]!!
+                    .jsonPrimitive.content
+                    .toInt(),
             )
         }
 

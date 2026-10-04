@@ -47,4 +47,14 @@
     <string name="detail_more_like_this">More like this</string>
     <string name="detail_loading_image">Loading image</string>
     <string name="detail_loading_image_percent">Loading image, %1$d%%</string>
+
+    <string name="detail_size_title">Choose download size</string>
+    <string name="detail_size_small">Small</string>
+    <string name="detail_size_medium">Medium</string>
+    <string name="detail_size_large">Large</string>
+    <string name="detail_size_hd">HD</string>
+    <string name="detail_size_original">Original</string>
+    <string name="detail_size_original_hint">Full resolution</string>
+    <string name="detail_size_scaled_hint">Server-resized JPEG</string>
+    <string name="detail_size_estimate">~%1$s</string>
 </resources>

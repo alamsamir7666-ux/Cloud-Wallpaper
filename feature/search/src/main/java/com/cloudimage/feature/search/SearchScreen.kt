@@ -331,6 +331,9 @@ private fun ResultsGrid(
                 // Google-Images-style provenance: every card names the site it
                 // came from, so the grid reads as the web, not as one source.
                 providerLabel = wallpaper.title,
+                // Google-Images-style dimensions: the true pixel size a card
+                // could state — unknown sizes stay silent rather than guess.
+                dimensionLabel = wallpaper.dimensionsLabel(),
             )
         }
 
@@ -545,3 +548,10 @@ private fun SearchSizeTier.labelRes(): Int =
 
 private const val PREFETCH_BUFFER = 8
 private const val SLOW_HINT_DELAY_MS = 8_000L
+
+/** "1920 × 1080" when the engine could verify the size; null when it could not. */
+private fun Wallpaper.dimensionsLabel(): String? {
+    val w = width
+    val h = height
+    return if (w != null && h != null && w > 0 && h > 0) "$w × $h" else null
+}

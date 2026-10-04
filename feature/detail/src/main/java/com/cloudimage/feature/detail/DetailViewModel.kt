@@ -22,6 +22,11 @@ import com.cloudimage.core.model.WallpaperDetails
 import com.cloudimage.core.model.WallpaperQuery
 import com.cloudimage.core.model.savedMimeType
 import com.cloudimage.core.network.NetworkResult
+import com.cloudimage.core.search.SearchBackendConfig
+import com.cloudimage.core.search.SearchSizeVariant
+import com.cloudimage.core.search.buildSizeVariants
+import com.cloudimage.core.search.isGlobalSearchResult
+import com.cloudimage.core.search.withSizeVariant
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -144,6 +149,14 @@ data class DetailUiState(
      * sheet degrades to the grid item's own values either way.
      */
     val details: WallpaperDetails? = null,
+    /**
+     * The download sizes the current search result offers (v1.2.0) —
+     * empty for every other wallpaper and until the backend's address
+     * resolves. One entry (the Original alone) means the engine could
+     * not verify the image's size, so there is nothing honest to choose
+     * between and the download proceeds directly.
+     */
+    val sizeVariants: List<SearchSizeVariant> = emptyList(),
 )
 
 /**
@@ -168,6 +181,7 @@ class DetailViewModel
         savedStateHandle: SavedStateHandle,
         private val applier: WallpaperApplier,
         private val saver: WallpaperSaver,
+        private val backendConfig: SearchBackendConfig,
         private val favoritesRepository: FavoritesRepository,
         private val historyRepository: HistoryRepository,
         private val downloadsRepository: DownloadsRepository,
@@ -201,6 +215,10 @@ class DetailViewModel
                 observeWallpaperFlags()
                 loadsJob =
                     viewModelScope.launch {
+                        // The size variants come first: they wait on nothing
+                        // the sources pipeline owes, so a slow or stalled
+                        // source list cannot delay the download sizes.
+                        loadSizeVariants(wallpaper)
                         loadMoreLikeThis(wallpaper)
                         loadDetails(wallpaper)
                     }
@@ -239,12 +257,14 @@ class DetailViewModel
                     saveOp = OperationState.Idle,
                     shareOp = OperationState.Idle,
                     downloadProgress = null,
+                    sizeVariants = emptyList(),
                 )
             }
             loadsJob?.cancel()
             loadsJob =
                 viewModelScope.launch {
                     historyRepository.record(wallpaper, HistoryAction.VIEWED)
+                    loadSizeVariants(wallpaper)
                     loadMoreLikeThis(wallpaper)
                     loadDetails(wallpaper)
                 }
@@ -304,20 +324,40 @@ class DetailViewModel
          */
         fun onSave() {
             val wallpaper = _state.value.wallpaper ?: return
+            performSave(wallpaper)
+        }
+
+        /**
+         * Saves a chosen size of a search result (v1.2.0): the variant rides
+         * the backend's image proxy, which downscales server-side so the
+         * phone pays only for the pixels it asked for. The record — the
+         * Library's Downloaded tab, this button's checkmark — still keys on
+         * the image's identity, which a size choice never changes; apply and
+         * share keep using the full-resolution original, where quality is
+         * the whole point.
+         */
+        fun onSaveVariant(variant: SearchSizeVariant) {
+            val wallpaper = _state.value.wallpaper ?: return
+            performSave(wallpaper.withSizeVariant(variant))
+        }
+
+        /** The one save path every caller funnels through. */
+        private fun performSave(target: Wallpaper) {
+            val original = _state.value.wallpaper ?: return
             if (_state.value.saveOp is OperationState.Running) return
             if (_state.value.isDownloaded) return
             viewModelScope.launch {
                 _state.update { it.copy(saveOp = OperationState.Running, downloadProgress = null) }
                 when (
                     val result =
-                        saver.saveToGallery(wallpaper) { bytesRead, totalBytes ->
+                        saver.saveToGallery(target) { bytesRead, totalBytes ->
                             _state.update { it.copy(downloadProgress = DownloadProgress(bytesRead, totalBytes)) }
                         }
                 ) {
                     is SaveResult.Success -> {
                         _state.update { it.copy(saveOp = OperationState.Succeeded, downloadProgress = null) }
-                        historyRepository.record(wallpaper, HistoryAction.DOWNLOADED)
-                        downloadsRepository.recordDownload(wallpaper)
+                        historyRepository.record(original, HistoryAction.DOWNLOADED)
+                        downloadsRepository.recordDownload(original)
                         _events.tryEmit(DetailEvent.WallpaperSaved)
                     }
                     is SaveResult.Failure -> {
@@ -393,6 +433,25 @@ class DetailViewModel
                 is NetworkResult.Failure -> Unit
                 is NetworkResult.Success -> _state.update { it.copy(details = outcome.value) }
             }
+        }
+
+        /**
+         * Resolves the download sizes a search result offers (v1.2.0). It
+         * rides the same per-process config fetch the engine's prewarm
+         * started, so it normally resolves instantly; if this screen opens
+         * before that lands, the download button simply proceeds at the
+         * original size until the variants arrive. Non-search wallpapers
+         * expose nothing — their sources serve exactly one file.
+         */
+        private suspend fun loadSizeVariants(wallpaper: Wallpaper) {
+            if (!wallpaper.isGlobalSearchResult()) return
+            val baseUrl = backendConfig.baseUrl()
+            // The config fetch is a blocking call a page swap cannot
+            // interrupt — a departed page's variants must never land on the
+            // one that replaced it.
+            val current = _state.value.wallpaper
+            if (current?.providerId != wallpaper.providerId || current.id != wallpaper.id) return
+            _state.update { it.copy(sizeVariants = buildSizeVariants(wallpaper, baseUrl)) }
         }
 
         /**

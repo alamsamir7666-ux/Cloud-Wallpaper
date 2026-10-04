@@ -40,6 +40,23 @@ enum class SearchSizeTier(
         if (width == null || height == null || width <= 0 || height <= 0) return false
         return (width >= minWidth && height >= minHeight) || (height >= minWidth && width >= minHeight)
     }
+
+    /**
+     * The query modifier that biases a search toward this tier — the same
+     * vocabulary the backend's own pagination rides on ("hd", "high
+     * resolution", "4k"), appended to the query so every page leans toward
+     * the size asked for. Null for [ANY]: an unfiltered search sends the
+     * query verbatim. This only BIASSES; [matches] is still the exact
+     * verification that decides what survives.
+     */
+    fun queryToken(): String? =
+        when (this) {
+            ANY -> null
+            HD -> "hd"
+            FHD -> "high resolution"
+            QHD -> "4k"
+            UHD -> "4k"
+        }
 }
 
 /** Filters applied to a global image search. */
