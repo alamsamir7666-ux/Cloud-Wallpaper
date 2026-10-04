@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="search_hint">Search the whole web</string>
+    <string name="search_clear_query">Clear search</string>
+
+    <string name="search_size_any">Any</string>
+    <string name="search_size_hd">HD+</string>
+    <string name="search_size_fhd">1080p+</string>
+    <string name="search_size_qhd">2K+</string>
+    <string name="search_size_uhd">4K+</string>
+
+    <string name="search_history_title">Recent searches</string>
+    <string name="search_history_clear">Clear search history</string>
+    <string name="search_history_clear_title">Clear search history?</string>
+    <string name="search_history_clear_text">Every search you made from this app will be forgotten. This cannot be undone.</string>
+    <string name="search_history_clear_action">Clear</string>
+    <string name="search_history_clear_dismiss">Keep</string>
+
+    <string name="search_idle_title">Search the whole web</string>
+    <string name="search_idle_message">Type anything — mountains, minimal, neon city — and preview or download any image on the internet as your next wallpaper.</string>
+
+    <string name="search_slow_hint">Still searching — the whole web can take 10\u201330 seconds</string>
+
+    <string name="search_empty_title">Nothing found</string>
+    <string name="search_empty_message">No images matched this search. Try different words, or relax the size filter.</string>
+
+    <string name="search_retry">Retry</string>
+    <string name="search_error_rate_limited">The free search engine is busy right now. Wait a few seconds and try again.</string>
+    <string name="search_error_network">Network error while searching. Check your connection and try again.</string>
+    <string name="search_error_timeout">The search took too long. Try again.</string>
+    <string name="search_error_server">The search engine returned an error. Try again.</string>
+    <string name="search_error_bad_response">Unexpected response from the search engine. Try again.</string>
+</resources>

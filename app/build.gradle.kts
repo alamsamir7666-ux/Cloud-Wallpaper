@@ -94,6 +94,7 @@ dependencies {
     implementation(project(":core:database"))
     implementation(project(":core:datastore"))
     implementation(project(":core:network"))
+    implementation(project(":core:search"))
     implementation(project(":core:data"))
     implementation(project(":core:designsystem"))
     implementation(project(":core:muzei"))
@@ -102,6 +103,7 @@ dependencies {
     implementation(project(":feature:detail"))
     implementation(project(":feature:extensions"))
     implementation(project(":feature:library"))
+    implementation(project(":feature:search"))
     implementation(project(":feature:settings"))
     implementation(project(":provider:api"))
 
