@@ -32,4 +32,15 @@ cd /usr/local/searxng
   done
 ) &
 
+# Hold the public surface closed until the engine answers (granian needs a
+# few seconds to import searx before it listens): a search landing in that
+# window would 502 and make installed apps invalidate the backend address.
+# 20 s ceiling, then start anyway — the watchdog will bring the engine up.
+i=0
+until wget -q -O /dev/null http://127.0.0.1:8080/healthz 2>/dev/null; do
+  i=$((i + 1))
+  [ "$i" -ge 40 ] && break
+  sleep 0.5
+done
+
 exec node /app/server.js
