@@ -7,20 +7,24 @@
 # DEPLOY.md in this directory.
 FROM docker.io/searxng/searxng:latest
 
-# The bridge is dependency-free Node — copying the binary from the official
-# alpine image plus its runtime libs is the entire install. The searxng base
-# is a minimal busybox rootfs WITHOUT a system libc: the musl interpreter and
-# the C++ runtime libs must come along, or busybox sh fails every exec with
-# "node: not found" (exit 127 — what killed the first deploy attempt).
-COPY --from=docker.io/library/node:20-alpine /usr/local/bin/node /usr/local/bin/node
-COPY --from=docker.io/library/node:20-alpine /lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
-COPY --from=docker.io/library/node:20-alpine /usr/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6
-COPY --from=docker.io/library/node:20-alpine /usr/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
+# The bridge is dependency-free Node. IMPORTANT: the searxng base is a
+# minimal GLIBC rootfs (loader at /usr/lib/ld-linux-x86-64.so.2, busybox
+# userland, /lib64 exists but is EMPTY) — so node must come from the
+# glibc build (node:20-slim), NOT the alpine/musl one. Every lib node
+# needs (libc, libstdc++, libgcc_s, libm, libdl, libpthread) already
+# ships in the base; the only gap is the interpreter path: Debian-built
+# node expects /lib64/ld-linux-x86-64.so.2. One symlink bridges it.
+# (Never COPY libs into /usr/lib here — overwriting the base's glibc
+# libstdc++/libgcc_s with musl builds is what crash-looped granian with
+# "libc.musl-x86_64.so.1: cannot open shared object file" on attempt #2.)
+COPY --from=docker.io/library/node:20-slim /usr/local/bin/node /usr/local/bin/node
 
 # Build-time gate: actually exec the binary. A broken loader or a missing
 # lib fails the BUILD here with a readable message, instead of surfacing
 # only after the deploy as a runtime crash loop.
-RUN node --version
+RUN mkdir -p /lib64 \
+ && ln -s /usr/lib/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2 \
+ && node --version
 
 # SearXNG instance settings ship at /app — NOT /etc/searxng: the base
 # image declares /etc/searxng a VOLUME, and Docker discards build-time
