@@ -17,9 +17,10 @@ primary_region = "bom"    # Mumbai — closest region to Bangladesh ("sin" = Sin
   dockerfile = "Dockerfile.searxng"
 
 [env]
-  # Keep the V8 heap well inside the 256 MB machine so SearXNG + the
-  # bridge's proxy buffers always have headroom.
-  NODE_OPTIONS = "--max-old-space-size=64"
+  # Memory calibration for the 512 MB machine: SearXNG measures
+  # ~175-220 MB RSS; the bridge gets a 64 MB V8 heap cap (baked into the
+  # image) plus this 80 MB image-cache budget.
+  PROXY_CACHE_BUDGET_MB = "80"
 
 [http_service]
   internal_port = 3000
@@ -37,4 +38,4 @@ primary_region = "bom"    # Mumbai — closest region to Bangladesh ("sin" = Sin
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "256mb"
+  memory = "512mb"

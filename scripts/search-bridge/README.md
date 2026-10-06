@@ -50,9 +50,9 @@ cloudflared tunnel --url http://localhost:3000
 ## Run (permanent host / SearXNG provider — unlimited, keyless)
 
 See [DEPLOY.md](DEPLOY.md) — the combined image (`Dockerfile.searxng`:
-SearXNG + bridge in one container), `fly.toml` (Fly.io, recommended)
-and a `render.yaml` blueprint (fallback) are all in place. The whole
-deploy is two commands and needs **no secrets, no API keys**.
+SearXNG + bridge in one container), a `render.yaml` blueprint (Render,
+no credit card, recommended) and `fly.toml` (Fly.io, faster wake) are
+all in place. The whole deploy needs **no secrets, no API keys**.
 
 The bridge listens on `$PORT` (default 3000) on all interfaces. Tests:
 `npm test` (stubs both the SearXNG and Google APIs — no credentials,

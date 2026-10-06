@@ -11,9 +11,11 @@ FROM docker.io/searxng/searxng:latest
 # official image is the entire install (both images are Alpine/musl).
 COPY --from=docker.io/library/node:20-alpine /usr/local/bin/node /usr/local/bin/node
 
-# SearXNG instance settings: JSON API on, bot-limiter off (private
-# instance), placeholder secret rotated at boot by the start script.
-COPY settings.yml /etc/searxng/settings.yml
+# SearXNG instance settings ship at /app — NOT /etc/searxng: the base
+# image declares /etc/searxng a VOLUME, and Docker discards build-time
+# changes to volume paths at runtime. The start script copies this file
+# to /tmp and points SEARXNG_SETTINGS_PATH at it.
+COPY settings.yml /app/searxng-settings.yml
 
 # The bridge itself.
 COPY server.js package.json /app/
@@ -21,10 +23,12 @@ COPY start-searxng-bridge.sh /usr/local/bin/start-searxng-bridge.sh
 RUN chmod +x /usr/local/bin/start-searxng-bridge.sh
 
 ENV PORT=3000 \
-    SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml \
     SEARCH_PROVIDER=searxng \
     SEARXNG_BASE=http://127.0.0.1:8080 \
     NODE_OPTIONS=--max-old-space-size=64 \
+    PROXY_CACHE_MAX=100 \
+    PROXY_CACHE_BUDGET_MB=64 \
+    PROXY_CACHEABLE_MAX_MB=3 \
     GRANIAN_INTERFACE=wsgi \
     GRANIAN_HOST=127.0.0.1 \
     GRANIAN_PORT=8080 \

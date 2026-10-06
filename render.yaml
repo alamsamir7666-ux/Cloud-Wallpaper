@@ -1,22 +1,28 @@
-# Render blueprint for the Cloudimage search bridge — the FALLBACK option.
+# Render blueprint for the Cloudimage search bridge — the no-credit-card
+# permanent deploy. See scripts/search-bridge/DEPLOY.md for the full
+# step-by-step walkthrough.
 #
-# Fly.io is the recommended host (no 15-minute sleep death, ~2-5 s wake
-# vs ~30-60 s, Mumbai region). See scripts/search-bridge/DEPLOY.md.
-#
-# Render free web services sleep after 15 minutes of inactivity; the app's
-# 160 s call timeout survives the wake-up, but the first search after an
-# idle pause answers in ~30-60 s.
+# Free plan facts: 512 MB RAM / 0.1 CPU, sleeps after 15 idle minutes,
+# wakes in ~30-60 s (the app's 160 s call timeout absorbs it). Docker
+# builds run on Render's remote builder — no local Docker needed, and
+# this combined image needs NO secrets, NO API keys, NO Google.
 services:
   - type: web
     name: cloudimage-search
     runtime: docker
     plan: free
     region: singapore # closest Render region to Bangladesh
-    rootDir: scripts/search-bridge
-    dockerfilePath: ./Dockerfile.searxng
-    dockerContext: .
-    # The combined image (SearXNG + bridge) needs no secrets at all —
-    # unlimited keyless search. Render injects PORT automatically.
+
+    # Paths are relative to the REPO ROOT (Render blueprint spec) — the
+    # combined image lives in scripts/search-bridge/.
+    dockerfilePath: ./scripts/search-bridge/Dockerfile.searxng
+    dockerContext: ./scripts/search-bridge
+
+    # Memory calibration for the 512 MB free instance: SearXNG measures
+    # ~175-220 MB RSS; the bridge gets a 64 MB V8 heap cap (baked into
+    # the image) plus this 80 MB image-cache budget.
     envVars:
       - key: SEARCH_PROVIDER
         value: searxng
+      - key: PROXY_CACHE_BUDGET_MB
+        value: "80"

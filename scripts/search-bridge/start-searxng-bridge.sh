@@ -9,12 +9,16 @@
 # treats as a transient failure, not a dead backend.
 set -u
 
-# Rotate the Flask session secret at every boot — the committed
-# placeholder must never become the live key.
-if [ -w /etc/searxng/settings.yml ]; then
-  sed -i "s/__CLOUDIMAGE_SECRET__/$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')/" \
-    /etc/searxng/settings.yml || true
-fi
+# Settings: copy the bundled file to a writable path and rotate the Flask
+# session secret at every boot. (/etc/searxng is a VOLUME mount point in
+# the base image — build-time copies there are unreliable — and /tmp is
+# writable regardless of the runtime user.)
+SETTINGS_SRC=/app/searxng-settings.yml
+SETTINGS_RUN=/tmp/searxng-settings.yml
+cp "$SETTINGS_SRC" "$SETTINGS_RUN" 2>/dev/null || SETTINGS_RUN="$SETTINGS_SRC"
+sed -i "s/__CLOUDIMAGE_SECRET__/$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')/" \
+  "$SETTINGS_RUN" 2>/dev/null || true
+export SEARXNG_SETTINGS_PATH="$SETTINGS_RUN"
 
 # SearXNG must be started from its install directory.
 cd /usr/local/searxng

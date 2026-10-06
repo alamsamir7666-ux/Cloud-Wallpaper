@@ -99,15 +99,32 @@ const PAGE_MODIFIERS = [
 
 // --- in-memory LRU for proxy responses (key = full proxy URL) ---
 const proxyCache = new Map();
-const PROXY_CACHE_MAX = 200;
+const PROXY_CACHE_MAX = parseInt(process.env.PROXY_CACHE_MAX || '200', 10);
+// Total-bytes budget — the cache holds full-resolution originals, so a
+// bare entry cap is not enough on small containers: 200 entries at a few
+// MB each would OOM a 512 MB free-tier box shared with SearXNG.
+const PROXY_CACHE_BUDGET_BYTES =
+  parseInt(process.env.PROXY_CACHE_BUDGET_MB || '128', 10) * 1024 * 1024;
+// Single entries above this size are answered but never cached — one
+// 20 MB wallpaper original must not evict twenty thumbnails.
+const PROXY_CACHEABLE_MAX_BYTES =
+  parseInt(process.env.PROXY_CACHEABLE_MAX_MB || '4', 10) * 1024 * 1024;
+let proxyCacheBytes = 0;
 
 function proxyCacheSet(key, value) {
-  if (proxyCache.size >= PROXY_CACHE_MAX) {
-    // Evict oldest entry — Map preserves insertion order.
+  if (value.body.length > PROXY_CACHEABLE_MAX_BYTES) return; // pass through
+  proxyCache.set(key, value);
+  proxyCacheBytes += value.body.length;
+  // Evict oldest entries — Map preserves insertion order — until both
+  // the entry cap and the byte budget are honored.
+  while (
+    (proxyCache.size > PROXY_CACHE_MAX || proxyCacheBytes > PROXY_CACHE_BUDGET_BYTES) &&
+    proxyCache.size > 0
+  ) {
     const oldest = proxyCache.keys().next().value;
+    proxyCacheBytes -= proxyCache.get(oldest).body.length;
     proxyCache.delete(oldest);
   }
-  proxyCache.set(key, value);
 }
 
 // --- helpers ---
