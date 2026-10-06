@@ -11,10 +11,17 @@
 //   zaicli     — the z-ai image-search CLI. Zero-config inside this
 //                sandbox, but its credentials are chat-scoped and die
 //                with the sandbox: not deployable anywhere else.
+//   searxng    — a self-hosted SearXNG metasearch instance (bundled in
+//                the Docker image, internal :8080). No API keys, no
+//                quotas, no limits: it aggregates Bing, DuckDuckGo,
+//                Qwant, Openverse, Wikimedia, ... in parallel and
+//                degrades gracefully when one engine misbehaves.
+//                THE provider for a permanent free deployment — see
+//                DEPLOY.md.
 //   googlecse  — the Google Programmable Search JSON API with image
-//                search enabled, driven by your own API key. The
-//                provider that runs permanently on Fly.io / Render /
-//                any host — see DEPLOY.md.
+//                search enabled, driven by your own API key. Free tier
+//                is capped at 100 queries/day — kept as an option, not
+//                the recommendation.
 
 import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
@@ -36,8 +43,21 @@ const CSE_TIMEOUT_MS = 20_000;
 const CSE_IMG_SIZE = (process.env.CSE_IMG_SIZE || '').trim(); // '', 'large', 'xlarge'…
 const CSE_SAFE = (process.env.CSE_SAFE || '').trim(); // '', 'active', 'off'
 
+// SearXNG instance settings — the combined Docker image runs the engine
+// on localhost:8080 next to this bridge.
+const SEARXNG_BASE = (process.env.SEARXNG_BASE || '').trim().replace(/\/+$/, '');
+const SEARXNG_TIMEOUT_MS = parseInt(process.env.SEARXNG_TIMEOUT_MS || '25000', 10);
+const SEARXNG_SAFESSEARCH = parseInt(process.env.SEARXNG_SAFESSEARCH || '0', 10);
+// Most engines paginate; results thin out eventually. The app dedupes by
+// URL, so a page of repeats collapses to nothing and the grid stops.
+const SEARXNG_MAX_PAGE = parseInt(process.env.SEARXNG_MAX_PAGE || '10', 10);
+// gl (ISO country) -> SearXNG language. Anything unmapped falls back to
+// the instance default; pass-through for already-qualified codes.
+const GL_TO_LANGUAGE = { us: 'en-US', gb: 'en-GB', au: 'en-AU', ca: 'en-CA', in: 'en-IN', bd: 'bn' };
+
 class CseQuotaError extends Error {}
 class CseConfigError extends Error {}
+class SearxngConfigError extends Error {}
 
 /** True when the z-ai CLI is on PATH — i.e. we are inside the sandbox. */
 function hasZaCli() {
@@ -50,8 +70,11 @@ function hasZaCli() {
 
 function selectProvider() {
   const forced = (process.env.SEARCH_PROVIDER || '').trim().toLowerCase();
-  if (forced === 'zaicli' || forced === 'googlecse') return forced;
+  if (forced === 'zaicli' || forced === 'googlecse' || forced === 'searxng') {
+    return forced;
+  }
   if (hasZaCli()) return 'zaicli';
+  if (SEARXNG_BASE) return 'searxng';
   if (process.env.GOOGLE_CSE_KEY && process.env.GOOGLE_CSE_CX) return 'googlecse';
   return 'none';
 }
@@ -269,12 +292,125 @@ function cseItemsToResults(items) {
   return results;
 }
 
+// Permanent-host provider: a self-hosted SearXNG metasearch. No keys,
+// no quotas — the instance aggregates many image engines in parallel
+// (bing, duckduckgo, qwant, openverse, wikimedia, google-cse-scrape, ...)
+// and answers even when some of them fail. Pagination rides the engines'
+// own `pageno` support, so every page surfaces a fresh batch (the caller
+// dedupes by URL).
+async function searchViaSearXng({ query, count, page, gl }) {
+  if (!SEARXNG_BASE) {
+    throw new SearxngConfigError(
+      'searxng provider selected but SEARXNG_BASE is not set — point it at ' +
+        'the SearXNG instance (the combined Docker image bundles one on :8080; see DEPLOY.md)',
+    );
+  }
+  const params = new URLSearchParams({
+    q: query,
+    categories: 'images',
+    format: 'json',
+    pageno: String(page),
+    safesearch: String(SEARXNG_SAFESSEARCH),
+  });
+  const language = glToLanguage(gl);
+  if (language) params.set('language', language);
+
+  let body;
+  const resp = await fetch(`${SEARXNG_BASE}/search?${params}`, {
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
+  });
+  const bodyText = await resp.text();
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    // fall through — handled by the status check below
+  }
+
+  if (!resp.ok || body === null || typeof body !== 'object') {
+    // 403 is SearXNG's "format json is disabled on this instance" answer —
+    // a deployment problem worth naming explicitly in the error.
+    if (resp.status === 403) {
+      throw new SearxngConfigError(
+        'SearXNG refused the JSON API (HTTP 403) — enable `json` in the ' +
+          'instance settings: search.formats must include json (see settings.yml in this directory)',
+      );
+    }
+    throw new SearxngConfigError(
+      `SearXNG instance at ${SEARXNG_BASE} answered HTTP ${resp.status}`,
+    );
+  }
+
+  const items = Array.isArray(body.results) ? body.results : [];
+  const results = searxngItemsToResults(items);
+  return {
+    results: results.slice(0, count),
+    hasMore: page < SEARXNG_MAX_PAGE && results.length > 0,
+  };
+}
+
+function glToLanguage(gl) {
+  if (!gl) return null;
+  if (gl.includes('-')) return gl;
+  return GL_TO_LANGUAGE[String(gl).toLowerCase()] ?? null;
+}
+
+// Map SearXNG image items onto the response DTO the app already parses —
+// field names verified against a live instance (search?categories=images
+// &format=json): img_src is the original image, resolution arrives as
+// "2560x1440" or "2560 x 1440", img_format is an extension OR a mime type.
+function searxngItemsToResults(items) {
+  const seen = new Set();
+  const results = [];
+  for (const item of items) {
+    const raw = item.img_src;
+    const link = Array.isArray(raw) ? String(raw[0] ?? '') : String(raw ?? '');
+    if (!/^https?:\/\//i.test(link)) continue;
+    // Android's image pipeline cannot decode SVG results.
+    const fmt = String(item.img_format || '').toLowerCase();
+    if (fmt.includes('svg')) continue;
+    if (seen.has(link)) continue;
+    seen.add(link);
+    const dims = parseResolution(item.resolution);
+    results.push({
+      id: link,
+      original_url: link,
+      caption: item.title ? String(item.title) : null,
+      // SearXNG's `source` is engine-dependent and often blank — the image
+      // host is the honest, always-present provenance.
+      source: item.source || hostnameOf(link) || null,
+      original_width: dims?.width ?? null,
+      original_height: dims?.height ?? null,
+    });
+  }
+  return results;
+}
+
+function parseResolution(resolution) {
+  const m = /(\d+)\s*[x\u00d7]\s*(\d+)/i.exec(String(resolution ?? ''));
+  if (!m) return null;
+  const width = parseInt(m[1], 10);
+  const height = parseInt(m[2], 10);
+  if (!(width > 0 && height > 0)) return null;
+  return { width, height };
+}
+
+function hostnameOf(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
 async function runSearch(params) {
   if (PROVIDER === 'zaicli') return searchViaZaCli(params);
   if (PROVIDER === 'googlecse') return searchViaGoogleCse(params);
+  if (PROVIDER === 'searxng') return searchViaSearXng(params);
   throw new Error(
-    'no search provider available: run inside the sandbox (z-ai CLI default), or set ' +
-      'SEARCH_PROVIDER=googlecse with GOOGLE_CSE_KEY + GOOGLE_CSE_CX for external hosting (see DEPLOY.md)',
+    'no search provider available: run inside the sandbox (z-ai CLI default), set ' +
+      'SEARXNG_BASE for the bundled metasearch, or SEARCH_PROVIDER=googlecse with ' +
+      'GOOGLE_CSE_KEY + GOOGLE_CSE_CX (see DEPLOY.md)',
   );
 }
 
@@ -429,6 +565,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         service: 'cloudimage-search-bridge',
         provider: PROVIDER,
+        searxngConfigured: Boolean(SEARXNG_BASE),
         googleCseConfigured: Boolean(process.env.GOOGLE_CSE_KEY && process.env.GOOGLE_CSE_CX),
       });
     } else {
@@ -444,10 +581,11 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[cloudimage-search-bridge] listening on :${PORT}`);
-  console.log(`  search provider: ${PROVIDER}`);
+  console.log(`  search provider: ${PROVIDER}${PROVIDER === 'searxng' ? ` (${SEARXNG_BASE})` : ''}`);
   if (PROVIDER === 'none') {
-    console.log('  (!) no provider configured — searches will 502 until SEARCH_PROVIDER=googlecse');
-    console.log('      plus GOOGLE_CSE_KEY / GOOGLE_CSE_CX are set (see DEPLOY.md)');
+    console.log('  (!) no provider configured — searches will 502 until one is available:');
+    console.log('      SEARXNG_BASE (bundled metasearch, recommended) or SEARCH_PROVIDER=googlecse');
+    console.log('      plus GOOGLE_CSE_KEY / GOOGLE_CSE_CX (see DEPLOY.md)');
   }
   console.log(`  POST /api/search        — image search (${PROVIDER})`);
   console.log(`  GET  /api/proxy-image   — image proxy with caching`);

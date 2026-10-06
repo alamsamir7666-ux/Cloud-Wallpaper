@@ -1,0 +1,36 @@
+# Combined image: SearXNG metasearch + the Cloudimage bridge, ONE container.
+#
+# The bridge is the public surface (platform $PORT, default 3000); SearXNG
+# listens only on the container loopback (:8080) and is never reachable
+# from outside. The bridge's `searxng` provider talks to it over
+# 127.0.0.1 — no API keys, no quotas, unlimited searches. Deploy runbook:
+# DEPLOY.md in this directory.
+FROM docker.io/searxng/searxng:latest
+
+# The bridge is dependency-free Node — copying the static binary from the
+# official image is the entire install (both images are Alpine/musl).
+COPY --from=docker.io/library/node:20-alpine /usr/local/bin/node /usr/local/bin/node
+
+# SearXNG instance settings: JSON API on, bot-limiter off (private
+# instance), placeholder secret rotated at boot by the start script.
+COPY settings.yml /etc/searxng/settings.yml
+
+# The bridge itself.
+COPY server.js package.json /app/
+COPY start-searxng-bridge.sh /usr/local/bin/start-searxng-bridge.sh
+RUN chmod +x /usr/local/bin/start-searxng-bridge.sh
+
+ENV PORT=3000 \
+    SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml \
+    SEARCH_PROVIDER=searxng \
+    SEARXNG_BASE=http://127.0.0.1:8080 \
+    NODE_OPTIONS=--max-old-space-size=64 \
+    GRANIAN_INTERFACE=wsgi \
+    GRANIAN_HOST=127.0.0.1 \
+    GRANIAN_PORT=8080 \
+    GRANIAN_WEBSOCKETS=false \
+    GRANIAN_BLOCKING_THREADS=4 \
+    GRANIAN_WORKERS_KILL_TIMEOUT=30s
+
+EXPOSE 3000
+ENTRYPOINT ["/usr/local/bin/start-searxng-bridge.sh"]

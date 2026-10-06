@@ -9,16 +9,14 @@
 services:
   - type: web
     name: cloudimage-search
-    runtime: node
+    runtime: docker
     plan: free
     region: singapore # closest Render region to Bangladesh
     rootDir: scripts/search-bridge
-    buildCommand: npm install --omit=dev
-    startCommand: node server.js
+    dockerfilePath: ./Dockerfile.searxng
+    dockerContext: .
+    # The combined image (SearXNG + bridge) needs no secrets at all —
+    # unlimited keyless search. Render injects PORT automatically.
     envVars:
       - key: SEARCH_PROVIDER
-        value: googlecse
-      - key: GOOGLE_CSE_KEY
-        sync: false # set in the Render dashboard — never commit keys
-      - key: GOOGLE_CSE_CX
-        sync: false
+        value: searxng

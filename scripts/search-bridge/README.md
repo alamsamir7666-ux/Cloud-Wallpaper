@@ -5,16 +5,22 @@ search to the Cloud-Wallpaper Android app as two HTTPS routes.
 
 The search behind `/api/search` is provider-pluggable:
 
+- **`searxng`** *(recommended for permanent hosting)* — a self-hosted
+  SearXNG metasearch instance, bundled into the same Docker image
+  (`Dockerfile.searxng`) on the container loopback. No API keys, no
+  quotas, no limits: it aggregates Bing, DuckDuckGo, Qwant, Openverse,
+  Wikimedia, ... in parallel and degrades gracefully when one engine
+  misbehaves. See [DEPLOY.md](DEPLOY.md).
 - **`zaicli`** — the z-ai image-search CLI. Zero-config inside the
   sandbox (it authenticates with chat-scoped session credentials), but
   those credentials die with the sandbox — not deployable elsewhere.
 - **`googlecse`** — the Google Programmable Search JSON API with image
-  search enabled, driven by your own API key. The permanent provider
-  for Fly.io / Render / any host — see [DEPLOY.md](DEPLOY.md).
+  search enabled, driven by your own API key (free tier: 100
+  queries/day). Kept as an option; see [DEPLOY.md](DEPLOY.md).
 
 Selection is automatic (`z-ai` binary on PATH → `zaicli`; otherwise
-`GOOGLE_CSE_KEY` + `GOOGLE_CSE_CX` → `googlecse`) and can be forced with
-`SEARCH_PROVIDER=zaicli|googlecse`.
+`SEARXNG_BASE` → `searxng`; otherwise CSE keys → `googlecse`) and can be
+forced with `SEARCH_PROVIDER=zaicli|searxng|googlecse`.
 
 ## Routes
 
@@ -41,14 +47,16 @@ node server.js
 cloudflared tunnel --url http://localhost:3000
 ```
 
-## Run (permanent host / Google CSE provider)
+## Run (permanent host / SearXNG provider — unlimited, keyless)
 
-See [DEPLOY.md](DEPLOY.md) — the Dockerfile, `fly.toml` (Fly.io,
-recommended) and a `render.yaml` blueprint (fallback) are all in place;
-the only prerequisite is a free Programmable Search engine + API key.
+See [DEPLOY.md](DEPLOY.md) — the combined image (`Dockerfile.searxng`:
+SearXNG + bridge in one container), `fly.toml` (Fly.io, recommended)
+and a `render.yaml` blueprint (fallback) are all in place. The whole
+deploy is two commands and needs **no secrets, no API keys**.
 
 The bridge listens on `$PORT` (default 3000) on all interfaces. Tests:
-`npm test` (stubs the Google API — no credentials needed).
+`npm test` (stubs both the SearXNG and Google APIs — no credentials,
+no running engine needed).
 
 ## Repointing the app
 
@@ -72,8 +80,9 @@ failure, so a republished JSON heals apps without an app update).
   OSS originals are already reasonable size for thumbnails.
 - **Providers are isolated behind one contract** — the sandbox provider
   spawns the `z-ai` CLI as a child process and parses its JSON stdout
-  (stripping the emoji-decorated progress lines it prints); the hosted
-  provider calls the Google Programmable Search HTTP API directly. Both
+  (stripping the emoji-decorated progress lines it prints); the SearXNG
+  provider queries a self-hosted metasearch instance; the hosted Google
+  provider calls the Programmable Search HTTP API directly. All three
   normalize to the same response DTO, so the phone cannot tell them
   apart.
 - **Failure modes are bridged, not swallowed** — provider failures return

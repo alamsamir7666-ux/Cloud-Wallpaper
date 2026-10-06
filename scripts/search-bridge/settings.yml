@@ -1,0 +1,34 @@
+# SearXNG instance settings for the combined Cloudimage bridge image.
+#
+# `use_default_settings: true` inherits the full shipped engine list
+# (bing, duckduckgo, qwant, openverse, wikimedia, google-cse scrape, ...)
+# — that breadth IS the resilience: when one engine misbehaves, the rest
+# still answer, so there is no quota to exhaust and no single point of
+# failure. Only the bits a private, bridge-backing instance must change
+# are overridden below.
+use_default_settings: true
+
+server:
+  # Placeholder — the container start script rotates it to a random value
+  # at every boot (it only signs internal sessions; never committed real).
+  secret_key: "__CLOUDIMAGE_SECRET__"
+  # No bot protection: the only client is our own bridge on the container
+  # loopback. The public surface is the bridge, which has no limiter needs.
+  limiter: false
+  # The bridge's /api/proxy-image already does image proxying with caching
+  # — SearXNG's own proxy would only add a second hop.
+  image_proxy: false
+
+search:
+  safe_search: 0
+  # The bridge speaks the JSON API — it must be enabled here.
+  formats:
+    - html
+    - json
+
+outgoing:
+  # Per-engine budget. The bridge's own request timeout (25 s default)
+  # sits above this, so slow engines are simply dropped from a response
+  # instead of failing the whole search.
+  request_timeout: 12.0
+  max_request_timeout: 15.0

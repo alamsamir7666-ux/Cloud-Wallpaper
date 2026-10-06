@@ -4,18 +4,22 @@
 #
 #   fly auth login
 #   fly apps create cloudimage-search   # pick another name if taken — update here too
-#   fly secrets set GOOGLE_CSE_KEY=... GOOGLE_CSE_CX=...
 #   fly deploy
 #
-# Full runbook: DEPLOY.md in this directory.
+# That's the whole deploy — the bundled SearXNG provider needs no secrets,
+# no API keys, no quotas. Full runbook: DEPLOY.md in this directory.
 
 app = "cloudimage-search" # must be globally unique on fly.dev
 primary_region = "bom"    # Mumbai — closest region to Bangladesh ("sin" = Singapore fallback)
 
+[build]
+  # Combined image: SearXNG (internal :8080) + the bridge (public :3000).
+  dockerfile = "Dockerfile.searxng"
+
 [env]
-  # Keep the V8 heap well inside the 256 MB machine so the image proxy's
-  # buffers always have headroom.
-  NODE_OPTIONS = "--max-old-space-size=160"
+  # Keep the V8 heap well inside the 256 MB machine so SearXNG + the
+  # bridge's proxy buffers always have headroom.
+  NODE_OPTIONS = "--max-old-space-size=64"
 
 [http_service]
   internal_port = 3000

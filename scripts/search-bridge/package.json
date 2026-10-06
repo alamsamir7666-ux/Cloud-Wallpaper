@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "node test-cse.mjs"
+    "test": "node test-searxng.mjs && node test-cse.mjs"
   },
   "engines": {
     "node": ">=18"
