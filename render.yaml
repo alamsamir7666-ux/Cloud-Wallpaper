@@ -1,0 +1,24 @@
+# Render blueprint for the Cloudimage search bridge — the FALLBACK option.
+#
+# Fly.io is the recommended host (no 15-minute sleep death, ~2-5 s wake
+# vs ~30-60 s, Mumbai region). See scripts/search-bridge/DEPLOY.md.
+#
+# Render free web services sleep after 15 minutes of inactivity; the app's
+# 160 s call timeout survives the wake-up, but the first search after an
+# idle pause answers in ~30-60 s.
+services:
+  - type: web
+    name: cloudimage-search
+    runtime: node
+    plan: free
+    region: singapore # closest Render region to Bangladesh
+    rootDir: scripts/search-bridge
+    buildCommand: npm install --omit=dev
+    startCommand: node server.js
+    envVars:
+      - key: SEARCH_PROVIDER
+        value: googlecse
+      - key: GOOGLE_CSE_KEY
+        sync: false # set in the Render dashboard — never commit keys
+      - key: GOOGLE_CSE_CX
+        sync: false

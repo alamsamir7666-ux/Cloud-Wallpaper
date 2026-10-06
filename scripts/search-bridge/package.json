@@ -1,11 +1,15 @@
 {
   "name": "cloudimage-search-bridge",
-  "version": "1.0.0",
-  "description": "HTTP bridge exposing the z-ai image-search SDK to the Cloud-Wallpaper Android app",
+  "version": "1.1.0",
+  "description": "HTTP bridge exposing pluggable global image search (z-ai CLI / Google Programmable Search) to the Cloud-Wallpaper Android app",
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node test-cse.mjs"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {}
 }

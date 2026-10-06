@@ -1,18 +1,22 @@
 // Cloudimage global-search bridge.
 //
 // A small HTTP server that exposes two routes the Cloud-Wallpaper Android
-// app expects, backed by the z-ai-web-dev-sdk's `image-search` CLI:
+// app expects:
 //
 //   POST /api/search            — JSON body {query,count,page,gl} → JSON
 //   GET  /api/proxy-image       — ?url=&w=&q=&fmt= → image/jpeg
 //
-// The SDK itself runs as a child process (the z-ai CLI is the only
-// supported entry point per skills/image-search/SKILL.md). Image
-// reachability is handled upstream: every original_url is OSS-hosted
-// (sfile.chatglm.cn), so the proxy is a bandwidth optimization, not a
-// reachability fix.
+// The search behind /api/search is provider-pluggable (see selectProvider):
+//
+//   zaicli     — the z-ai image-search CLI. Zero-config inside this
+//                sandbox, but its credentials are chat-scoped and die
+//                with the sandbox: not deployable anywhere else.
+//   googlecse  — the Google Programmable Search JSON API with image
+//                search enabled, driven by your own API key. The
+//                provider that runs permanently on Fly.io / Render /
+//                any host — see DEPLOY.md.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
 import { URL } from 'node:url';
@@ -21,6 +25,38 @@ import { lookup } from 'node:dns/promises';
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const MAX_RESULTS_PER_PAGE = 20;
 const UPSTREAM_TIMEOUT_MS = 120_000;
+
+// --- search provider selection ---------------------------------------------
+
+const GOOGLE_CSE_ENDPOINT =
+  process.env.CSE_ENDPOINT || 'https://www.googleapis.com/customsearch/v1';
+const CSE_NUM_PER_CALL = 10; // API hard limit: num <= 10
+const CSE_MAX_START = 91; // API hard limit: start + num - 1 <= 100
+const CSE_TIMEOUT_MS = 20_000;
+const CSE_IMG_SIZE = (process.env.CSE_IMG_SIZE || '').trim(); // '', 'large', 'xlarge'…
+const CSE_SAFE = (process.env.CSE_SAFE || '').trim(); // '', 'active', 'off'
+
+class CseQuotaError extends Error {}
+class CseConfigError extends Error {}
+
+/** True when the z-ai CLI is on PATH — i.e. we are inside the sandbox. */
+function hasZaCli() {
+  try {
+    return spawnSync('which', ['z-ai'], { encoding: 'utf8' }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function selectProvider() {
+  const forced = (process.env.SEARCH_PROVIDER || '').trim().toLowerCase();
+  if (forced === 'zaicli' || forced === 'googlecse') return forced;
+  if (hasZaCli()) return 'zaicli';
+  if (process.env.GOOGLE_CSE_KEY && process.env.GOOGLE_CSE_CX) return 'googlecse';
+  return 'none';
+}
+
+const PROVIDER = selectProvider();
 
 // Pagination vocabulary — every page beyond 1 appends one of these
 // modifiers to the query to surface a fresh batch (mirrors the engine's
@@ -85,7 +121,7 @@ function readBody(req) {
 // parsed JSON stdout. The CLI prints progress emojis (🚀 🔎 ✅) to
 // stdout before the JSON object, so we slice from the first `{` to
 // the matching last `}` before parsing.
-function callImageSearch({ query, count, gl }) {
+function callZaCliImageSearch({ query, count, gl }) {
   return new Promise((resolve, reject) => {
     const args = [
       'image-search',
@@ -125,6 +161,123 @@ function callImageSearch({ query, count, gl }) {
   });
 }
 
+// --- providers: unified search entry points -------------------------------
+
+// Sandbox provider: modifier pagination — the z-ai service answers each
+// query with one capped batch (no offset, no cursor), so every page
+// beyond 1 re-searches with a modifier appended to surface a fresh batch;
+// the caller dedupes by URL.
+async function searchViaZaCli({ query, count, page, gl }) {
+  const effectiveQuery = page > 1
+    ? `${query} ${PAGE_MODIFIERS[(page - 2) % PAGE_MODIFIERS.length]}`
+    : query;
+  const upstream = await callZaCliImageSearch({ query: effectiveQuery, count, gl });
+  const results = upstream.results ?? [];
+  return {
+    results,
+    hasMore: page < PAGE_MODIFIERS.length + 1 && results.length > 0,
+  };
+}
+
+// External-host provider: real offset pagination — page N reads results
+// (N-1)*count+1 … N*count in num<=10 chunks fetched in parallel, and the
+// Google API's 100-results-per-query ceiling bounds hasMore.
+async function searchViaGoogleCse({ query, count, page, gl }) {
+  if (!process.env.GOOGLE_CSE_KEY || !process.env.GOOGLE_CSE_CX) {
+    throw new CseConfigError(
+      'googlecse provider selected but GOOGLE_CSE_KEY / GOOGLE_CSE_CX are not set — ' +
+        'create a Programmable Search engine + API key (see DEPLOY.md) and set them as secrets',
+    );
+  }
+  const startBase = (page - 1) * count; // 0-based offset of this page's first result
+  const calls = [];
+  for (let off = 0; off < count; off += CSE_NUM_PER_CALL) {
+    const start = startBase + off + 1;
+    if (start > CSE_MAX_START) break;
+    calls.push(cseCall({ query, num: Math.min(CSE_NUM_PER_CALL, count - off), start, gl }));
+  }
+  if (calls.length === 0) return { results: [], hasMore: false };
+
+  const batches = await Promise.all(calls);
+  const merged = cseItemsToResults(batches.flat());
+  const nextStart = startBase + count + 1;
+  return {
+    results: merged.slice(0, count),
+    hasMore: merged.length >= count && nextStart <= CSE_MAX_START,
+  };
+}
+
+async function cseCall({ query, num, start, gl }) {
+  const params = new URLSearchParams({
+    key: process.env.GOOGLE_CSE_KEY,
+    cx: process.env.GOOGLE_CSE_CX,
+    q: query,
+    searchType: 'image',
+    num: String(num),
+    start: String(start),
+  });
+  if (gl) params.set('gl', gl);
+  if (CSE_IMG_SIZE) params.set('imgSize', CSE_IMG_SIZE);
+  if (CSE_SAFE) params.set('safe', CSE_SAFE);
+
+  const resp = await fetch(`${GOOGLE_CSE_ENDPOINT}?${params}`, {
+    signal: AbortSignal.timeout(CSE_TIMEOUT_MS),
+  });
+  const bodyText = await resp.text();
+  let body = null;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    // fall through — handled by the status check below
+  }
+
+  if (!resp.ok) {
+    const reason =
+      body?.error?.errors?.[0]?.reason ?? body?.error?.status ?? `HTTP ${resp.status}`;
+    const message = body?.error?.message || bodyText.slice(0, 200);
+    if (resp.status === 403 || /LimitExceeded|quota/i.test(String(reason))) {
+      // Mapped to HTTP 429 — the app surfaces RATE_LIMITED without
+      // invalidating the backend address (a quota day is not a dead bridge).
+      throw new CseQuotaError(`Google CSE quota: ${reason} — ${message}`);
+    }
+    throw new CseConfigError(`Google CSE rejected the request: ${reason} — ${message}`);
+  }
+  return Array.isArray(body?.items) ? body.items : [];
+}
+
+// Map Google CSE items onto the response DTO the app already parses —
+// the two providers are indistinguishable to the phone.
+function cseItemsToResults(items) {
+  const seen = new Set();
+  const results = [];
+  for (const item of items) {
+    const link = String(item.link || '');
+    if (!/^https?:\/\//i.test(link)) continue;
+    // Android's image pipeline cannot decode SVG results.
+    if (String(item.fileFormat || '').toLowerCase().includes('svg')) continue;
+    if (seen.has(link)) continue;
+    seen.add(link);
+    results.push({
+      id: link,
+      original_url: link,
+      caption: item.title ? String(item.title) : null,
+      source: item.displayLink ? String(item.displayLink) : null,
+      original_width: item.image?.width ?? null,
+      original_height: item.image?.height ?? null,
+    });
+  }
+  return results;
+}
+
+async function runSearch(params) {
+  if (PROVIDER === 'zaicli') return searchViaZaCli(params);
+  if (PROVIDER === 'googlecse') return searchViaGoogleCse(params);
+  throw new Error(
+    'no search provider available: run inside the sandbox (z-ai CLI default), or set ' +
+      'SEARCH_PROVIDER=googlecse with GOOGLE_CSE_KEY + GOOGLE_CSE_CX for external hosting (see DEPLOY.md)',
+  );
+}
+
 // --- route handlers ---
 
 async function handleSearch(req, res) {
@@ -145,19 +298,16 @@ async function handleSearch(req, res) {
     return;
   }
 
-  // Page > 1 appends a modifier to surface a fresh batch.
-  const effectiveQuery = page > 1
-    ? `${query} ${PAGE_MODIFIERS[(page - 2) % PAGE_MODIFIERS.length]}`
-    : query;
-
-  let upstream;
+  let outcome;
   try {
-    upstream = await callImageSearch({ query: effectiveQuery, count, gl });
+    outcome = await runSearch({ query, count, page, gl });
   } catch (err) {
-    // SDK failures are bridged as 5xx with success:false — the engine
-    // treats 5xx as SERVER error and invalidates the cached address.
-    console.error(`[search] upstream failed for "${effectiveQuery}":`, err.message);
-    sendJson(res, 502, {
+    // Provider failures are bridged with success:false. Quota exhaustion
+    // answers 429 (the app maps it to RATE_LIMITED without invalidating
+    // the address); anything else is 5xx, which the engine treats as a
+    // SERVER error and invalidates the cached address against.
+    console.error(`[search] provider (${PROVIDER}) failed for "${query}":`, err.message);
+    sendJson(res, err instanceof CseQuotaError ? 429 : 502, {
       success: false,
       query,
       count: 0,
@@ -169,17 +319,14 @@ async function handleSearch(req, res) {
     return;
   }
 
-  // Forward the SDK's response shape almost verbatim — just normalize
-  // hasMore (the SDK doesn't have it; we infer from page < modifier count).
-  const hasNextPage = page < PAGE_MODIFIERS.length + 1;
   sendJson(res, 200, {
-    success: upstream.success !== false,
+    success: true,
     query,
-    count: upstream.results?.length ?? 0,
+    count: outcome.results.length,
     page,
-    hasMore: hasNextPage && (upstream.results?.length ?? 0) > 0,
-    results: upstream.results ?? [],
-    error: upstream.error,
+    hasMore: outcome.hasMore,
+    results: outcome.results,
+    error: null,
   });
 }
 
@@ -278,7 +425,12 @@ const server = http.createServer(async (req, res) => {
     } else if (req.method === 'GET' && url.pathname === '/api/proxy-image') {
       await handleProxyImage(req, res);
     } else if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
-      sendJson(res, 200, { ok: true, service: 'cloudimage-search-bridge' });
+      sendJson(res, 200, {
+        ok: true,
+        service: 'cloudimage-search-bridge',
+        provider: PROVIDER,
+        googleCseConfigured: Boolean(process.env.GOOGLE_CSE_KEY && process.env.GOOGLE_CSE_CX),
+      });
     } else {
       sendJson(res, 404, { error: 'not found', path: url.pathname });
     }
@@ -292,7 +444,12 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[cloudimage-search-bridge] listening on :${PORT}`);
-  console.log(`  POST /api/search        — image search via z-ai SDK`);
+  console.log(`  search provider: ${PROVIDER}`);
+  if (PROVIDER === 'none') {
+    console.log('  (!) no provider configured — searches will 502 until SEARCH_PROVIDER=googlecse');
+    console.log('      plus GOOGLE_CSE_KEY / GOOGLE_CSE_CX are set (see DEPLOY.md)');
+  }
+  console.log(`  POST /api/search        — image search (${PROVIDER})`);
   console.log(`  GET  /api/proxy-image   — image proxy with caching`);
   console.log(`  GET  /health            — health check`);
 });
