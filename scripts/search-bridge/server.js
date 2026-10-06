@@ -55,6 +55,14 @@ const SEARXNG_MAX_PAGE = parseInt(process.env.SEARXNG_MAX_PAGE || '10', 10);
 // the instance default; pass-through for already-qualified codes.
 const GL_TO_LANGUAGE = { us: 'en-US', gb: 'en-GB', au: 'en-AU', ca: 'en-CA', in: 'en-IN', bd: 'bn' };
 
+// Upstream image hosts are picky about clients, each in its own way
+// (verified live against Wikimedia, the largest wallpaper source in the
+// results): UA-less requests get 403 by policy, generic browser UAs get
+// rate-limited (429) from datacenter IPs, and a descriptive UA with
+// contact info sails through (200). Env-overridable for future tuning.
+const PROXY_USER_AGENT = process.env.PROXY_USER_AGENT ||
+  'CloudImageBridge/1.0 (https://github.com/alamsamir7666-ux/Cloud-Wallpaper; image thumbnail proxy)';
+
 class CseQuotaError extends Error {}
 class CseConfigError extends Error {}
 class SearxngConfigError extends Error {}
@@ -532,12 +540,44 @@ async function handleProxyImage(req, res) {
   }
 }
 
-function fetchImage(targetUrl) {
+function fetchImage(targetUrl, redirectsLeft = 4) {
   return new Promise((resolve, reject) => {
     const lib = targetUrl.startsWith('https:') ? https : http;
-    const req = lib.get(targetUrl, { timeout: 30_000 }, (resp) => {
+    const req = lib.get(targetUrl, {
+      timeout: 30_000,
+      headers: {
+        'user-agent': PROXY_USER_AGENT,
+        accept: 'image/avif,image/webp,image/apng,image/*;q=0.8,*/*;q=0.5',
+        'accept-language': 'en-US,en;q=0.9',
+      },
+    }, (resp) => {
+      // CDNs occasionally bounce us (301/302 to a canonical host, or to a
+      // signed URL). Follow a bounded number of hops with the same headers.
+      if ([301, 302, 303, 307, 308].includes(resp.statusCode) && resp.headers.location) {
+        resp.resume();
+        if (redirectsLeft <= 0) {
+          reject(new Error('too many redirects'));
+          return;
+        }
+        try {
+          const next = new URL(resp.headers.location, targetUrl).toString();
+          fetchImage(next, redirectsLeft - 1).then(resolve, reject);
+        } catch {
+          reject(new Error('invalid redirect target'));
+        }
+        return;
+      }
       if (resp.statusCode !== 200) {
+        resp.resume();
         reject(new Error(`upstream status ${resp.statusCode}`));
+        return;
+      }
+      // Guard against soft-block pages served with HTTP 200: only image
+      // (or opaque binary) bodies are worth caching and re-serving.
+      const contentType = String(resp.headers['content-type'] || '');
+      if (contentType && !/^image\//i.test(contentType) && !/octet-stream/i.test(contentType)) {
+        resp.resume();
+        reject(new Error(`upstream content-type ${contentType}`));
         return;
       }
       const chunks = [];
@@ -545,7 +585,7 @@ function fetchImage(targetUrl) {
       resp.on('end', () => {
         resolve({
           body: Buffer.concat(chunks),
-          contentType: resp.headers['content-type'],
+          contentType: contentType || 'image/jpeg',
         });
       });
     });
