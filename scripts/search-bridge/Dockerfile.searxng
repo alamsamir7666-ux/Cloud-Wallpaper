@@ -21,10 +21,11 @@ COPY --from=docker.io/library/node:20-slim /usr/local/bin/node /usr/local/bin/no
 
 # Build-time gate: actually exec the binary. A broken loader or a missing
 # lib fails the BUILD here with a readable message, instead of surfacing
-# only after the deploy as a runtime crash loop.
-RUN mkdir -p /lib64 \
- && ln -s /usr/lib/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2 \
- && node --version
+# only after the deploy as a runtime crash loop. (Note: the base is
+# usr-merged — /lib64 -> usr/lib — so node's PT_INTERP
+# /lib64/ld-linux-x86-64.so.2 already resolves to the base loader;
+# do NOT ln anything there: an ln -sf would self-reference the loader.)
+RUN node --version
 
 # SearXNG instance settings ship at /app — NOT /etc/searxng: the base
 # image declares /etc/searxng a VOLUME, and Docker discards build-time
