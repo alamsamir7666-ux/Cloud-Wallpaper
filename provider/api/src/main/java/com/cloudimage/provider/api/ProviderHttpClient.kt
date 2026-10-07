@@ -49,10 +49,16 @@ open class ProviderHttpException(
  */
 interface ProviderHttpClient {
     /**
-     * Performs a GET and returns the raw exchange. [headers] are appended
-     * to the host's own (User-Agent is always sent and cannot be
-     * overridden). Throws [ProviderHttpException] only on transport
-     * failure, never for a non-2xx status.
+     * Performs a GET and returns the raw exchange. [headers] ride on top
+     * of the host's own, and a provider-supplied `User-Agent` replaces
+     * the host default for that request — the sanctioned way for a
+     * scraper to present a browser identity Cloudflare will serve (the
+     * WallpaperFlare extension relies on it). The one exception: a
+     * WebView-earned Cloudflare clearance is bound to the agent it was
+     * earned with, so on replayed challenged requests the host overrides
+     * the agent back — clearance binding wins over provider identity.
+     * Throws [ProviderHttpException] only on transport failure, never
+     * for a non-2xx status.
      */
     suspend fun get(
         url: String,

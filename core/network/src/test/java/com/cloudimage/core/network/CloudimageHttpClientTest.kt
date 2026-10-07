@@ -263,13 +263,20 @@ class CloudimageHttpClientTest {
     private class BypassSolver : CloudflareSolver {
         var persisted: CloudflareBypass? = null
         var earned: CloudflareBypass? = null
+        var fetched: WebViewPage? = null
         var solveCalls = 0
+        var fetchCalls = 0
 
         override suspend fun persistedStateFor(host: String): CloudflareBypass? = persisted
 
         override suspend fun solve(url: String): CloudflareBypass? {
             solveCalls++
             return earned
+        }
+
+        override suspend fun fetch(url: String): WebViewPage? {
+            fetchCalls++
+            return fetched
         }
     }
 
@@ -384,5 +391,98 @@ class CloudimageHttpClientTest {
             val second = server.takeRequest()
             assertEquals("cf_clearance=old", first.getHeader("Cookie"))
             assertEquals("cf_clearance=fresh", second.getHeader("Cookie"))
+        }
+
+    // ---- WebView document fetch, the ladder's last rung (v1.2.3) ----
+
+    @Test
+    fun unsolvableChallengeIsFetchedThroughTheWebView() =
+        runTest {
+            // The zone challenges, no clearance can be earned (the WebView
+            // never settles one), but the page itself loads fine in the
+            // browser engine — the fingerprint-strict case WallpaperFlare
+            // installs hit in the wild.
+            server.enqueue(MockResponse().setResponseCode(403).setBody(challengeBody))
+            val solver =
+                BypassSolver().apply {
+                    earned = null
+                    fetched = WebViewPage(html = "<html>the real grid</html>", clearance = null)
+                }
+
+            val result = clientWith(solver).getRaw(server.url("/search?wallpaper=nature").toString())
+
+            assertTrue(result is NetworkResult.Success)
+            val payload = (result as NetworkResult.Success).value
+            assertEquals(200, payload.statusCode)
+            assertEquals("<html>the real grid</html>", payload.bodyText)
+            assertEquals(1, solver.solveCalls)
+            assertEquals(1, solver.fetchCalls)
+            assertEquals(1, server.requestCount) // no replay — the document won
+        }
+
+    @Test
+    fun pageWithOnlyAClearanceGetsOneMoreReplay() =
+        runTest {
+            // The fetch handed back no document but a fresher clearance
+            // (earned while this request waited) — one more replay under it.
+            server.enqueue(MockResponse().setResponseCode(403).setBody(challengeBody))
+            server.enqueue(MockResponse().setBody("served under the fresh clearance"))
+            val fresh = CloudflareBypass(cookieHeader = "cf_clearance=fresher", userAgent = "WebViewAgent/2")
+            val solver =
+                BypassSolver().apply {
+                    earned = null
+                    fetched = WebViewPage(html = null, clearance = fresh)
+                }
+
+            val result = clientWith(solver).getRaw(server.url("/grid").toString())
+
+            assertTrue(result is NetworkResult.Success)
+            assertEquals("served under the fresh clearance", (result as NetworkResult.Success).value.bodyText)
+            server.takeRequest() // the challenged first attempt, no cookies
+            val replayed = server.takeRequest()
+            assertEquals("cf_clearance=fresher", replayed.getHeader("Cookie"))
+            assertEquals("WebViewAgent/2", replayed.getHeader("User-Agent"))
+            assertEquals(1, solver.fetchCalls)
+        }
+
+    @Test
+    fun webViewFetchFailureSurfacesTheOriginalChallenge() =
+        runTest {
+            // Neither a clearance nor a document — the caller sees the honest
+            // 403 it always would have.
+            server.enqueue(MockResponse().setResponseCode(403).setBody(challengeBody))
+            val solver = BypassSolver() // nothing can be earned or fetched
+
+            val result = clientWith(solver).getRaw(server.url("/grid").toString())
+
+            assertTrue(result is NetworkResult.Success)
+            assertEquals(403, (result as NetworkResult.Success).value.statusCode)
+            assertEquals(challengeBody, (result as NetworkResult.Success).value.bodyText)
+            assertEquals(1, solver.solveCalls)
+            assertEquals(1, solver.fetchCalls)
+        }
+
+    @Test
+    fun replayThatStaysChallengedFallsBackToTheWebViewDocument() =
+        runTest {
+            // A clearance WAS earned, but the replay under it is still
+            // challenged — the zone binds its clearances to more than
+            // (IP, User-Agent). The document comes from the WebView.
+            server.enqueue(MockResponse().setResponseCode(403).setBody(challengeBody))
+            server.enqueue(MockResponse().setResponseCode(403).setBody(challengeBody))
+            val solver =
+                BypassSolver().apply {
+                    earned = CloudflareBypass(cookieHeader = "cf_clearance=rejected-anyway", userAgent = "WebViewAgent/1")
+                    fetched = WebViewPage(html = "<html>content via webview</html>", clearance = null)
+                }
+
+            val result = clientWith(solver).getRaw(server.url("/grid").toString())
+
+            assertTrue(result is NetworkResult.Success)
+            val payload = (result as NetworkResult.Success).value
+            assertEquals(200, payload.statusCode)
+            assertEquals("<html>content via webview</html>", payload.bodyText)
+            assertEquals(1, solver.fetchCalls)
+            assertEquals(2, server.requestCount) // first attempt + the failed replay
         }
 }

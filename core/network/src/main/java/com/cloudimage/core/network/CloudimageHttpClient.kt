@@ -45,8 +45,11 @@ class HttpPayload(
  * - identify the app to servers with a stable [User-Agent][USER_AGENT],
  * - turn every failure mode into a typed [NetworkResult], never an exception,
  * - parse JSON bodies through the shared, forgiving [Json] configuration,
- * - solve Cloudflare challenges on the app's side: a challenged request is
- *   replayed once under a WebView-earned clearance (see [cloudflare]).
+ * - solve Cloudflare challenges on the app's side: a challenged request
+ *   is replayed once under a WebView-earned clearance, and when even a
+ *   replay cannot get through — a fingerprint-strict zone, or a challenge
+ *   no WebView clearance satisfies — the document itself is fetched
+ *   through the WebView (see [cloudflare]).
  */
 @Singleton
 class CloudimageHttpClient
@@ -62,16 +65,18 @@ class CloudimageHttpClient
          * provider facade; transport failures surface as
          * [NetworkResult.Failure] like everywhere else.
          *
-         * A Cloudflare challenge answer no longer ends the exchange: the
-         * client asks [cloudflare] for a clearance — a headless WebView runs
-         * the challenge for real, the mechanism a pure-JVM plugin cannot
-         * carry — and replays the request once under the earned cookies and
-         * User-Agent. A clearance already on file for the host is attached
-         * before the first attempt, so a solved host stays solved. When no
-         * clearance can be earned, the challenge response itself is returned
-         * like any other non-2xx: per the facade contract, providers decide
-         * how to treat it, and their readable failures travel the app's
-         * source-failure banner as before.
+         * A Cloudflare challenge answer no longer ends the exchange — the
+         * ladder has three rungs. A clearance already on file for the host
+         * rides the first attempt. A challenged request asks [cloudflare]
+         * for a fresh clearance and replays under it once. When the replay
+         * is STILL challenged — or no clearance could be earned at all —
+         * the last rung loads the URL in the WebView and returns the
+         * document the browser engine rendered, the one answer a
+         * fingerprint-strict zone cannot distinguish from a user. When the
+         * WebView cannot produce a page either, the challenge response
+         * itself is returned like any other non-2xx: per the facade
+         * contract, providers decide how to treat it, and their readable
+         * failures travel the app's source-failure banner as before.
          */
         suspend fun getRaw(
             url: String,
@@ -80,23 +85,52 @@ class CloudimageHttpClient
             withContext(Dispatchers.IO) {
                 try {
                     val state = cloudflare.bypassStateFor(url)
-                    val first = execute(url, extraHeaders, state)
-                    if (!CloudflareChallenge.isChallenge(first)) {
-                        Success(first)
-                    } else {
-                        val bypass = cloudflare.solve(url, staleState = state)
-                        if (bypass == null) {
-                            Success(first)
-                        } else {
-                            Success(execute(url, extraHeaders, bypass))
+                    var stale = state
+                    var payload = execute(url, extraHeaders, state)
+                    if (CloudflareChallenge.isChallenge(payload)) {
+                        val bypass = cloudflare.solve(url, staleState = stale)
+                        if (bypass != null) {
+                            stale = bypass
+                            payload = execute(url, extraHeaders, bypass)
                         }
                     }
+                    if (CloudflareChallenge.isChallenge(payload)) {
+                        payload = fetchThroughWebView(url, extraHeaders, stale, payload)
+                    }
+                    Success(payload)
                 } catch (e: SocketTimeoutException) {
                     Failure(NetworkError.Timeout)
                 } catch (e: IOException) {
                     Failure(NetworkError.Io(e))
                 }
             }
+
+        /**
+         * The ladder's last rung, reached only when the request stayed
+         * challenged through a replay: fetch the document through the
+         * WebView. The fetched HTML wins outright; a page with no HTML but
+         * a fresher clearance (earned while this request waited) gets one
+         * more replay under it; anything else falls back to the challenged
+         * [fallback] response, the honest result the caller already had.
+         */
+        private suspend fun fetchThroughWebView(
+            url: String,
+            extraHeaders: Map<String, String>,
+            stale: CloudflareBypass?,
+            fallback: HttpPayload,
+        ): HttpPayload {
+            val page = cloudflare.webViewFetch(url, staleState = stale) ?: return fallback
+            if (page.html != null) {
+                return HttpPayload(
+                    statusCode = 200,
+                    headers = emptyMap(),
+                    body = page.html.toByteArray(),
+                )
+            }
+            val clearance = page.clearance ?: return fallback
+            val replayed = execute(url, extraHeaders, clearance)
+            return if (CloudflareChallenge.isChallenge(replayed)) fallback else replayed
+        }
 
         /**
          * Runs one GET and buffers the exchange. [bypass] — the clearance a

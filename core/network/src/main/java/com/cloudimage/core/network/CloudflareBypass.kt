@@ -19,6 +19,27 @@ data class CloudflareBypass(
 )
 
 /**
+ * One document a WebView fetched past a challenge the HTTP client could
+ * not get through: the settled page's HTML, plus any clearance the trip
+ * earned along the way.
+ *
+ * The two fields are independent outcomes of one WebView run — a page can
+ * settle on real content and leave a `cf_clearance` in the cookie jar
+ * (the common case: the challenge auto-cleared, then the zone served the
+ * document), or settle without ever earning a cookie (zones that
+ * challenge every navigation), or the run can produce nothing at all.
+ * A [WebViewPage] with a null `html` and a non-null `clearance` means
+ * "no document, but here is a fresher identity to replay under" — the
+ * state another coroutine earned while this caller waited, say.
+ */
+data class WebViewPage(
+    /** The settled document's HTML, or null when no usable page appeared. */
+    val html: String?,
+    /** A clearance the fetch earned or that superseded it; null when none. */
+    val clearance: CloudflareBypass?,
+)
+
+/**
  * Recognizes Cloudflare bot-management challenge responses — the "Just a
  * moment…" interstitial a site like wallpaperflare.com answers automated
  * traffic with.
@@ -90,6 +111,16 @@ object CloudflareChallenge {
     fun isChallenge(payload: HttpPayload): Boolean = isChallenge(payload.statusCode, payload.headers, payload.bodyText)
 
     /**
+     * Whether a WebView-rendered [html] document is still Cloudflare's own
+     * interstitial copy — a challenge shell OR a hard-block page — rather
+     * than the site's content. Used by the WebView fetch path: a document
+     * that still looks like Cloudflare furniture has not settled yet, and
+     * one that ends on block copy never will.
+     */
+    fun isInterstitialDocument(html: String): Boolean =
+        html.isNotEmpty() && (MARKERS.any(html::contains) || BLOCK_MARKERS.any(html::contains))
+
+    /**
      * The detection rule on raw parts — status gate first (a challenge is
      * never a 2xx, and a 200 page that merely mentions the interstitial
      * copy, a blog post about Cloudflare say, must not wake the bypass),
@@ -139,4 +170,21 @@ interface CloudflareSolver {
      * timeout, hard block, or no usable WebView on the device.
      */
     suspend fun solve(url: String): CloudflareBypass?
+
+    /**
+     * Loads [url] in a WebView — running whatever challenge it carries for
+     * real — and returns the SETTLED DOCUMENT, not just the clearance that
+     * got there: the last-resort fetch for zones whose challenges no
+     * cookie replay can pass (fingerprint-strict configurations, where
+     * the HTTP client's TLS handshake itself is what the zone rejects).
+     *
+     * Returns null when no usable page appeared — timeout, hard block, no
+     * WebView. Default null for JVM test doubles and any solver with no
+     * machinery: the caller degrades to surfacing the original response,
+     * exactly as before this rung existed. A trip that settles on content
+     * usually also leaves a `cf_clearance` in the system cookie jar; it
+     * rides along in the page so later requests can try the cheaper
+     * replay path first.
+     */
+    suspend fun fetch(url: String): WebViewPage? = null
 }

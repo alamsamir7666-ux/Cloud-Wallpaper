@@ -27,6 +27,7 @@ class WallpaperFlareWallpaperProviderTest {
     /** URL-routed responses; unmatched URLs answer 500 to fail loudly. */
     private class FakeClient : ProviderHttpClient {
         val requests = mutableListOf<String>()
+        val headerLog = mutableListOf<Map<String, String>>()
         var routes: Map<String, ProviderHttpResponse> = emptyMap()
 
         override suspend fun get(
@@ -34,6 +35,7 @@ class WallpaperFlareWallpaperProviderTest {
             headers: Map<String, String>,
         ): ProviderHttpResponse {
             requests += url
+            headerLog += headers
             return routes.entries
                 .firstOrNull { (prefix, _) -> url.startsWith(prefix) }
                 ?.value
@@ -123,6 +125,56 @@ class WallpaperFlareWallpaperProviderTest {
         """.trimIndent()
 
     // ------------------------------------------------------------------ grid
+
+    @Test
+    fun everyDocumentRequestWearsTheBrowserFingerprint() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://www.wallpaperflare.com/" to ok(searchGrid + paginationPathStyle),
+                    ),
+                )
+
+            provider.popular(1, Filters.None).getOrThrow()
+
+            val headers = client.headerLog.single()
+            // The identity that earns Cloudflare's browser lane, verbatim —
+            // v1.0.0 shipped bare OkHttp requests and phones were challenged.
+            assertEquals(
+                "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+                headers["User-Agent"],
+            )
+            assertTrue("browser Accept must ride along", headers["Accept"]!!.startsWith("text/html,"))
+            assertEquals("document", headers["Sec-Fetch-Dest"])
+            assertEquals("navigate", headers["Sec-Fetch-Mode"])
+            assertEquals("none", headers["Sec-Fetch-Site"])
+            assertEquals("?1", headers["Sec-Fetch-User"])
+            assertEquals("?1", headers["sec-ch-ua-mobile"])
+            assertEquals("\"Android\"", headers["sec-ch-ua-platform"])
+            assertTrue("client hints must match the UA's Chrome major", headers["sec-ch-ua"]!!.contains("\"Chromium\";v=\"131\""))
+        }
+
+    @Test
+    fun deepNavigationsAreSameOriginWithTheSiteAsReferrer() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://www.wallpaperflare.com/?page=2" to ok(searchGrid),
+                    ),
+                )
+
+            provider.popular(2, Filters.None).getOrThrow()
+
+            val headers = client.headerLog.single()
+            assertEquals("same-origin", headers["Sec-Fetch-Site"])
+            assertEquals("https://www.wallpaperflare.com/", headers["Referer"])
+            assertEquals(
+                "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+                headers["User-Agent"],
+            )
+        }
 
     @Test
     fun searchParsesGridCellsIntoCompleteWallpapers() =

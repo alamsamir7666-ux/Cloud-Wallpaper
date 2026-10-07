@@ -28,14 +28,20 @@ import org.junit.Test
  *   meanwhile is simply ridden;
  * - a persisted clearance (the WebView cookie jar outliving the process)
  *   is read once per host per launch;
- * - nothing about a malformed URL ever reaches the solver.
+ * - nothing about a malformed URL ever reaches the solver;
+ * - the document-fetch rung (v1.2.3): a fetched page's clearance is
+ *   cached, a fetch failure cools the FETCH lane without closing the
+ *   solve lane, and a clearance earned while a caller waited on the
+ *   host lock is handed back instead of a page.
  */
 class CloudflareBypasserTest {
     private class ScriptedSolver : CloudflareSolver {
         val solvedUrls = mutableListOf<String>()
+        val fetchedUrls = mutableListOf<String>()
         val persistedHosts = mutableListOf<String>()
         var persisted: CloudflareBypass? = null
         var next: CloudflareBypass? = CloudflareBypass(cookieHeader = "cf_clearance=fresh", userAgent = "SolverAgent/1")
+        var nextPage: WebViewPage? = null
 
         override suspend fun persistedStateFor(host: String): CloudflareBypass? {
             persistedHosts += host
@@ -45,6 +51,11 @@ class CloudflareBypasserTest {
         override suspend fun solve(url: String): CloudflareBypass? {
             solvedUrls += url
             return next
+        }
+
+        override suspend fun fetch(url: String): WebViewPage? {
+            fetchedUrls += url
+            return nextPage
         }
     }
 
@@ -175,8 +186,125 @@ class CloudflareBypasserTest {
 
             assertNull(bypasser.bypassStateFor("not a url"))
             assertNull(bypasser.solve("not a url"))
+            assertNull(bypasser.webViewFetch("not a url"))
 
             assertEquals(0, solver.solvedUrls.size)
+            assertEquals(0, solver.fetchedUrls.size)
             assertEquals(0, solver.persistedHosts.size)
+        }
+
+    // ---------------------------------------------- WebView document fetch
+
+    @Test
+    fun fetchedPageCachesTheClearanceItsTripEarned() =
+        runTest {
+            val solver =
+                ScriptedSolver().apply {
+                    nextPage =
+                        WebViewPage(
+                            html = "<html>the grid</html>",
+                            clearance = CloudflareBypass(cookieHeader = "cf_clearance=earned-by-fetch", userAgent = "SolverAgent/1"),
+                        )
+                }
+            val bypasser = CloudflareBypasser(solver)
+
+            val page = bypasser.webViewFetch("https://host.example/grid")
+
+            assertEquals("<html>the grid</html>", page?.html)
+            // The clearance the trip earned is cached — later requests ride
+            // it without waking the WebView again.
+            assertEquals(
+                "cf_clearance=earned-by-fetch",
+                bypasser.bypassStateFor("https://host.example/other")?.cookieHeader,
+            )
+            assertEquals(1, solver.fetchedUrls.size)
+        }
+
+    @Test
+    fun failedFetchCoolsTheFetchLaneButNotTheSolveLane() =
+        runTest {
+            var now = 0L
+            val solver =
+                ScriptedSolver().apply {
+                    nextPage = null // the page never settles
+                }
+            val bypasser = CloudflareBypasser(solver) { now }
+
+            assertNull(bypasser.webViewFetch("https://host.example/grid"))
+            assertEquals(1, solver.fetchedUrls.size)
+
+            // Inside the fetch cooldown the solver is not even asked again.
+            now = 30_000
+            assertNull(bypasser.webViewFetch("https://host.example/grid"))
+            assertEquals(1, solver.fetchedUrls.size)
+
+            // ... while the SOLVE lane stays open the whole time — the rungs
+            // fail for different reasons, and one must not close the other.
+            // The solve also caches its clearance, which the fetch below
+            // carries as its (rejected-anyway) stale identity.
+            val earned = bypasser.solve("https://host.example/grid")
+            assertNotNull(earned)
+            assertEquals(1, solver.solvedUrls.size)
+
+            // Past the fetch cooldown, a page is attempted again.
+            now = CloudflareBypasser.FAILURE_COOLDOWN_MS + 1
+            solver.nextPage = WebViewPage(html = "<html>late</html>", clearance = null)
+            assertEquals("<html>late</html>", bypasser.webViewFetch("https://host.example/grid", staleState = earned)?.html)
+            assertEquals(2, solver.fetchedUrls.size)
+        }
+
+    @Test
+    fun aFailedSolveDoesNotCloseTheFetchLane() =
+        runTest {
+            val solver =
+                ScriptedSolver().apply {
+                    next = null // no clearance can be earned
+                    nextPage = WebViewPage(html = "<html>grid via webview</html>", clearance = null)
+                }
+            val bypasser = CloudflareBypasser(solver)
+
+            assertNull(bypasser.solve("https://host.example/grid"))
+
+            // The very exchange that could not earn a clearance still gets
+            // its document fetched — the whole point of the last rung.
+            assertEquals("<html>grid via webview</html>", bypasser.webViewFetch("https://host.example/grid")?.html)
+            assertEquals(1, solver.fetchedUrls.size)
+        }
+
+    @Test
+    fun clearanceEarnedMeanwhileIsHandedBackInsteadOfAPage() =
+        runTest {
+            val solver = ScriptedSolver()
+            val bypasser = CloudflareBypasser(solver)
+
+            // Another coroutine earned this while our caller waited on the
+            // host lock — riding it is cheaper than a page load.
+            val earned = bypasser.solve("https://host.example/grid")
+            assertNotNull(earned)
+
+            val page = bypasser.webViewFetch("https://host.example/grid", staleState = null)
+
+            assertEquals(null, page?.html)
+            assertSame(earned, page?.clearance)
+            assertEquals(0, solver.fetchedUrls.size)
+        }
+
+    @Test
+    fun staleStateIsStillFetchedThrough() =
+        runTest {
+            val solver =
+                ScriptedSolver().apply {
+                    nextPage = WebViewPage(html = "<html>content</html>", clearance = null)
+                }
+            val bypasser = CloudflareBypasser(solver)
+
+            // The clearance this request's replay carried (and that the zone
+            // rejected anyway) is the STALE one — the fetch must not mistake
+            // it for a newer state and skip the page.
+            val stale = bypasser.solve("https://host.example/grid")
+            assertNotNull(stale)
+
+            assertEquals("<html>content</html>", bypasser.webViewFetch("https://host.example/grid", staleState = stale)?.html)
+            assertEquals(1, solver.fetchedUrls.size)
         }
 }

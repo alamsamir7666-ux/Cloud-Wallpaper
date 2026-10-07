@@ -25,10 +25,14 @@ import java.util.concurrent.ConcurrentHashMap
  * section rows concurrently and they all hit the same origin, and a
  * challenge clears for the whole host, not for one row — so later
  * waiters ride the state the first solver earned instead of stacking
- * WebViews. Failures are remembered too: a host that just failed to
- * clear goes quiet for [FAILURE_COOLDOWN_MS] so a stubborn zone cannot
- * spawn a WebView per grid tile, and its burned state is dropped so
- * later requests stop replaying cookies that no longer pass.
+ * WebViews. Failures are remembered too, per rung: a host that just
+ * failed a SOLVE goes quiet for [FAILURE_COOLDOWN_MS] so a stubborn zone
+ * cannot spawn a WebView per grid tile, and its burned state is dropped
+ * so later requests stop replaying cookies that no longer pass — while a
+ * host that just failed a FETCH keeps its solve lane open, because the
+ * next request in the same exchange still deserves the document rung
+ * (the two rungs fail for different reasons: a clearance that cannot be
+ * earned versus a page that never settles).
  */
 class CloudflareBypasser(
     private val solver: CloudflareSolver,
@@ -40,8 +44,11 @@ class CloudflareBypasser(
     /** Earned clearances by host; the User-Agent rides along inside each. */
     private val cleared = ConcurrentHashMap<String, CloudflareBypass>()
 
-    /** Timestamps of the last failed solve per host, for the cooldown. */
-    private val failedAt = ConcurrentHashMap<String, Long>()
+    /** Timestamps of the last failed solve per host, for the solve cooldown. */
+    private val solveFailedAt = ConcurrentHashMap<String, Long>()
+
+    /** Timestamps of the last failed document fetch per host — its own cooldown. */
+    private val fetchFailedAt = ConcurrentHashMap<String, Long>()
 
     /** Hosts already asked for a persisted clearance this launch. */
     private val warmChecked = ConcurrentHashMap.newKeySet<String>()
@@ -83,7 +90,7 @@ class CloudflareBypasser(
                 // Solved while we waited on the lock — ride the newer state.
                 return@withLock current
             }
-            if (failedAt[host]?.let { clock() - it < FAILURE_COOLDOWN_MS } == true) {
+            if (solveFailedAt[host]?.let { clock() - it < FAILURE_COOLDOWN_MS } == true) {
                 return@withLock null
             }
             val fresh =
@@ -92,12 +99,66 @@ class CloudflareBypasser(
                 }.getOrNull()
             if (fresh != null) {
                 cleared[host] = fresh
-                failedAt.remove(host)
+                solveFailedAt.remove(host)
                 fresh
             } else {
                 cleared.remove(host)
-                failedAt[host] = clock()
+                solveFailedAt[host] = clock()
                 null
+            }
+        }
+    }
+
+    /**
+     * Fetches a document through the WebView when neither a plain request
+     * nor a clearance replay got past the zone's challenge — the one path
+     * no fingerprint check can distinguish from a user browsing, because
+     * it IS a browser fetching the page.
+     *
+     * Same lock as [solve]: one WebView at a time per host, and a caller
+     * that waited on the lock hands back any clearance earned meanwhile
+     * ([WebViewPage.html] null, [WebViewPage.clearance] set) so its request
+     * can be replayed under it instead of stacking another page load.
+     * [staleState] is the identity the last challenged attempt carried —
+     * the same staleness rule solve applies. A failed fetch cools the host
+     * down exactly like a failed solve, and a clearance the fetch earns is
+     * cached for later requests to ride.
+     */
+    suspend fun webViewFetch(
+        url: String,
+        staleState: CloudflareBypass? = null,
+    ): WebViewPage? {
+        val host = url.toHttpUrlOrNull()?.host ?: return null
+        return hostLocks.computeIfAbsent(host) { Mutex() }.withLock {
+            val current = cleared[host]
+            if (current != null && current !== staleState) {
+                // Earned while we waited — cheaper than a page load; the
+                // caller replays under this instead.
+                return@withLock WebViewPage(html = null, clearance = current)
+            }
+            // The FETCH cooldown, not the solve one: a solve that just
+            // failed must not stop this rung from trying the document —
+            // they fail for different reasons, and the exchange that
+            // could not earn a clearance is the one that most needs the
+            // page fetched through the WebView.
+            if (fetchFailedAt[host]?.let { clock() - it < FAILURE_COOLDOWN_MS } == true) {
+                return@withLock null
+            }
+            val page =
+                runCatching {
+                    withTimeoutOrNull(FETCH_TIMEOUT_MS) { solver.fetch(url) }
+                }.getOrNull()
+            if (page == null) {
+                fetchFailedAt[host] = clock()
+                // The state this fetch's challenged request carried is dead
+                // too — the replay under it already failed. Drop it so later
+                // requests stop trying it.
+                if (cleared[host] === staleState) cleared.remove(host)
+                null
+            } else {
+                fetchFailedAt.remove(host)
+                page.clearance?.let { cleared[host] = it }
+                page
             }
         }
     }
@@ -106,14 +167,18 @@ class CloudflareBypasser(
         /** One WebView solve gets this long to settle; managed challenges take seconds. */
         const val SOLVE_TIMEOUT_MS = 20_000L
 
+        /** A document fetch through the WebView — challenge settle plus page load. */
+        const val FETCH_TIMEOUT_MS = 30_000L
+
         /** A failed host goes this quiet before another solve is attempted. */
         const val FAILURE_COOLDOWN_MS = 60_000L
 
         /**
          * A bypasser with no machinery behind it: never a state, never a
-         * solve. The default [CloudimageHttpClient] constructor argument,
-         * so the client stays constructible exactly as before in every
-         * existing test, with the app graph wiring the WebView-backed one.
+         * solve, never a fetched page. The default [CloudimageHttpClient]
+         * constructor argument, so the client stays constructible exactly
+         * as before in every existing test, with the app graph wiring the
+         * WebView-backed one.
          */
         val DISABLED: CloudflareBypasser = CloudflareBypasser(DisabledSolver)
 
