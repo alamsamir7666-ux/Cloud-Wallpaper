@@ -16,6 +16,7 @@ import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.feature.browse.BrowseScreen
 import com.cloudimage.feature.detail.DetailDestination
 import com.cloudimage.feature.detail.DetailScreen
+import com.cloudimage.feature.extensions.BundleDetailScreen
 import com.cloudimage.feature.extensions.ExtensionsDestination
 import com.cloudimage.feature.extensions.ExtensionsScreen
 import com.cloudimage.feature.extensions.InstalledExtensionsScreen
@@ -99,8 +100,27 @@ fun CloudimageNavHost(
                 listOf(
                     navArgument(ExtensionsDestination.repoArg) { type = NavType.StringType },
                 ),
+        ) { backStackEntry ->
+            val repoId =
+                ExtensionsDestination.decodeRepoId(
+                    backStackEntry.arguments?.getString(ExtensionsDestination.repoArg).orEmpty(),
+                )
+            RepoDetailScreen(
+                onBack = { navController.popBackStack() },
+                onOpenBundle = { bundle ->
+                    navController.navigate(ExtensionsDestination.createBundleRoute(repoId, bundle.id))
+                },
+            )
+        }
+        composable(
+            route = ExtensionsDestination.bundleRoute,
+            arguments =
+                listOf(
+                    navArgument(ExtensionsDestination.repoArg) { type = NavType.StringType },
+                    navArgument(ExtensionsDestination.bundleArg) { type = NavType.StringType },
+                ),
         ) {
-            RepoDetailScreen(onBack = { navController.popBackStack() })
+            BundleDetailScreen(onBack = { navController.popBackStack() })
         }
         composable(ExtensionsDestination.installedRoute) {
             InstalledExtensionsScreen(onBack = { navController.popBackStack() })

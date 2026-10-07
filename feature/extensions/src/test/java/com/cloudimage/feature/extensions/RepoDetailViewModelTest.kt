@@ -325,4 +325,84 @@ class RepoDetailViewModelTest {
             viewModel.state.first { repos.catalogCalls >= 2 }
             assertEquals(2, repos.catalogCalls)
         }
+
+    // --- bundles (v1.2.2) --------------------------------------------------
+
+    @Test
+    fun catalogLoadsBundlesAlongsideEntries() =
+        runTest {
+            val repos =
+                FakeRepoManager().apply {
+                    repos = mutableListOf(repo("r1"))
+                    catalogResult =
+                        RepoIndexResult.Ok(
+                            RepoIndexDto(
+                                name = "Official",
+                                packages = listOf(catalogEntry("cloudimage.unsplash")),
+                                bundles =
+                                    listOf(
+                                        bundleEntry(
+                                            "wallpaper",
+                                            name = "Wallpaper Pack",
+                                            packageIds = listOf("cloudimage.unsplash"),
+                                        ),
+                                    ),
+                            ),
+                        )
+                }
+            val viewModel = viewModel(repos = repos)
+
+            val state = viewModel.state.first { it.catalogStatus == RepoCatalogStatus.READY }
+            assertEquals(listOf("wallpaper"), state.bundles.map { it.id })
+            assertEquals(listOf("cloudimage.unsplash"), state.bundles.single().packageIds)
+        }
+
+    @Test
+    fun indexWithoutBundlesLeavesTheSectionEmpty() =
+        runTest {
+            val repos =
+                FakeRepoManager().apply {
+                    repos = mutableListOf(repo("r1"))
+                    catalogResult =
+                        RepoIndexResult.Ok(
+                            RepoIndexDto(name = "Official", packages = listOf(catalogEntry("cloudimage.unsplash"))),
+                        )
+                }
+            val viewModel = viewModel(repos = repos)
+
+            val state = viewModel.state.first { it.catalogStatus == RepoCatalogStatus.READY }
+            assertTrue(state.bundles.isEmpty())
+            assertTrue(state.visibleBundles().isEmpty())
+        }
+
+    @Test
+    fun queryFiltersBundlesByNameAndDescription() {
+        val bundles =
+            listOf(
+                bundleEntry("anime", name = "Anime Pack", packageIds = listOf("a")),
+                bundleEntry("nature", description = "forests and mountains", packageIds = listOf("b")),
+            )
+
+        assertEquals(listOf("anime"), RepoDetailUiState(bundles = bundles, query = "anime").visibleBundles().map { it.id })
+        assertEquals(listOf("nature"), RepoDetailUiState(bundles = bundles, query = "mountains").visibleBundles().map { it.id })
+        assertTrue(RepoDetailUiState(bundles = bundles, query = "zzz").visibleBundles().isEmpty())
+        assertEquals(2, RepoDetailUiState(bundles = bundles).visibleBundles().size)
+    }
+
+    @Test
+    fun installedCountCountsMembersTheEngineReports() {
+        val state =
+            RepoDetailUiState(
+                installed = listOf(manifestRow("a")),
+                bundles = listOf(bundleEntry("pack", packageIds = listOf("a", "b", "ghost"))),
+            )
+
+        assertEquals(1, state.installedCount(state.bundles.single()))
+    }
+
+    @Test
+    fun displayBundleNameFallsBackToTheId() {
+        assertEquals("Wallpaper pack", displayBundleName(bundleEntry("wallpaper pack")))
+        assertEquals("Wallpaper Pack", displayBundleName(bundleEntry("wallpaper", name = "Wallpaper Pack")))
+    }
 }

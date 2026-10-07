@@ -21,6 +21,7 @@ import com.cloudimage.extensions.core.InstallResult
 import com.cloudimage.extensions.core.InstalledExtension
 import com.cloudimage.extensions.core.LoadResult
 import com.cloudimage.extensions.core.RepoError
+import com.cloudimage.extensions.core.RepoBundleEntry
 import com.cloudimage.extensions.core.RepoIndexDto
 import com.cloudimage.extensions.core.RepoIndexResult
 import com.cloudimage.extensions.core.RepoManager
@@ -199,6 +200,18 @@ fun catalogEntry(
     versionCode = versionCode,
     description = description,
     categories = categories,
+)
+
+fun bundleEntry(
+    id: String,
+    name: String = "",
+    description: String = "",
+    packageIds: List<String> = emptyList(),
+) = RepoBundleEntry(
+    id = id,
+    name = name,
+    description = description,
+    packageIds = packageIds,
 )
 
 fun repo(id: String) = StoredRepo(id, "$id/index.json", id, 1L)

@@ -1,8 +1,6 @@
 package com.cloudimage.feature.extensions
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,27 +14,21 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,31 +37,29 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.cloudimage.extensions.core.RepoBundleEntry
 import com.cloudimage.extensions.core.RepoPackageEntry
 import kotlinx.coroutines.flow.collectLatest
 
 /**
- * One repository's catalog (v1.0.20, Cloudstream's plugin list): search
- * over the entries, category filter chips when the index declares
- * categories, and one row per extension — icon, name, version, size,
- * short description, and a per-item download that becomes delete once
- * installed. Updates ride the download affordance as install-overs.
- * v1.2.2: indexes that declare bundles get a curated-packs section
- * above the catalog, one card per bundle.
+ * One bundle's member list (v1.2.2): the resolved members in bundle order
+ * with checkbox selection for the bulk install, a walking spinner while
+ * the batch runs one member at a time, per-row install-over updates,
+ * per-row uninstall, and inert rows for ids the catalog no longer
+ * carries. The pinned bottom bar installs the checked members or reports
+ * the bundle complete.
  */
 @Composable
-fun RepoDetailScreen(
+fun BundleDetailScreen(
     onBack: () -> Unit,
-    onOpenBundle: (RepoBundleEntry) -> Unit,
     modifier: Modifier = Modifier,
-    viewModel: RepoDetailViewModel = hiltViewModel(),
+    viewModel: BundleDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -103,6 +93,17 @@ fun RepoDetailScreen(
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
+        bottomBar = {
+            if (state.status == BundleCatalogStatus.READY) {
+                BundleBottomBar(
+                    selectedCount = state.selected.size,
+                    installing = state.installing.isNotEmpty(),
+                    complete = state.complete,
+                    totalMembers = state.totalMembers,
+                    onInstallSelected = viewModel::installSelected,
+                )
+            }
+        },
         modifier = modifier.fillMaxSize(),
     ) { padding ->
         Column(
@@ -113,69 +114,39 @@ fun RepoDetailScreen(
                     .padding(padding),
         ) {
             RepoDetailToolbar(
-                title = state.repo?.name.orEmpty(),
-                loading = state.catalogStatus == RepoCatalogStatus.LOADING,
+                title = state.bundle?.let { displayBundleName(it) } ?: state.requestedBundleId,
+                loading = state.status == BundleCatalogStatus.LOADING,
                 onBack = onBack,
                 onRefresh = viewModel::refresh,
             )
-            if (state.catalogStatus == RepoCatalogStatus.READY) {
-                CatalogSearchField(
-                    query = state.query,
-                    onQueryChange = viewModel::setQuery,
-                )
-                if (state.categories.isNotEmpty()) {
-                    CategoryChipsRow(
-                        categories = state.categories,
-                        selected = state.category,
-                        onSelect = viewModel::setCategory,
-                    )
-                }
-            }
-            when (state.catalogStatus) {
-                RepoCatalogStatus.LOADING ->
+            when (state.status) {
+                BundleCatalogStatus.LOADING ->
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center,
                     ) { CircularProgressIndicator() }
-                RepoCatalogStatus.FAILED -> CatalogFailed(onRetry = viewModel::refresh)
-                RepoCatalogStatus.READY -> {
-                    val visible = state.visibleEntries()
-                    val visibleBundles = state.visibleBundles()
+                BundleCatalogStatus.FAILED -> CatalogFailed(onRetry = viewModel::refresh)
+                BundleCatalogStatus.MISSING -> BundleMissing(onRetry = viewModel::refresh)
+                BundleCatalogStatus.READY -> {
                     LazyColumn(
                         contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 24.dp),
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        if (visibleBundles.isNotEmpty()) {
-                            item(key = "bundles-header") {
-                                SectionHeader(text = stringResource(R.string.extensions_bundles_section))
-                            }
-                            items(
-                                visibleBundles,
-                                key = { "bundle:${it.id}" },
-                            ) { bundle ->
-                                BundleRow(
-                                    bundle = bundle,
-                                    installedCount = state.installedCount(bundle),
-                                    onOpen = { onOpenBundle(bundle) },
+                        val bundle = state.bundle
+                        if (bundle != null && bundle.description.isNotBlank()) {
+                            item(key = "bundle-description") {
+                                Text(
+                                    text = bundle.description,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                                 )
                             }
-                            if (visible.isNotEmpty()) {
-                                item(key = "extensions-header") {
-                                    SectionHeader(text = stringResource(R.string.extensions_extensions_section))
-                                }
-                            }
                         }
-                        if (visible.isEmpty() && visibleBundles.isEmpty()) {
-                            item {
+                        if (state.entries.isEmpty() && state.missingIds.isEmpty()) {
+                            item(key = "bundle-empty") {
                                 Text(
-                                    text =
-                                        stringResource(
-                                            if (state.query.isNotBlank() || state.category != null) {
-                                                R.string.extensions_catalog_no_matches
-                                            } else {
-                                                R.string.extensions_catalog_empty
-                                            },
-                                        ),
+                                    text = stringResource(R.string.extensions_bundle_empty),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(24.dp),
@@ -183,18 +154,27 @@ fun RepoDetailScreen(
                             }
                         }
                         items(
-                            visible,
+                            state.entries,
                             key = { it.id },
                         ) { entry ->
-                            CatalogEntryRow(
+                            BundleMemberRow(
                                 entry = entry,
                                 installed = entry.id in state.installedManifests,
                                 update = state.updateAvailable(entry),
+                                selected = entry.id in state.selected,
                                 installing = entry.id in state.installing,
                                 failed = entry.id in state.failedInstalls,
-                                onInstall = { viewModel.installPackage(entry) },
+                                selectionEnabled = state.installing.isEmpty(),
+                                onToggleSelected = { viewModel.toggleSelected(entry.id) },
+                                onInstall = { viewModel.installMember(entry) },
                                 onUninstall = { pendingUninstall = entry },
                             )
+                        }
+                        items(
+                            state.missingIds,
+                            key = { "missing:$it" },
+                        ) { id ->
+                            MissingMemberRow(id = id)
                         }
                     }
                 }
@@ -206,7 +186,7 @@ fun RepoDetailScreen(
         UninstallEntryDialog(
             entry = entry,
             onConfirm = {
-                viewModel.uninstallPackage(entry)
+                viewModel.uninstallMember(entry)
                 pendingUninstall = null
             },
             onDismiss = { pendingUninstall = null },
@@ -214,133 +194,65 @@ fun RepoDetailScreen(
     }
 }
 
-/** The repo/bundle detail toolbar — shared by both pushed screens. */
+/**
+ * The pinned bulk-install bar: one button for the checked members while
+ * anything is missing, and the completion message once the bundle is
+ * whole. Frozen while a batch is in flight.
+ */
 @Composable
-internal fun RepoDetailToolbar(
-    title: String,
-    loading: Boolean,
-    onBack: () -> Unit,
-    onRefresh: () -> Unit,
+private fun BundleBottomBar(
+    selectedCount: Int,
+    installing: Boolean,
+    complete: Boolean,
+    totalMembers: Int,
+    onInstallSelected: () -> Unit,
 ) {
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(onClick = onBack) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                contentDescription = stringResource(R.string.extensions_back),
-            )
-        }
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        if (loading) {
-            CircularProgressIndicator(
-                strokeWidth = 2.dp,
-                modifier =
-                    Modifier
-                        .padding(end = 12.dp)
-                        .size(24.dp),
-            )
-        }
-        IconButton(onClick = onRefresh) {
-            Icon(
-                imageVector = Icons.Rounded.Refresh,
-                contentDescription = stringResource(R.string.extensions_refresh_repo),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun CatalogSearchField(
-    query: String,
-    onQueryChange: (String) -> Unit,
-) {
-    OutlinedTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        placeholder = { Text(stringResource(R.string.extensions_search_catalog)) },
-        leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-        trailingIcon = {
-            if (query.isNotEmpty()) {
-                IconButton(
-                    onClick = { onQueryChange("") },
-                    modifier = Modifier.testTag("extensions:query-clear"),
+    Surface(tonalElevation = 3.dp) {
+        Box(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (complete) {
+                Text(
+                    text = stringResource(R.string.extensions_bundle_all_installed, totalMembers),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Button(
+                    onClick = onInstallSelected,
+                    enabled = selectedCount > 0 && !installing,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .testTag("extensions:bundle-install-selected"),
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Close,
-                        contentDescription = stringResource(R.string.extensions_search_clear),
-                    )
+                    Text(text = stringResource(R.string.extensions_bundle_install_selected, selectedCount))
                 }
             }
-        },
-        singleLine = true,
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, bottom = 4.dp)
-                .testTag("extensions:query"),
-    )
-}
-
-/**
- * The category filter — Cloudstream's tv-type chips: "All" plus every
- * category the repo's entries declare, single-select, horizontally
- * scrollable. Only rendered when the index carries categories at all.
- */
-@Composable
-private fun CategoryChipsRow(
-    categories: List<String>,
-    selected: String?,
-    onSelect: (String?) -> Unit,
-) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
-    ) {
-        FilterChip(
-            selected = selected == null,
-            onClick = { onSelect(null) },
-            label = { Text(stringResource(R.string.extensions_category_all)) },
-        )
-        categories.forEach { category ->
-            FilterChip(
-                selected = selected == category,
-                onClick = { onSelect(category) },
-                label = { Text(category.replaceFirstChar { it.uppercase() }) },
-                modifier = Modifier.testTag("extensions:category:$category"),
-            )
         }
     }
 }
 
 /**
- * One catalog row (Cloudstream's plugin item): avatar, name, version and
- * size, short description, and the trailing per-item action — download
- * until installed, delete after; an update keeps the download affordance
- * as an install-over next to an "Update to vX" chip.
+ * One member row: a leading checkbox while uninstalled (the bulk
+ * selection) or a check mark once installed, the catalog-style texts, and
+ * the trailing affordance — single install, update install-over, or
+ * uninstall.
  */
 @Composable
-private fun CatalogEntryRow(
+private fun BundleMemberRow(
     entry: RepoPackageEntry,
     installed: Boolean,
     update: Boolean,
+    selected: Boolean,
     installing: Boolean,
     failed: Boolean,
+    selectionEnabled: Boolean,
+    onToggleSelected: () -> Unit,
     onInstall: () -> Unit,
     onUninstall: () -> Unit,
 ) {
@@ -351,10 +263,26 @@ private fun CatalogEntryRow(
                 .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        MonogramAvatar(
-            label = displayName(entry),
-            seed = entry.id,
-        )
+        Box(
+            modifier = Modifier.size(40.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (installed) {
+                Icon(
+                    imageVector = Icons.Rounded.CheckCircle,
+                    contentDescription = stringResource(R.string.extensions_bundle_member_installed),
+                    tint = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.size(24.dp),
+                )
+            } else {
+                Checkbox(
+                    checked = selected,
+                    onCheckedChange = { onToggleSelected() },
+                    enabled = selectionEnabled,
+                    modifier = Modifier.testTag("extensions:bundle-toggle:${entry.id}"),
+                )
+            }
+        }
         Spacer(Modifier.width(16.dp))
         Column(
             modifier = Modifier.weight(1f),
@@ -396,7 +324,7 @@ private fun CatalogEntryRow(
                 )
                 IconButton(
                     onClick = onInstall,
-                    modifier = Modifier.testTag("extensions:update:${entry.id}"),
+                    modifier = Modifier.testTag("extensions:bundle-update:${entry.id}"),
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Download,
@@ -408,7 +336,7 @@ private fun CatalogEntryRow(
             installed ->
                 IconButton(
                     onClick = onUninstall,
-                    modifier = Modifier.testTag("extensions:uninstall:${entry.id}"),
+                    modifier = Modifier.testTag("extensions:bundle-uninstall:${entry.id}"),
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.DeleteOutline,
@@ -419,7 +347,7 @@ private fun CatalogEntryRow(
             else ->
                 IconButton(
                     onClick = onInstall,
-                    modifier = Modifier.testTag("extensions:install:${entry.id}"),
+                    modifier = Modifier.testTag("extensions:bundle-install:${entry.id}"),
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Download,
@@ -436,41 +364,20 @@ private fun CatalogEntryRow(
     }
 }
 
-/** The section label above the bundle cards / the plain catalog. */
+/** A bundle-declared id the catalog no longer carries — visible, dimmed, inert. */
 @Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp),
-    )
-}
-
-/**
- * One bundle card in the repo's catalog (v1.2.2): avatar, name, "N
- * extensions · M installed", description, and the installed-ratio chip —
- * tapping opens the bundle's member list for bulk install and
- * per-member management.
- */
-@Composable
-private fun BundleRow(
-    bundle: RepoBundleEntry,
-    installedCount: Int,
-    onOpen: () -> Unit,
-) {
+private fun MissingMemberRow(id: String) {
     Row(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onOpen)
                 .padding(horizontal = 16.dp, vertical = 10.dp)
-                .testTag("extensions:bundle:${bundle.id}"),
+                .alpha(rowAlpha(disabled = true)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         MonogramAvatar(
-            label = displayBundleName(bundle),
-            seed = bundle.id,
+            label = id,
+            seed = id,
         )
         Spacer(Modifier.width(16.dp))
         Column(
@@ -478,39 +385,24 @@ private fun BundleRow(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
-                text = displayBundleName(bundle),
+                text = id,
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = stringResource(R.string.extensions_bundle_meta, bundle.packageIds.size, installedCount),
+                text = stringResource(R.string.extensions_bundle_member_missing),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
-            if (bundle.description.isNotBlank()) {
-                Text(
-                    text = bundle.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
         }
-        Spacer(Modifier.width(8.dp))
-        LabelChip(
-            text = "$installedCount/${bundle.packageIds.size}",
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        )
     }
 }
 
-/** The catalog fetch failure — shared by the repo and bundle screens. */
+/** The bundle vanished from the index — the repo removed or renamed it. */
 @Composable
-internal fun CatalogFailed(onRetry: () -> Unit) {
+private fun BundleMissing(onRetry: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -520,7 +412,7 @@ internal fun CatalogFailed(onRetry: () -> Unit) {
                 .padding(32.dp),
     ) {
         Text(
-            text = stringResource(R.string.extensions_catalog_failed),
+            text = stringResource(R.string.extensions_bundle_missing),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -528,32 +420,4 @@ internal fun CatalogFailed(onRetry: () -> Unit) {
             Text(text = stringResource(R.string.extensions_catalog_retry))
         }
     }
-}
-
-/** The uninstall confirmation — shared by the repo and bundle screens. */
-@Composable
-internal fun UninstallEntryDialog(
-    entry: RepoPackageEntry,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(text = stringResource(R.string.extensions_uninstall_title))
-        },
-        text = {
-            Text(text = stringResource(R.string.extensions_uninstall_body, displayName(entry)))
-        },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(text = stringResource(R.string.extensions_uninstall_confirm))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(text = stringResource(R.string.extensions_uninstall_cancel))
-            }
-        },
-    )
 }

@@ -8,6 +8,7 @@ import com.cloudimage.extensions.core.ExtensionManifest
 import com.cloudimage.extensions.core.ExtensionRepository
 import com.cloudimage.extensions.core.InstallResult
 import com.cloudimage.extensions.core.InstalledExtension
+import com.cloudimage.extensions.core.RepoBundleEntry
 import com.cloudimage.extensions.core.RepoIndexResult
 import com.cloudimage.extensions.core.RepoManager
 import com.cloudimage.extensions.core.RepoPackageEntry
@@ -41,6 +42,17 @@ sealed interface RepoDetailEvent {
     data class Uninstalled(
         val name: String,
     ) : RepoDetailEvent
+
+    /**
+     * A bulk bundle install finished (v1.2.2) — one snackbar summarizing
+     * the batch, not one per member. [failedCount] is the members that
+     * keep their red row and single-row retry.
+     */
+    data class BundleInstalled(
+        val bundleName: String,
+        val installedCount: Int,
+        val failedCount: Int,
+    ) : RepoDetailEvent
 }
 
 /** The catalog fetch outcome. */
@@ -52,13 +64,16 @@ enum class RepoCatalogStatus {
 
 /**
  * Immutable snapshot of one repository's catalog screen: the repo, its
- * (search- and category-filtered) entries, and the per-entry install
- * state needed to render download / delete / update affordances.
+ * bundles (v1.2.2) and (search- and category-filtered) entries, and the
+ * per-entry install state needed to render download / delete / update
+ * affordances.
  */
 data class RepoDetailUiState(
     val repo: StoredRepo? = null,
     val catalogStatus: RepoCatalogStatus = RepoCatalogStatus.LOADING,
     val entries: List<RepoPackageEntry> = emptyList(),
+    /** Bundles the repo's index advertises; empty for older repos. */
+    val bundles: List<RepoBundleEntry> = emptyList(),
     val installed: List<InstalledExtension> = emptyList(),
     val query: String = "",
     /** null = the All chip; otherwise a lower-case category from [categories]. */
@@ -75,6 +90,12 @@ data class RepoDetailUiState(
     /** Distinct lower-case categories across the catalog, alphabetized. */
     val categories: List<String>
         get() = entries.flatMap { it.categories }.distinct().sorted()
+
+    /**
+     * How many of the bundle's members are installed right now — the
+     * "M of N installed" signal on the repo screen's bundle cards.
+     */
+    fun installedCount(bundle: RepoBundleEntry): Int = bundle.packageIds.count { it in installedManifests }
 
     /**
      * True when [entry] advertises something other than what is installed:
@@ -94,6 +115,19 @@ data class RepoDetailUiState(
                 (category == null || category in entry.categories) && matchesQuery(entry)
             }.sortedBy { displayName(it).lowercase() }
 
+    /**
+     * The visible bundle cards. Bundles carry no categories of their own,
+     * so they ride above the category chips; they do honor the search
+     * field, matching id, name, or description.
+     */
+    fun visibleBundles(): List<RepoBundleEntry> =
+        bundles.filter { bundle ->
+            query.isBlank() ||
+                bundle.id.contains(query, ignoreCase = true) ||
+                bundle.name.contains(query, ignoreCase = true) ||
+                bundle.description.contains(query, ignoreCase = true)
+        }
+
     private fun matchesQuery(entry: RepoPackageEntry): Boolean {
         if (query.isBlank()) return true
         return entry.id.contains(query, ignoreCase = true) ||
@@ -107,6 +141,10 @@ fun displayName(entry: RepoPackageEntry): String =
     entry.name.ifBlank {
         entry.id.substringAfterLast('.').replaceFirstChar { it.uppercase() }
     }
+
+/** The display name of a bundle, id-derived when the author left it blank. */
+fun displayBundleName(bundle: RepoBundleEntry): String =
+    bundle.name.ifBlank { bundle.id.replaceFirstChar { it.uppercase() } }
 
 /**
  * Drives one repository's catalog screen: fetch (and re-fetch) its index,
@@ -199,10 +237,10 @@ class RepoDetailViewModel
             when (val result = repoManager.catalog(repo)) {
                 is RepoIndexResult.Ok ->
                     _state.update {
-                        it.copy(catalogStatus = RepoCatalogStatus.READY, entries = result.index.packages)
+                        it.copy(catalogStatus = RepoCatalogStatus.READY, entries = result.index.packages, bundles = result.index.bundles)
                     }
                 is RepoIndexResult.Failed ->
-                    _state.update { it.copy(catalogStatus = RepoCatalogStatus.FAILED, entries = emptyList()) }
+                    _state.update { it.copy(catalogStatus = RepoCatalogStatus.FAILED, entries = emptyList(), bundles = emptyList()) }
             }
         }
 

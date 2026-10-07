@@ -46,11 +46,31 @@ data class RepoPackageEntry(
     val categories: List<String> = emptyList(),
 )
 
+/**
+ * One bundle a repository advertises (v1.2.2) — a named, curated group
+ * of the repo's own packages, the meta-package pattern: a bundle adds no
+ * files of its own, its content IS the list of member package ids
+ * ("wallpaper" = 25-40 site extensions, installable as one action).
+ *
+ * [packageIds] reference the SAME index's [RepoPackageEntry]s; an id the
+ * catalog no longer carries renders as an inert "missing" row rather
+ * than failing the bundle. Duplicated ids install once.
+ */
+@Serializable
+data class RepoBundleEntry(
+    val id: String,
+    val name: String = "",
+    val description: String = "",
+    val packageIds: List<String> = emptyList(),
+)
+
 /** Wire shape of a repo's `index.json`. */
 @Serializable
 data class RepoIndexDto(
     val name: String = "",
     val packages: List<RepoPackageEntry> = emptyList(),
+    /** Named groups over [packages] (v1.2.2); older repos declare none. */
+    val bundles: List<RepoBundleEntry> = emptyList(),
 )
 
 /**

@@ -188,6 +188,39 @@ class RepoManagerTest {
             )
         }
 
+    @Test
+    fun `catalog carries declared bundles`() =
+        runTest {
+            // add() and catalog() each fetch the index.
+            val body =
+                """{"name":"Official","packages":[],"bundles":[""" +
+                    """{"id":"wallpaper","name":"Wallpaper Pack","description":"Curated sites",""" +
+                    """"packageIds":["cloudimage.demo"]}]}"""
+            enqueueIndex(body)
+            enqueueIndex(body)
+            val repo = (manager.add(repoRoot) as AddRepoResult.Added).repo
+
+            val catalog = manager.catalog(repo) as RepoIndexResult.Ok
+
+            val bundle = catalog.index.bundles.single()
+            assertEquals("wallpaper", bundle.id)
+            assertEquals("Wallpaper Pack", bundle.name)
+            assertEquals("Curated sites", bundle.description)
+            assertEquals(listOf("cloudimage.demo"), bundle.packageIds)
+        }
+
+    @Test
+    fun `old indexes without bundles parse to none`() =
+        runTest {
+            enqueueIndex("""{"name":"Official","packages":[]}""")
+            enqueueIndex("""{"name":"Official","packages":[]}""")
+            val repo = (manager.add(repoRoot) as AddRepoResult.Added).repo
+
+            val catalog = manager.catalog(repo) as RepoIndexResult.Ok
+
+            assertTrue(catalog.index.bundles.isEmpty())
+        }
+
     // --- install -----------------------------------------------------------
 
     @Test

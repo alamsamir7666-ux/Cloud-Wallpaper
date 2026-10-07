@@ -65,4 +65,17 @@
     <string name="extensions_catalog_retry">Retry</string>
     <string name="extensions_catalog_empty">No extensions in this repository.</string>
     <string name="extensions_catalog_no_matches">Nothing matches your search.</string>
+
+    <!-- v1.2.2: extension bundles — curated packs inside a repository. -->
+    <string name="extensions_bundles_section">Bundles</string>
+    <string name="extensions_extensions_section">Extensions</string>
+    <string name="extensions_bundle_meta">%1$d extensions · %2$d installed</string>
+    <string name="extensions_bundle_install_selected">Install selected (%1$d)</string>
+    <string name="extensions_bundle_all_installed">All %1$d extensions installed</string>
+    <string name="extensions_bundle_member_installed">Installed</string>
+    <string name="extensions_bundle_member_missing">Missing from repository</string>
+    <string name="extensions_bundle_missing">This bundle is no longer in this repository.</string>
+    <string name="extensions_bundle_empty">This bundle has no extensions.</string>
+    <string name="extensions_bundle_installed_snackbar">%1$s: %2$d installed</string>
+    <string name="extensions_bundle_installed_failures_snackbar">%1$s: %2$d installed, %3$d failed</string>
 </resources>
