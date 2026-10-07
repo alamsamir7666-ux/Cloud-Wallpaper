@@ -145,9 +145,18 @@ class BundleDetailViewModelTest {
 
             advanceUntilIdle()
             assertEquals(listOf("a", "b", "c"), repos.installedEntries.map { it.id })
-            assertTrue(viewModel.state.value.installing.isEmpty())
-            assertTrue(viewModel.state.value.selected.isEmpty())
-            assertTrue(viewModel.state.value.failedInstalls.isEmpty())
+            assertTrue(
+                viewModel.state.value.installing
+                    .isEmpty(),
+            )
+            assertTrue(
+                viewModel.state.value.selected
+                    .isEmpty(),
+            )
+            assertTrue(
+                viewModel.state.value.failedInstalls
+                    .isEmpty(),
+            )
             assertEquals(listOf(RepoDetailEvent.BundleInstalled("Pack", 3, 0)), events)
             collector.cancel()
         }
@@ -170,7 +179,10 @@ class BundleDetailViewModelTest {
             advanceUntilIdle()
             assertEquals(listOf("a", "b"), repos.installedEntries.map { it.id })
             assertEquals(setOf("a", "b"), viewModel.state.value.failedInstalls)
-            assertTrue(viewModel.state.value.selected.isEmpty())
+            assertTrue(
+                viewModel.state.value.selected
+                    .isEmpty(),
+            )
             assertEquals(listOf(RepoDetailEvent.BundleInstalled("Pack", 0, 2)), events)
             collector.cancel()
         }

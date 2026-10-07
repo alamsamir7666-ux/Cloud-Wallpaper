@@ -143,8 +143,7 @@ fun displayName(entry: RepoPackageEntry): String =
     }
 
 /** The display name of a bundle, id-derived when the author left it blank. */
-fun displayBundleName(bundle: RepoBundleEntry): String =
-    bundle.name.ifBlank { bundle.id.replaceFirstChar { it.uppercase() } }
+fun displayBundleName(bundle: RepoBundleEntry): String = bundle.name.ifBlank { bundle.id.replaceFirstChar { it.uppercase() } }
 
 /**
  * Drives one repository's catalog screen: fetch (and re-fetch) its index,

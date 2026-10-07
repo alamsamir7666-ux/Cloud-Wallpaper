@@ -20,8 +20,8 @@ import com.cloudimage.extensions.core.ExtensionStatus
 import com.cloudimage.extensions.core.InstallResult
 import com.cloudimage.extensions.core.InstalledExtension
 import com.cloudimage.extensions.core.LoadResult
-import com.cloudimage.extensions.core.RepoError
 import com.cloudimage.extensions.core.RepoBundleEntry
+import com.cloudimage.extensions.core.RepoError
 import com.cloudimage.extensions.core.RepoIndexDto
 import com.cloudimage.extensions.core.RepoIndexResult
 import com.cloudimage.extensions.core.RepoManager
