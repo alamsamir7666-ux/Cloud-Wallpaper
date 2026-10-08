@@ -9,6 +9,7 @@ import android.graphics.drawable.ColorDrawable
 import android.view.ViewGroup
 import android.view.Window
 import android.webkit.CookieManager
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.Dispatchers
@@ -48,22 +49,33 @@ import kotlin.coroutines.resume
  * to, and the detached WebView remains the best effort.
  *
  * v1.2.3: two lessons from WallpaperFlare installs in the wild. First,
- * the default WebView User-Agent carries the `wv` token — a beacon
- * Cloudflare's scoring reads as "embedded browser", and Turnstile
- * challenges routinely refuse to settle for it — so every WebView this
- * solver creates now reports a clean mobile-Chrome agent
- * ([SOLVER_USER_AGENT]), and persisted clearances are reconstructed
- * under the same constant so the pair stays bound. Second, some zones
- * bind their clearances to more than (IP, User-Agent) — the replay's
- * TLS fingerprint is checked too, and no cookie jar can fix an OkHttp
- * handshake — so [fetch] was added: the WebView loads the page as a
- * browser, settles whatever it meets, and hands back the DOCUMENT
- * itself, the one answer no fingerprint check can tell apart from a
- * user tapping a link.
+ * a suspicion that the default WebView User-Agent's `wv` token read as
+ * "embedded browser" to Cloudflare's scoring, so the solver briefly
+ * reported a hand-picked clean mobile-Chrome agent (see v1.2.4 — that
+ * suspicion was wrong). Second, some zones bind their clearances to more
+ * than (IP, User-Agent) — the replay's TLS fingerprint is checked too,
+ * and no cookie jar can fix an OkHttp handshake — so [fetch] was added:
+ * the WebView loads the page as a browser, settles whatever it meets,
+ * and hands back the DOCUMENT itself, the one answer no fingerprint
+ * check can tell apart from a user tapping a link.
  *
- * A stalled challenge gets exactly one reload: managed challenges
- * occasionally park on a finished page instead of navigating, and a
- * second load coaxes the orchestration to run again.
+ * v1.2.4: the v1.2.3 UA override was wrong, and CloudStream — whose
+ * CloudflareKiller settles these challenges at scale — says so in its
+ * own source: "Don't set user agent, setting user agent will make
+ * cloudflare break", "Cloudflare needs default user agent". A fixed
+ * Chrome/131 claim on an engine that is really a different Chromium
+ * fails Turnstile's UA-versus-engine consistency checks, and a browser
+ * nine majors stale scores badly on top of that. The solver therefore
+ * wears the device's DEFAULT WebView User-Agent verbatim — read once by
+ * [defaultUserAgent] and paired with every clearance, so replays stay
+ * bound to the identity that actually earned them. Two more fidelity
+ * fixes ride along from the same proven recipe: network images load
+ * freely (CloudStream removed its own blocking because suppressing the
+ * challenge page's resources broke the captcha orchestration), and the
+ * mid-run reload is gone (reloading a challenge mid-settle resets it —
+ * fatal when a human is mid-tap on an interactive Turnstile). Deadlines
+ * rise to a full minute, CloudStream's window for slow and interactive
+ * challenges.
  *
  * Everything runs on the main dispatcher: WebView demands a Looper thread,
  * and the main thread is the one that always has one. The poll loop below
@@ -81,12 +93,14 @@ internal class WebViewCloudflareSolver(
                 val cookies = cookieManager.getCookie("https://$host") ?: return@runCatching null
                 if (CLEARANCE_COOKIE !in cookies) return@runCatching null
                 // Reconstructed under the agent this solver ALWAYS earns
-                // with — v1.2.3's fixed identity, not the device's default,
-                // so the (cookies, agent) pair matches what a solve or
-                // fetch actually produced.
+                // with — the device's default WebView UA (v1.2.4), not a
+                // hand-picked browser string, so the (cookies, agent) pair
+                // matches what a solve or fetch actually produced. Without
+                // that agent there is no honest pair to reconstruct.
+                val agent = defaultUserAgent() ?: return@runCatching null
                 CloudflareBypass(
                     cookieHeader = cookies,
-                    userAgent = SOLVER_USER_AGENT,
+                    userAgent = agent,
                 )
             }.getOrNull()
         }
@@ -165,7 +179,7 @@ internal class WebViewCloudflareSolver(
         return try {
             dialog.show()
             webView.loadUrl(url)
-            waitForClearance(client, webView, host, url)
+            waitForClearance(host, url)
         } finally {
             runCatching { dialog.dismiss() }
             runCatching { webView.stopLoading() }
@@ -187,7 +201,7 @@ internal class WebViewCloudflareSolver(
         val webView = createWebView(client)
         return try {
             webView.loadUrl(url)
-            waitForClearance(client, webView, host, url)
+            waitForClearance(host, url)
         } finally {
             runCatching { webView.stopLoading() }
             runCatching { webView.destroy() }
@@ -252,13 +266,14 @@ internal class WebViewCloudflareSolver(
     /**
      * A WebView configured to look and behave like the browser the zone
      * wants to see: JavaScript on (the challenge IS JavaScript — no JS,
-     * no clearance), DOM storage on (Turnstile reads it like any real
-     * page), network images off (a solve never needs thumbnails), and a
-     * CLEAN mobile-Chrome User-Agent — v1.2.3: the default WebView agent
-     * advertises the `wv` token, which Cloudflare's scoring reads as an
-     * embedded browser and Turnstile regularly refuses to settle for.
-     * The fixed agent is also what the clearance replay and the warm
-     * start reconstruct, so the pair stays bound.
+     * no clearance) and DOM storage on (Turnstile reads it like any real
+     * page). Nothing else is touched — v1.2.4: the User-Agent stays the
+     * WebView default (CloudStream's CloudflareKiller passes `null` for
+     * exactly this reason — "setting user agent will make cloudflare
+     * break"), and network images load freely (CloudStream removed its
+     * own image blocking because suppressing the challenge page's
+     * resources broke the captcha). Every deviation from a plain browser
+     * is a signal Turnstile can score; the fewer, the better.
      */
     private fun createWebView(client: ChallengeClient): WebView {
         val cookies = cookieManager
@@ -267,8 +282,6 @@ internal class WebViewCloudflareSolver(
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            blockNetworkImage = true
-            userAgentString = SOLVER_USER_AGENT
         }
         cookies.setAcceptThirdPartyCookies(webView, true)
         // The counting client keeps the challenge's redirects inside this
@@ -281,36 +294,25 @@ internal class WebViewCloudflareSolver(
      * Waits for the clearance cookie to land. Managed challenges settle
      * between navigations — the script runs, sets `cf_clearance`, and may
      * reload the page — so a short poll over the cookie jar catches every
-     * shape of it without parsing page state. A page that finished yet
-     * produced no clearance after [RELOAD_AFTER_MS] is reloaded once: a
-     * parked orchestration usually runs properly on the second load. The
-     * hard deadline is a backstop above the engine's own timeout;
-     * whichever fires first, the caller's `finally` still tears the
-     * WebView down.
+     * shape of it without parsing page state. There is deliberately NO
+     * reload heuristic any more (v1.2.4): CloudStream's solver, which
+     * settles these challenges at scale, never reloads, and reloading a
+     * challenge mid-settle resets it — fatal when a human is mid-tap on
+     * an interactive Turnstile in the visible dialog. A slow orchestration
+     * simply gets the full deadline to finish. The hard deadline is a
+     * backstop above the engine's own timeout; whichever fires first, the
+     * caller's `finally` still tears the WebView down.
      */
     private suspend fun waitForClearance(
-        client: ChallengeClient,
-        webView: WebView,
         host: String,
         url: String,
     ): CloudflareBypass? {
+        // Read once: the identity this solve binds its cookies to. A device
+        // that cannot report a default agent cannot earn an honest pair.
+        val agent = defaultUserAgent() ?: return null
         val deadline = System.currentTimeMillis() + SOLVE_DEADLINE_MS
-        var firstFinishAt = 0L
-        var reloaded = false
         while (System.currentTimeMillis() < deadline) {
             delay(POLL_INTERVAL_MS)
-            // The reload heuristic runs before the cookie lookup on purpose:
-            // a parked page can leave the jar empty (a null `getCookie` and
-            // the `continue` it triggers), and the reload must still fire.
-            if (!reloaded && client.finished > 0) {
-                if (firstFinishAt == 0L) {
-                    firstFinishAt = System.currentTimeMillis()
-                }
-                if (System.currentTimeMillis() - firstFinishAt >= RELOAD_AFTER_MS) {
-                    reloaded = true
-                    runCatching { webView.reload() }
-                }
-            }
             val cookies =
                 cookieManager.getCookie(url)
                     ?: cookieManager.getCookie("https://$host")
@@ -320,7 +322,7 @@ internal class WebViewCloudflareSolver(
                 runCatching { cookieManager.flush() }
                 return CloudflareBypass(
                     cookieHeader = cookies,
-                    userAgent = SOLVER_USER_AGENT,
+                    userAgent = agent,
                 )
             }
         }
@@ -336,9 +338,9 @@ internal class WebViewCloudflareSolver(
      * settle beat for the DOM to complete) and asks
      * [CloudflareChallenge.isInterstitialDocument] whether Cloudflare's
      * furniture is still on screen. The first extraction that reads like
-     * site content wins, carrying whatever clearance the trip earned; the
-     * one-reload heuristic from [waitForClearance] rides along for pages
-     * that park instead of navigating. A page that never settles by the
+     * site content wins, carrying whatever clearance the trip earned.
+     * Like the solve path there is no reload (v1.2.4) — a page that parks
+     * simply rides the full deadline. A page that never settles by the
      * deadline is a failure — null, no partial credit.
      */
     private suspend fun awaitDocument(
@@ -348,20 +350,9 @@ internal class WebViewCloudflareSolver(
         url: String,
     ): WebViewPage? {
         val deadline = System.currentTimeMillis() + FETCH_DEADLINE_MS
-        var firstFinishAt = 0L
-        var reloaded = false
         var extractedForFinish = -1
         while (System.currentTimeMillis() < deadline) {
             delay(POLL_INTERVAL_MS)
-            if (!reloaded && client.finished > 0) {
-                if (firstFinishAt == 0L) {
-                    firstFinishAt = System.currentTimeMillis()
-                }
-                if (System.currentTimeMillis() - firstFinishAt >= RELOAD_AFTER_MS) {
-                    reloaded = true
-                    runCatching { webView.reload() }
-                }
-            }
             val finishedAt = client.lastFinishedAt
             val settled = finishedAt > 0 && System.currentTimeMillis() - finishedAt >= SETTLE_AFTER_FINISH_MS
             if (settled && client.finished != extractedForFinish) {
@@ -386,7 +377,8 @@ internal class WebViewCloudflareSolver(
                 ?: cookieManager.getCookie("https://$host")
                 ?: return null
         if (CLEARANCE_COOKIE !in cookies) return null
-        return CloudflareBypass(cookieHeader = cookies, userAgent = SOLVER_USER_AGENT)
+        val agent = defaultUserAgent() ?: return null
+        return CloudflareBypass(cookieHeader = cookies, userAgent = agent)
     }
 
     /**
@@ -438,18 +430,31 @@ internal class WebViewCloudflareSolver(
     /** JSON decode for `evaluateJavascript` answers — quoted strings or `null`. */
     private val json = Json
 
+    /**
+     * The device's true default WebView User-Agent, read once and cached —
+     * the identity every solver WebView wears and every clearance is bound
+     * to (v1.2.4). `WebSettings.getDefaultUserAgent` needs no WebView
+     * instance and is stable for a given device + WebView version, so the
+     * cache never goes stale mid-launch. Failures fall back to the UA of a
+     * throwaway WebView, and only if even that fails to null — which makes
+     * the callers decline rather than guess an agent the cookies were
+     * never earned under.
+     */
+    private fun defaultUserAgent(): String? {
+        defaultUserAgentCached?.let { return it }
+        val agent =
+            runCatching { WebSettings.getDefaultUserAgent(context) }.getOrNull()
+                ?: runCatching { WebView(context).settings.userAgentString }.getOrNull()
+        defaultUserAgentCached = agent
+        return agent
+    }
+
+    @Volatile
+    private var defaultUserAgentCached: String? = null
+
     private companion object {
         /** The cookie that proves the challenge was passed. */
         const val CLEARANCE_COOKIE = "cf_clearance"
-
-        /**
-         * The identity every solver WebView wears — a plain mobile-Chrome
-         * agent with NO `wv` token (v1.2.3), fixed for the app's lifetime
-         * so a clearance, its replay, and a later warm start all agree.
-         * Must stay coherent with what the site sees from a real browser.
-         */
-        const val SOLVER_USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
         /** The document-extraction script `evaluateJavascript` runs. */
         const val EXTRACT_HTML_SCRIPT = "(function(){return document.documentElement.outerHTML})()"
@@ -458,18 +463,10 @@ internal class WebViewCloudflareSolver(
         const val POLL_INTERVAL_MS = 400L
 
         /** Local backstop for a solve, above the engine's SOLVE_TIMEOUT_MS. */
-        const val SOLVE_DEADLINE_MS = 25_000L
+        const val SOLVE_DEADLINE_MS = 65_000L
 
         /** Local backstop for a document fetch, above FETCH_TIMEOUT_MS. */
-        const val FETCH_DEADLINE_MS = 35_000L
-
-        /**
-         * How long a finished page may sit without a clearance before the
-         * one reload fires — long enough for a healthy challenge's own
-         * second navigation, short enough to leave the reload time to work
-         * inside the deadline.
-         */
-        const val RELOAD_AFTER_MS = 6_000L
+        const val FETCH_DEADLINE_MS = 65_000L
 
         /**
          * The settle beat after a page finishes before its document is

@@ -181,4 +181,87 @@ class CloudflareChallengeTest {
 
         assertTrue(CloudflareChallenge.isChallenge(payload))
     }
+
+    // ---------------------------------------- rendered-document settle checks
+
+    @Test
+    fun settledContentPageWithInjectedDetectionsScriptIsContent() {
+        // v1.2.4's regression case: bot-managed zones inject their
+        // /cdn-cgi/challenge-platform JSD script into NORMAL pages, so the
+        // marker-any rule rejected the very content the fetch rung earned
+        // and every fetch "timed out" behind a page that had already
+        // settled. The site's own title settles it: this is content.
+        val html =
+            """
+            <!DOCTYPE html><html lang="en"><head>
+            <title>Wallpaper Flare - HD Wallpapers</title>
+            <script src="/cdn-cgi/challenge-platform/h/b/jsd/main.js" defer></script>
+            </head><body><ul class="gallery"><li><figure><img src="/wallpaper/a/b/c/slug-preview.jpg"/></figure></li></ul></body></html>
+            """.trimIndent()
+
+        assertFalse(CloudflareChallenge.isInterstitialDocument(html))
+    }
+
+    @Test
+    fun managedInterstitialDocumentIsInterstitial() {
+        val html =
+            """
+            <!DOCTYPE html><html lang="en-US"><head><title>Just a moment...</title>
+            <script src="/cdn-cgi/challenge-platform/h/b/orchestrate/challenge_page/v1" defer></script>
+            </head><body>Enable JavaScript and cookies to continue</body></html>
+            """.trimIndent()
+
+        assertTrue(CloudflareChallenge.isInterstitialDocument(html))
+    }
+
+    @Test
+    fun blockPageDocumentIsInterstitial() {
+        // The rendered fetch path treats block copy as never-settled — a
+        // WebView cannot lift an IP block, so the page must not be served
+        // as content.
+        val html =
+            """
+            <html><head><title>Attention Required! | Cloudflare</title></head>
+            <body>Sorry, you have been blocked. You are unable to access wallpaperflare.com</body></html>
+            """.trimIndent()
+
+        assertTrue(CloudflareChallenge.isInterstitialDocument(html))
+    }
+
+    @Test
+    fun legacyChallengeFormDocumentIsInterstitial() {
+        val html =
+            """
+            <html><head><title>Checking your browser before accessing wallpaperflare.com</title></head>
+            <body><form id="challenge-form" action="/__cf_chl_jschl_tk__=abc">
+            <input type="hidden" name="jschl_vc" value="hash"/></form></body></html>
+            """.trimIndent()
+
+        assertTrue(CloudflareChallenge.isInterstitialDocument(html))
+    }
+
+    @Test
+    fun interstitialTitlesMatchCaseInsensitively() {
+        val html = "<html><head><TITLE>jUST A mOMENT...</TITLE></head><body></body></html>"
+
+        assertTrue(CloudflareChallenge.isInterstitialDocument(html))
+    }
+
+    @Test
+    fun emptyDocumentIsNeverInterstitial() {
+        assertFalse(CloudflareChallenge.isInterstitialDocument(""))
+    }
+
+    @Test
+    fun contentMentioningCloudflareCopyInBodyIsContent() {
+        // A wallpaper whose TITLE is honest but whose description text
+        // mentions challenge copy is still content — the title leads.
+        val html =
+            """
+            <html><head><title>Gallery - games wallpaper</title></head>
+            <body>Just a moment while the gallery loads — 4K and 5K wallpapers.</body></html>
+            """.trimIndent()
+
+        assertFalse(CloudflareChallenge.isInterstitialDocument(html))
+    }
 }

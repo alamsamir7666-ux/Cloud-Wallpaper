@@ -164,11 +164,20 @@ class CloudflareBypasser(
     }
 
     companion object {
-        /** One WebView solve gets this long to settle; managed challenges take seconds. */
-        const val SOLVE_TIMEOUT_MS = 20_000L
+        /**
+         * One WebView solve gets this long to settle — v1.2.4 raised it from
+         * 20s to CloudStream's proven 60s window: managed challenges take
+         * seconds, but INTERACTIVE ones (Turnstile checkboxes in the visible
+         * dialog) need a human to notice and tap, and 20s cut them off
+         * mid-gesture.
+         */
+        const val SOLVE_TIMEOUT_MS = 60_000L
 
-        /** A document fetch through the WebView — challenge settle plus page load. */
-        const val FETCH_TIMEOUT_MS = 30_000L
+        /**
+         * A document fetch through the WebView — challenge settle plus page
+         * load, with the same human-in-the-loop window as a solve.
+         */
+        const val FETCH_TIMEOUT_MS = 60_000L
 
         /** A failed host goes this quiet before another solve is attempted. */
         const val FAILURE_COOLDOWN_MS = 60_000L

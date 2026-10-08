@@ -107,6 +107,47 @@ object CloudflareChallenge {
             "error code: 1020",
         )
 
+    /**
+     * Titles Cloudflare's own pages carry and content pages never do —
+     * the interstitials, the block pages, and the access-denied variants.
+     * Matched inside the extracted `<title>` element, case-insensitively.
+     */
+    private val TITLE_MARKERS =
+        listOf(
+            // The managed-challenge interstitial title.
+            "Just a moment",
+            // The IP-block / WAF-block page title.
+            "Attention Required",
+            // The access-denied (1020 / country rule) page title.
+            "Access denied",
+            // Legacy "Checking your browser" interstitial title.
+            "Checking your browser",
+            // Legacy "Please wait" interstitial title.
+            "Please wait",
+            // The JS-off challenge title.
+            "Enable JavaScript and cookies to continue",
+            // Generic Turnstile shell title.
+            "Security check",
+        )
+
+    /**
+     * Challenge FORM structures — present only on real challenge shells,
+     * never on the content pages a bot-managed zone injects its
+     * JavaScript-Detections script into.
+     */
+    private val FORM_MARKERS =
+        listOf(
+            // Challenge form and script tokens (managed + legacy).
+            "__cf_chl",
+            // Legacy "Checking your browser" interstitial.
+            "cf-browser-verification",
+            // Legacy challenge answer field.
+            "jschl",
+        )
+
+    /** The `<title>` element, whatever case the page spells it in. */
+    private val TITLE_REGEX = Regex("""<title[^>]*>(.*?)</title>""", RegexOption.IGNORE_CASE)
+
     /** Whether a completed exchange [payload] is a Cloudflare challenge page. */
     fun isChallenge(payload: HttpPayload): Boolean = isChallenge(payload.statusCode, payload.headers, payload.bodyText)
 
@@ -116,9 +157,32 @@ object CloudflareChallenge {
      * than the site's content. Used by the WebView fetch path: a document
      * that still looks like Cloudflare furniture has not settled yet, and
      * one that ends on block copy never will.
+     *
+     * v1.2.4: the rule is TITLE-led, because the old marker-any rule broke
+     * on exactly the pages it existed to accept. Cloudflare zones with bot
+     * management inject a `/cdn-cgi/challenge-platform/.../jsd/main.js`
+     * (JavaScript Detections) script into their NORMAL pages, so a settled
+     * content page carries the "challenge-platform" string too — and the
+     * fetch rung kept rejecting the very content it had just earned,
+     * timed out, and surfaced the original 403. Cloudflare's own pages
+     * announce themselves in their `<title>` — "Just a moment…", "Attention
+     * Required!", "Checking your browser", the access-denied variants —
+     * titles no real content page shares; the legacy challenge FORM
+     * markers (`__cf_chl`, `jschl`, `cf-browser-verification`) exist only
+     * on actual challenge shells. A document with neither is content,
+     * whatever scripts the zone injected into it.
      */
-    fun isInterstitialDocument(html: String): Boolean =
-        html.isNotEmpty() && (MARKERS.any(html::contains) || BLOCK_MARKERS.any(html::contains))
+    fun isInterstitialDocument(html: String): Boolean {
+        if (html.isEmpty()) return false
+        val title =
+            TITLE_REGEX
+                .find(html)
+                ?.groupValues
+                ?.getOrNull(1)
+                .orEmpty()
+        if (TITLE_MARKERS.any { title.contains(it, ignoreCase = true) }) return true
+        return FORM_MARKERS.any(html::contains)
+    }
 
     /**
      * The detection rule on raw parts — status gate first (a challenge is

@@ -140,6 +140,14 @@ class CloudimageHttpClient
          * any provider browser UA for that host, and its cookies ride the
          * same request.
          *
+         * A replayed request also drops the provider's `sec-ch-ua*` client
+         * hints (v1.2.4): those headers claim a specific Chrome version —
+         * WallpaperFlare's say 131 — and under a clearance the User-Agent is
+         * the WebView identity the cookies were earned with. Client hints
+         * contradicting the User-Agent are exactly the kind of incoherence
+         * Cloudflare's bot scoring reads, so the replay stays silent about
+         * browser versions it cannot honestly claim.
+         *
          * [onProgress], when set, streams 2xx bodies in [PROGRESS_CHUNK_BYTES]
          * chunks and reports the running byte count plus the Content-Length
          * when there is one; every other body (error pages, challenges) is
@@ -151,13 +159,19 @@ class CloudimageHttpClient
             bypass: CloudflareBypass?,
             onProgress: ((bytesRead: Long, totalBytes: Long?) -> Unit)? = null,
         ): HttpPayload {
+            val replayHeaders =
+                if (bypass == null) {
+                    extraHeaders
+                } else {
+                    extraHeaders.filterKeys { name -> !name.startsWith(CLIENT_HINT_PREFIX, ignoreCase = true) }
+                }
             val request =
                 Request
                     .Builder()
                     .url(url)
                     .header(HEADER_USER_AGENT, USER_AGENT)
                     .apply {
-                        for ((name, value) in extraHeaders) {
+                        for ((name, value) in replayHeaders) {
                             header(name, value)
                         }
                         if (bypass != null) {
@@ -273,6 +287,9 @@ class CloudimageHttpClient
             private const val HEADER_USER_AGENT = "User-Agent"
 
             private const val HEADER_COOKIE = "Cookie"
+
+            /** The client-hint family prefix a clearance replay must not contradict. */
+            internal const val CLIENT_HINT_PREFIX = "sec-ch-ua"
 
             /**
              * How many bytes one progress tick covers — wallpaper-sized

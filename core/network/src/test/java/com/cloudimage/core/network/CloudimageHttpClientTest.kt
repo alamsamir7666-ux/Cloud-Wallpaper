@@ -322,6 +322,47 @@ class CloudimageHttpClientTest {
         }
 
     @Test
+    fun replayedRequestDropsClientHintsThatWouldContradictTheClearanceAgent() =
+        runTest {
+            server.enqueue(MockResponse().setResponseCode(403).setBody(challengeBody))
+            server.enqueue(MockResponse().setBody("the real page"))
+            val solver =
+                BypassSolver().apply {
+                    earned = CloudflareBypass(cookieHeader = "cf_clearance=earned", userAgent = "DefaultWebView/139.0")
+                }
+
+            // A provider's browser-grade headers: client hints claiming a
+            // Chrome the replay's WebView agent is not (v1.2.4).
+            val browserHeaders =
+                mapOf(
+                    "User-Agent" to "Mozilla/5.0 (Linux; Android 14) Chrome/131.0.0.0 Mobile",
+                    "Accept" to "text/html,*/*;q=0.8",
+                    "Accept-Language" to "en-US,en;q=0.9",
+                    "sec-ch-ua" to "\"Google Chrome\";v=\"131\"",
+                    "sec-ch-ua-mobile" to "?1",
+                    "sec-ch-ua-platform" to "\"Android\"",
+                )
+
+            clientWith(solver).getRaw(server.url("/search?wallpaper=nature").toString(), browserHeaders)
+
+            val challenged = server.takeRequest()
+            val replayed = server.takeRequest()
+            // The first request wore the provider's identity in full.
+            assertEquals("Mozilla/5.0 (Linux; Android 14) Chrome/131.0.0.0 Mobile", challenged.getHeader("User-Agent"))
+            assertEquals("\"Google Chrome\";v=\"131\"", challenged.getHeader("sec-ch-ua"))
+            assertEquals("?1", challenged.getHeader("sec-ch-ua-mobile"))
+            // The replay wears the clearance pair and none of the hints
+            // that would contradict it — but keeps every honest header.
+            assertEquals("DefaultWebView/139.0", replayed.getHeader("User-Agent"))
+            assertEquals("cf_clearance=earned", replayed.getHeader("Cookie"))
+            assertNull(replayed.getHeader("sec-ch-ua"))
+            assertNull(replayed.getHeader("sec-ch-ua-mobile"))
+            assertNull(replayed.getHeader("sec-ch-ua-platform"))
+            assertEquals("en-US,en;q=0.9", replayed.getHeader("Accept-Language"))
+            assertEquals("text/html,*/*;q=0.8", replayed.getHeader("Accept"))
+        }
+
+    @Test
     fun challengeFlowsThroughWhenNoClearanceCanBeEarned() =
         runTest {
             server.enqueue(MockResponse().setResponseCode(403).setBody(challengeBody))
