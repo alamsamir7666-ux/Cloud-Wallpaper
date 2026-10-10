@@ -33,6 +33,23 @@ import java.util.concurrent.ConcurrentHashMap
  * next request in the same exchange still deserves the document rung
  * (the two rungs fail for different reasons: a clearance that cannot be
  * earned versus a page that never settles).
+ *
+ * ## WebView-only hosts (v1.2.6)
+ *
+ * Some zones — wallpaperflare.com is the one in the wild — bind their
+ * clearance to the WebView's TLS fingerprint, not just (IP, User-Agent):
+ * every OkHttp exchange is challenged no matter which cookies ride it,
+ * while the engine's own page loads sail through. For such a host the
+ * ladder's first two rungs are pure theater that the USER pays for — a
+ * challenge dialog flash per request, then a visible page load per
+ * request, which from the outside reads as the app "blinking" between
+ * itself and the website. The engine therefore remembers, per host and
+ * with a sliding TTL, that only the engine gets through: [markWebViewOnly]
+ * is called the moment a WebView fetch delivers a document replays could
+ * not, [isWebViewOnly] routes later requests straight to [fetchDocument]
+ * — the invisible lane, no OkHttp round-trips, no dialogs — and every
+ * successful fetch refreshes the mark so an actively browsed host never
+ * lapses back into the slow theater while its cookie is alive.
  */
 class CloudflareBypasser(
     private val solver: CloudflareSolver,
@@ -52,6 +69,13 @@ class CloudflareBypasser(
 
     /** Hosts already asked for a persisted clearance this launch. */
     private val warmChecked = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Hosts whose zone only the WebView engine gets through, with the
+     * epoch instant each mark lapses at — see the class KDoc's
+     * WebView-only section.
+     */
+    private val webViewOnlyUntil = ConcurrentHashMap<String, Long>()
 
     /**
      * The clearance to attach to a request about to run, or null when the
@@ -105,6 +129,61 @@ class CloudflareBypasser(
                 cleared.remove(host)
                 solveFailedAt[host] = clock()
                 null
+            }
+        }
+    }
+
+    /**
+     * Whether [url]'s host is currently in the engine-only mode — the zone
+     * answers every HTTP-client exchange with a challenge, so callers skip
+     * straight to [fetchDocument]. Cheap: a map lookup and a clock read.
+     */
+    fun isWebViewOnly(url: String): Boolean {
+        val host = url.toHttpUrlOrNull()?.host ?: return false
+        val until = webViewOnlyUntil[host] ?: return false
+        if (clock() >= until) {
+            webViewOnlyUntil.remove(host)
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Remembers that only the WebView engine gets through this host — the
+     * mark a successful document fetch refreshes and one request in
+     * [CloudimageHttpClient] sets when its replay stays challenged.
+     */
+    fun markWebViewOnly(url: String) {
+        val host = url.toHttpUrlOrNull()?.host ?: return
+        webViewOnlyUntil[host] = clock() + WEB_VIEW_ONLY_TTL_MS
+    }
+
+    /**
+     * The WebView-only lane: fetch the document through the engine with no
+     * replay theater around it. Serialized by the same per-host lock as
+     * [solve] so one WebView runs at a time, cooled by the same FETCH
+     * cooldown as [webViewFetch], and refreshing the host's WebView-only
+     * mark on every success so an actively browsed host never lapses back
+     * into the visible ladder while its cookie is alive.
+     */
+    suspend fun fetchDocument(url: String): WebViewPage? {
+        val host = url.toHttpUrlOrNull()?.host ?: return null
+        return hostLocks.computeIfAbsent(host) { Mutex() }.withLock {
+            if (fetchFailedAt[host]?.let { clock() - it < FAILURE_COOLDOWN_MS } == true) {
+                return@withLock null
+            }
+            val page =
+                runCatching {
+                    withTimeoutOrNull(FETCH_TIMEOUT_MS) { solver.fetch(url) }
+                }.getOrNull()
+            if (page == null) {
+                fetchFailedAt[host] = clock()
+                null
+            } else {
+                fetchFailedAt.remove(host)
+                page.clearance?.let { cleared[host] = it }
+                markWebViewOnly(url)
+                page
             }
         }
     }
@@ -192,6 +271,14 @@ class CloudflareBypasser(
          * is cooling down".
          */
         const val FAILURE_COOLDOWN_MS = 15_000L
+
+        /**
+         * How long a WebView-only mark lasts — long enough that an actively
+         * browsed host never lapses (every fetch refreshes it), short enough
+         * that a zone which later relaxes its fingerprint check gets its
+         * cheap replay path back within a session.
+         */
+        const val WEB_VIEW_ONLY_TTL_MS = 30 * 60_000L
 
         /**
          * A bypasser with no machinery behind it: never a state, never a

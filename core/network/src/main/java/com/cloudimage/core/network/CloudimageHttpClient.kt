@@ -77,6 +77,15 @@ class CloudimageHttpClient
          * itself is returned like any other non-2xx: per the facade
          * contract, providers decide how to treat it, and their readable
          * failures travel the app's source-failure banner as before.
+         *
+         * v1.2.6: a host the engine has already learned is fingerprint-
+         * strict skips the theater entirely — no plain attempt, no solve,
+         * no replay — and goes straight to the WebView document lane
+         * ([CloudflareBypasser.fetchDocument]), which runs invisibly while
+         * the host's clearance is alive. That is what stops the app
+         * "blinking" between itself and the website on every feed load:
+         * the visible ladder ran once, earned the cookie, marked the host;
+         * everything after that is silent engine traffic.
          */
         suspend fun getRaw(
             url: String,
@@ -84,18 +93,23 @@ class CloudimageHttpClient
         ): NetworkResult<HttpPayload> =
             withContext(Dispatchers.IO) {
                 try {
-                    val state = cloudflare.bypassStateFor(url)
-                    var stale = state
-                    var payload = execute(url, extraHeaders, state)
-                    if (CloudflareChallenge.isChallenge(payload)) {
-                        val bypass = cloudflare.solve(url, staleState = stale)
-                        if (bypass != null) {
-                            stale = bypass
-                            payload = execute(url, extraHeaders, bypass)
+                    var payload: HttpPayload
+                    if (cloudflare.isWebViewOnly(url)) {
+                        payload = fetchDocumentOnly(url, extraHeaders)
+                    } else {
+                        val state = cloudflare.bypassStateFor(url)
+                        var stale = state
+                        payload = execute(url, extraHeaders, state)
+                        if (CloudflareChallenge.isChallenge(payload)) {
+                            val bypass = cloudflare.solve(url, staleState = stale)
+                            if (bypass != null) {
+                                stale = bypass
+                                payload = execute(url, extraHeaders, bypass)
+                            }
                         }
-                    }
-                    if (CloudflareChallenge.isChallenge(payload)) {
-                        payload = fetchThroughWebView(url, extraHeaders, stale, payload)
+                        if (CloudflareChallenge.isChallenge(payload)) {
+                            payload = fetchThroughWebView(url, extraHeaders, stale, payload)
+                        }
                     }
                     Success(payload)
                 } catch (e: SocketTimeoutException) {
@@ -106,12 +120,37 @@ class CloudimageHttpClient
             }
 
         /**
+         * The WebView-only lane: the document straight from the engine, no
+         * OkHttp round-trips at all. A failed engine trip degrades to one
+         * plain request so the caller still receives the zone's honest
+         * answer (its challenge response) instead of a synthesized one.
+         */
+        private suspend fun fetchDocumentOnly(
+            url: String,
+            extraHeaders: Map<String, String>,
+        ): HttpPayload {
+            val page = cloudflare.fetchDocument(url)
+            val html = page?.html
+            if (html != null) {
+                return HttpPayload(
+                    statusCode = 200,
+                    headers = emptyMap(),
+                    body = html.toByteArray(),
+                )
+            }
+            return execute(url, extraHeaders, null)
+        }
+
+        /**
          * The ladder's last rung, reached only when the request stayed
          * challenged through a replay: fetch the document through the
-         * WebView. The fetched HTML wins outright; a page with no HTML but
-         * a fresher clearance (earned while this request waited) gets one
-         * more replay under it; anything else falls back to the challenged
-         * [fallback] response, the honest result the caller already had.
+         * WebView. The fetched HTML wins outright — and marks the host as
+         * WebView-only, because the engine just delivered a document no
+         * cookie replay could (the fingerprint-strict shape v1.2.6 learned
+         * to route around); a page with no HTML but a fresher clearance
+         * (earned while this request waited) gets one more replay under it;
+         * anything else falls back to the challenged [fallback] response,
+         * the honest result the caller already had.
          */
         private suspend fun fetchThroughWebView(
             url: String,
@@ -121,6 +160,7 @@ class CloudimageHttpClient
         ): HttpPayload {
             val page = cloudflare.webViewFetch(url, staleState = stale) ?: return fallback
             if (page.html != null) {
+                cloudflare.markWebViewOnly(url)
                 return HttpPayload(
                     statusCode = 200,
                     headers = emptyMap(),

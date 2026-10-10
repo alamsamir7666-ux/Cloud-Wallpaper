@@ -142,6 +142,18 @@ internal class WebViewCloudflareSolver(
             if (host == null) {
                 null
             } else {
+                // v1.2.6's invisible lane: with a clearance in the jar there
+                // is no challenge to settle, so the document loads fine in
+                // a DETACHED WebView — no dialog, nothing the user sees. A
+                // detached trip that lands on the interstitial instead
+                // proves the cookies dead: wipe them (the next solve
+                // deserves a clean slate) and escalate to the attached
+                // dialog, where the challenge gets the real viewport it
+                // needs — the one visible dialog per cookie lifetime.
+                if (hasClearanceFor(host)) {
+                    fetchDetached(url, host)?.let { return@withContext it }
+                    clearCookiesFor(host)
+                }
                 val activity =
                     foregroundActivity()?.takeUnless { it.isFinishing || it.isDestroyed }
                 if (activity == null) {
@@ -152,6 +164,12 @@ internal class WebViewCloudflareSolver(
                 }
             }
         }
+
+    /** Whether the system jar still holds a clearance for [host]. */
+    private fun hasClearanceFor(host: String): Boolean {
+        val cookies = runCatching { cookieManager.getCookie("https://$host") }.getOrNull()
+        return cookies != null && CLEARANCE_COOKIE in cookies
+    }
 
     /**
      * The foreground path: the challenge runs in a full-screen borderless
@@ -251,7 +269,7 @@ internal class WebViewCloudflareSolver(
         return try {
             dialog.show()
             webView.loadUrl(url)
-            awaitDocument(client, webView, host, url)
+            awaitDocument(client, webView, host, url, FETCH_DEADLINE_MS, failFastOnInterstitial = false)
         } finally {
             runCatching { dialog.dismiss() }
             runCatching { webView.stopLoading() }
@@ -268,7 +286,7 @@ internal class WebViewCloudflareSolver(
         val webView = createWebView(client)
         return try {
             webView.loadUrl(url)
-            awaitDocument(client, webView, host, url)
+            awaitDocument(client, webView, host, url, DETACHED_DEADLINE_MS, failFastOnInterstitial = true)
         } finally {
             runCatching { webView.stopLoading() }
             runCatching { webView.destroy() }
@@ -383,14 +401,24 @@ internal class WebViewCloudflareSolver(
      * Like the solve path there is no reload (v1.2.4) — a page that parks
      * simply rides the full deadline. A page that never settles by the
      * deadline is a failure — null, no partial credit.
+     *
+     * [failFastOnInterstitial] is the detached lane's discipline
+     * (v1.2.6): a hidden document cannot settle a challenge — that is
+     * the v1.0.16 lesson — so a detached trip that settles on the
+     * interstitial returns null IMMEDIATELY instead of parking for a
+     * minute, letting the caller escalate to the attached dialog. The
+     * attached lane keeps waiting, because there the interstitial is a
+     * challenge actively settling in front of the user.
      */
     private suspend fun awaitDocument(
         client: ChallengeClient,
         webView: WebView,
         host: String,
         url: String,
+        deadlineMs: Long,
+        failFastOnInterstitial: Boolean,
     ): WebViewPage? {
-        val deadline = System.currentTimeMillis() + FETCH_DEADLINE_MS
+        val deadline = System.currentTimeMillis() + deadlineMs
         var extractedForFinish = -1
         while (System.currentTimeMillis() < deadline) {
             delay(POLL_INTERVAL_MS)
@@ -403,6 +431,7 @@ internal class WebViewCloudflareSolver(
                     runCatching { cookieManager.flush() }
                     return WebViewPage(html = html, clearance = clearanceFor(host, url))
                 }
+                if (failFastOnInterstitial) return null
             }
         }
         // No page ever settled — wipe the failed trip's cookies so the next
@@ -538,6 +567,14 @@ internal class WebViewCloudflareSolver(
 
         /** Local backstop for a document fetch, above FETCH_TIMEOUT_MS. */
         const val FETCH_DEADLINE_MS = 65_000L
+
+        /**
+         * The detached lane's shorter window — a cookie-carrying page
+         * load settles in seconds; anything still interstitial by this
+         * mark is a dead cookie escalating to the attached dialog, not a
+         * slow page worth waiting on.
+         */
+        const val DETACHED_DEADLINE_MS = 15_000L
 
         /**
          * The settle beat after a page finishes before its document is

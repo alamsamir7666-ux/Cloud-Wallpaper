@@ -497,8 +497,9 @@ class CloudimageHttpClientTest {
             val result = clientWith(solver).getRaw(server.url("/grid").toString())
 
             assertTrue(result is NetworkResult.Success)
-            assertEquals(403, (result as NetworkResult.Success).value.statusCode)
-            assertEquals(challengeBody, (result as NetworkResult.Success).value.bodyText)
+            val payload = (result as NetworkResult.Success).value
+            assertEquals(403, payload.statusCode)
+            assertEquals(challengeBody, payload.bodyText)
             assertEquals(1, solver.solveCalls)
             assertEquals(1, solver.fetchCalls)
         }
@@ -525,5 +526,64 @@ class CloudimageHttpClientTest {
             assertEquals("<html>content via webview</html>", payload.bodyText)
             assertEquals(1, solver.fetchCalls)
             assertEquals(2, server.requestCount) // first attempt + the failed replay
+        }
+
+    // ---- WebView-only hosts, the invisible lane (v1.2.6) ----
+
+    @Test
+    fun aWebViewDocumentMarksTheHostAndLaterRequestsSkipTheLadder() =
+        runTest {
+            // The exchange that taught the engine this host: challenged, no
+            // clearance earned, document fetched through the WebView.
+            server.enqueue(MockResponse().setResponseCode(403).setBody(challengeBody))
+            val solver =
+                BypassSolver().apply {
+                    earned = null
+                    fetched = WebViewPage(html = "<html>the real grid</html>", clearance = null)
+                }
+            val httpClient = clientWith(solver)
+
+            val first = httpClient.getRaw(server.url("/grid").toString())
+            assertTrue(first is NetworkResult.Success)
+            assertEquals(1, solver.solveCalls)
+            assertEquals(1, solver.fetchCalls)
+
+            // Every request after the mark: no OkHttp round-trip, no solve, no
+            // replay — the document comes straight from the engine. This is
+            // the lane that stops the app "blinking" through the challenge
+            // dialog on every feed row.
+            val second = httpClient.getRaw(server.url("/search?wallpaper=nature").toString())
+            assertTrue(second is NetworkResult.Success)
+            assertEquals("<html>the real grid</html>", (second as NetworkResult.Success).value.bodyText)
+            assertEquals(200, second.value.statusCode)
+            assertEquals(1, solver.solveCalls)
+            assertEquals(2, solver.fetchCalls)
+            assertEquals(1, server.requestCount)
+        }
+
+    @Test
+    fun webViewOnlyEngineFailureDegradesToOneHonestRequest() =
+        runTest {
+            // The host is marked, but the engine trip fails — the caller gets
+            // the zone's own answer, not a synthesized one.
+            server.enqueue(MockResponse().setResponseCode(403).setBody(challengeBody))
+            server.enqueue(MockResponse().setResponseCode(403).setBody(challengeBody))
+            val solver =
+                BypassSolver().apply {
+                    earned = null
+                    fetched = WebViewPage(html = "<html>grid</html>", clearance = null)
+                }
+            val httpClient = clientWith(solver)
+
+            httpClient.getRaw(server.url("/grid").toString()) // earns the mark
+            solver.fetched = null // the engine now fails
+
+            val result = httpClient.getRaw(server.url("/grid").toString())
+
+            assertTrue(result is NetworkResult.Success)
+            assertEquals(403, (result as NetworkResult.Success).value.statusCode)
+            assertEquals(challengeBody, result.value.bodyText)
+            assertEquals(2, solver.fetchCalls)
+            assertEquals(2, server.requestCount) // the degraded fallback request
         }
 }

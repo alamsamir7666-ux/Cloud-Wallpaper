@@ -6,55 +6,78 @@ package com.cloudimage.wallpaperflare
  *
  * Extension packages carry ONLY their own classes: the build dexes the
  * module jar and nothing else, so a dependency like Jsoup would be missing
- * at load time (the host supplies the contract and
- * kotlinx.serialization, nothing more). Everything below is therefore
- * stdlib string and regex work over the site's server-rendered markup —
- * exactly the technique the CloudStream extension ecosystem uses against
- * page-embedded data.
+ * at load time (the host supplies the contract and kotlinx.serialization,
+ * nothing more). Everything below is therefore stdlib string and regex work
+ * over the site's server-rendered markup — exactly the technique the
+ * CloudStream extension ecosystem uses against page-embedded data.
  *
  * ## Where the shapes come from
  *
- * The site sits behind a Cloudflare firewall that blocks datacenter
- * addresses outright, so these anchors were pinned from the site's own
- * pages as Google indexes them (server-rendered, which is why the index
- * has them at all) plus the wallpaperflare.com URL family as it appears
- * in the wild:
+ * v1.2.0 pinned its anchors from search-engine caches and guessed the rest —
+ * and the guesses were wrong in exactly one place that mattered: the
+ * wallpaper page URL. v1.3.0's anchors are captured from the site's OWN
+ * live markup (fetched through a real browser context):
  *
- * - grid images:
- *   `https://c{1..4}.wallpaperflare.com/wallpaper/{a}/{b}/{c}/{slug}-preview.jpg`
- *   (and a smaller `-thumb.jpg` variant) — every listing carries them;
- * - grid cells read `TITLE « »; {W}x{H}px {license} · tag · tag` — the
- *   separator, the `px` dimensions and the middot tag row are stable
- *   across the site's pages;
- * - search pages live at `/search?wallpaper={query}` with `+` for
- *   spaces, and every tag chip on the site links back into that same
- *   search shape — which is what tag harvesting keys on.
+ * - every listing — homepage, search, a wallpaper page's related row —
+ *   renders the SAME grid: one `<li itemprop="associatedMedia"
+ *   itemscope itemtype="http://schema.org/ImageObject">` per wallpaper,
+ *   carrying the whole record in schema.org microdata:
+ *   - `<meta itemprop="keywords" content="landscape, anime, …">` — the
+ *     tag row, comma-separated;
+ *   - `<meta itemprop="description" content="This HD wallpaper is about
+ *     …, Original wallpaper dimensions is 2560x1440px, file size is …">`
+ *     — the TRUE pixel dimensions, stated in plain copy;
+ *   - `<div class="res">` — `itemprop="width"`/`"height"` value spans
+ *     printing the same numbers again;
+ *   - `<a itemprop="url" href="https://www.wallpaperflare.com/{slug}">` —
+ *     THE wallpaper's own page, a bare slug at the site root (NOT the
+ *     `/wallpaper/{a}/{b}/{c}/{slug}` path v1.2.0 guessed — that shape
+ *     answers the site's 404 page, which is what installs in the wild
+ *     flashed at every wallpaper tap);
+ *   - inside the anchor, `<img itemprop="contentUrl">` with the image on
+ *     the CDN (`https://c{1..4}.wallpaperflare.com/wallpaper/{a}/{b}/{c}/
+ *     {slug}-thumb.jpg`, a `-preview.jpg` sibling in `data-srcset`/
+ *     `srcset`, the original at the suffix-stripped stem), plus
+ *     `title`/`alt` carrying the display name;
+ *   - `<figcaption itemprop="caption">` — the name again, clean.
+ * - the search form posts GET to `/search` with `name="wallpaper"`, and
+ *   every tag chip on the site links into `/search?wallpaper={query}`
+ *   with `+` for spaces — the one true query surface;
+ * - a wallpaper page prints `<h1>HD wallpaper: {name}…</h1>`, the same
+ *   description/keywords microdata, and shows the image as
+ *   `<img class="view_img" src="…-preview.jpg">`; its download routes
+ *   (`/{slug}/download[/{W}x{H}]`) confirm the slug's authority.
  *
- * The parsers are kept narrow on purpose: every one keys on those
- * semantic anchors rather than document order, so cosmetic redesigns
- * degrade parsing to "nothing found" instead of producing garbage. All
- * functions are pure and total: bad input yields empty lists and nulls,
- * never exceptions — callers decide what a miss means.
+ * The parsers stay narrow on purpose: every one keys on those semantic
+ * anchors rather than document order, so cosmetic redesigns degrade
+ * parsing to "nothing found" instead of producing garbage. All functions
+ * are pure and total: bad input yields empty lists and nulls, never
+ * exceptions — callers decide what a miss means. A generalized
+ * anchor-with-image fallback covers markup the microdata pass cannot
+ * recognize.
  */
 internal object WallpaperFlareParser {
     /** One grid cell: everything the app needs, straight off the listing. */
     data class GridItem(
         /**
-         * The wallpaper's identity as the site's own URLs carry it:
-         * `{a}/{b}/{c}/{slug}` — the detail page path AND the image path
-         * stem in one token, so no separate id->URL mapping is needed.
+         * The wallpaper's identity as the SITE'S OWN page URL carries it:
+         * the bare slug of `https://www.wallpaperflare.com/{slug}` — one
+         * token that IS the detail page path, so no id-to-URL mapping is
+         * ever needed. (v1.2.0 used the image's CDN path instead; those
+         * are DIFFERENT slugs — the page slug cannot be derived from the
+         * image path — and the constructed detail URLs 404'd.)
          */
         val id: String,
-        /** Absolute preview URL (`…/wallpaper/{a}/{b}/{c}/{slug}-preview.jpg`). */
+        /** Absolute preview/thumb URL (`…/wallpaper/{a}/{b}/{c}/{slug}-preview.jpg`). */
         val thumbUrl: String,
         /** Absolute full-size URL (`…/{slug}.jpg`) — the suffix-stripped stem. */
         val fullUrl: String,
-        /** Display title, `« ` furniture and license labels already stripped. */
+        /** Display title, `HD wallpaper` furniture already stripped. */
         val title: String,
-        /** TRUE pixel dimensions, published in the cell's own text. */
+        /** TRUE pixel dimensions, published in the item's own microdata. */
         val width: Int?,
         val height: Int?,
-        /** The cell's own middot-separated tags, cleaned and capped. */
+        /** The item's own keyword row, cleaned and capped. */
         val tags: List<String>,
     )
 
@@ -85,21 +108,63 @@ internal object WallpaperFlareParser {
     // ------------------------------------------------------------- patterns
 
     /**
-     * One grid cell: an anchor whose first child is the preview image.
-     * The image URL is the site's most stable anchor — every listing,
-     * every related-wallpapers row carries exactly this shape.
+     * One microdata grid item: the `li` the site stamps
+     * `itemprop="associatedMedia"` on, whole. The region is mined for the
+     * schema.org metas, the page anchor and the CDN image — every anchor
+     * is semantic, none positional.
      */
-    private val GRID_ITEM =
+    private val ITEM_REGION =
         Regex(
-            """<a\b[^>]*>\s*<img\b[^>]*?src=["'](https?://c\d+\.wallpaperflare\.com/wallpaper/(\d+)/(\d+)/(\d+)/([a-z0-9][a-z0-9-]*?)(?:-(?:preview|thumb))?\.jpg)["'][^>]*>(.*?)</a>""",
+            """<li\b[^>]*itemprop=["']associatedMedia["'][^>]*>(.*?)</li>""",
+            RegexOption.DOT_MATCHES_ALL,
+        )
+
+    /** The item's page anchor: `itemprop="url"` carrying the href. */
+    private val ITEM_ANCHOR = Regex("""<a\b[^>]*href=["']([^"']+)["'][^>]*>""")
+
+    /** The item's keyword row: `<meta itemprop="keywords" content="…">`. */
+    private val ITEM_KEYWORDS =
+        Regex(
+            """<meta\b[^>]*(?:itemprop|name)=["']keywords["'][^>]*content=["']([^"']*)["'][^>]*>""",
+        )
+
+    /** Same, attribute order flipped. */
+    private val ITEM_KEYWORDS_FLIPPED =
+        Regex(
+            """<meta\b[^>]*content=["']([^"']*)["'][^>]*(?:itemprop|name)=["']keywords["'][^>]*>""",
+        )
+
+    /**
+     * The TRUE dimensions as the item's own description copy states them:
+     * `Original wallpaper dimensions is 2560x1440px`.
+     */
+    private val DESCRIPTION_DIMENSIONS =
+        Regex("""dimensions\s+is\s+(\d{2,5})\s*[x×]\s*(\d{2,5})\s*px""", RegexOption.IGNORE_CASE)
+
+    /** The schema.org width/height value spans, in document order. */
+    private val VALUE_SPAN = Regex("""itemprop=["']value["'][^>]*>\s*(\d{2,5})\s*<""")
+
+    /** Dimensions in flattened item text: `{W}x{H}px`, whitespace-tolerant. */
+    private val TEXT_DIMENSIONS = Regex("""(\d{2,5})\s*[x×]\s*(\d{2,5})\s*px""", RegexOption.IGNORE_CASE)
+
+    /** The item's caption: `<figcaption …>{name}</figcaption>`. */
+    private val CAPTION =
+        Regex("""<figcaption\b[^>]*>(.*?)</figcaption>""", RegexOption.DOT_MATCHES_ALL)
+
+    /**
+     * The generalized fallback cell: an anchor wrapping a CDN image, the
+     * shape every pre-microdata variant of the grid used. The href is the
+     * id's source; the anchor's text carries dimensions and tags when the
+     * site still printed them there.
+     */
+    private val FALLBACK_CELL =
+        Regex(
+            """<a\b[^>]*href=["']([^"']+)["'][^>]*>\s*<img\b[^>]*?src=["'](https?://c\d+\.wallpaperflare\.com/wallpaper/(\d+)/(\d+)/(\d+)/([a-z0-9][a-z0-9-]*?)(?:-(?:preview|thumb))?\.jpg)["'][^>]*>(.*?)</a>""",
             RegexOption.DOT_MATCHES_ALL,
         )
 
     /** The cell's separator furniture, trimmed off titles. */
     private val TITLE_FURNITURE = Regex("""[«»;]""")
-
-    /** TRUE dimensions as the cell text publishes them: `{W}x{H}px`. */
-    private val DIMENSIONS = Regex("""(\d{2,5})\s*[x×]\s*(\d{2,5})px""")
 
     /** License labels the site prints in cells and on wallpaper pages. */
     private val LICENSES =
@@ -108,8 +173,11 @@ internal object WallpaperFlareParser {
             RegexOption.IGNORE_CASE,
         )
 
-    /** The middot that separates a cell's tag row. */
+    /** The middot that separates a legacy cell's tag row. */
     private val TAG_SEPARATOR = Regex("""\s*[·,]\s*""")
+
+    /** `HD wallpaper` furniture the image alt/title attributes carry. */
+    private val TITLE_SUFFIX = Regex("""[,\s]+HD\s+wallpapers?\s*$""", RegexOption.IGNORE_CASE)
 
     /** Words never worth carrying as tags. */
     private val TAG_STOP_WORDS =
@@ -121,6 +189,7 @@ internal object WallpaperFlareParser {
             "4k",
             "5k",
             "8k",
+            "1080p",
             "px",
             "free",
             "download",
@@ -137,15 +206,20 @@ internal object WallpaperFlareParser {
             "relevance",
             "related",
             "search",
+            "original",
         )
 
+    /** Tag phrases whose lowercase spelling is pure site furniture. */
+    private val TAG_NOISE_SUBSTRINGS = listOf("wallpaper", "download", "desktop", "1080p")
+
     /**
-     * One pagination link: a `page=N` query param or `/page/N` path,
-     * either quote style — the two shapes this platform family uses.
-     * Input is entity-unescaped, so an `&amp;page=` bar link reads right.
+     * One pagination link: a `page=N` query param, a `/page/N` path, or
+     * the site's path-keyed `/page=N` spelling — the three shapes this
+     * platform family uses. Input is entity-unescaped, so an `&amp;page=`
+     * bar link reads right.
      */
     private val PAGE_LINK =
-        Regex("""<a\b[^>]*href=["']([^"']*?(?:[?&]page=|/page/)(\d{1,4})[^"']*)["'][^>]*>""")
+        Regex("""<a\b[^>]*href=["']([^"']*?(?:[?&]page=|/page[=/])(\d{1,4})[^"']*)["'][^>]*>""")
 
     /** The pagination bar's own region, bounding link and current-page scans. */
     private val PAGINATION_REGION =
@@ -160,23 +234,38 @@ internal object WallpaperFlareParser {
             """<(?:li|span|a)\b[^>]*(?:class=["'][^"']*(?:active|current)[^"']*["']|aria-current=["'][^"']*["'])[^>]*>\s*(?:<[^>]+>\s*)*(?:Page\s*)?(\d{1,4})\b""",
         )
 
-    /** A wallpaper page's `og:image` — the definitive image URL. */
+    /** A wallpaper page's `og:image` — some mirrors of the template still carry it. */
     private val OG_IMAGE =
         Regex(
             """<meta\b[^>]*(?:property|name)=["']og:image["'][^>]*content=["']([^"']+)["'][^>]*>""",
         )
 
-    /** Same, attribute order flipped — the two orders both occur in the wild. */
+    /** Same, attribute order flipped. */
     private val OG_IMAGE_FLIPPED =
         Regex(
             """<meta\b[^>]*content=["']([^"']+)["'][^>]*(?:property|name)=["']og:image["'][^>]*>""",
         )
 
+    /**
+     * The wallpaper page's own display image: the `view_img` element the
+     * page shows the wallpaper in — the one `og:image`-less page that
+     * still always states its image.
+     */
+    private val VIEW_IMG = Regex("""<img\b[^>]*class=["'][^"']*view_img[^"']*["'][^>]*>""")
+
+    /** The `src` of any img tag. */
+    private val IMG_SRC = Regex("""\ssrc=["']([^"']+)["']""")
+
+    /** The `data-src`/`data-srcset`/`srcset` candidates of any img tag. */
+    private val IMG_DATA_SRC = Regex("""\sdata-src=["']([^"']+)["']""")
+
+    private val IMG_SRCSET = Regex("""\s(?:data-)?srcset=["']([^"']+)["']""")
+
     /** The page `<title>`, carrying the wallpaper's name. */
     private val TITLE_TAG =
         Regex("""<title\b[^>]*>(.*?)</title>""", RegexOption.DOT_MATCHES_ALL)
 
-    /** The `« »` the detail page prints around its license line. */
+    /** The wallpaper page's h1: `HD wallpaper: {name} …`. */
     private val DETAIL_TITLE = Regex("""<h1\b[^>]*>(.*?)</h1>""", RegexOption.DOT_MATCHES_ALL)
 
     /** A tag chip: every tag on this site links into its own search. */
@@ -197,38 +286,103 @@ internal object WallpaperFlareParser {
             .trim()
 
     /** True when [word] is worth carrying as a tag. */
-    private fun isTagWord(word: String): Boolean = word.length in 2..24 && word[0].isLetter() && word.lowercase() !in TAG_STOP_WORDS
+    private fun isTagWord(word: String): Boolean =
+        word.length in 2..24 &&
+            word[0].isLetter() &&
+            word.lowercase() !in TAG_STOP_WORDS &&
+            TAG_NOISE_SUBSTRINGS.none { word.lowercase().contains(it) }
 
     // ---------------------------------------------------------------- grid
 
     /**
      * Every grid cell of a listing, in document order, deduped by id —
      * the same wallpaper can appear with both `-preview` and `-thumb`
-     * images (listing grid vs. related row), and the preview wins.
+     * images (listing grid vs. related row), and the preview wins. The
+     * microdata pass runs first; only a listing it cannot read at all
+     * falls back to the generalized anchor-with-image scan.
      */
     fun parseGrid(html: String): List<GridItem> {
         val byId = LinkedHashMap<String, GridItem>()
-        for (match in GRID_ITEM.findAll(html)) {
-            val (imageUrl, a, b, c, slug, tail) = match.destructured
-            val item = gridItem(imageUrl, a, b, c, slug, tail)
-            val existing = byId[item.id]
-            if (existing == null || (existing.thumbUrl.contains("-thumb.") && !item.thumbUrl.contains("-thumb."))) {
-                byId[item.id] = item
+        for (region in ITEM_REGION.findAll(html)) {
+            val item = microdataItem(region.groupValues[1]) ?: continue
+            mergeById(byId, item)
+        }
+        if (byId.isEmpty()) {
+            for (match in FALLBACK_CELL.findAll(html)) {
+                val (href, imageUrl) = match.destructured
+                // Group 7 is the anchor's tail text — the legacy record.
+                val item = fallbackItem(href, imageUrl, match.groupValues[7]) ?: continue
+                mergeById(byId, item)
             }
         }
         return byId.values.toList()
     }
 
-    private fun gridItem(
+    /** Keeps the better image variant when both survive a dedupe key. */
+    private fun mergeById(
+        byId: LinkedHashMap<String, GridItem>,
+        item: GridItem,
+    ) {
+        val existing = byId[item.id]
+        if (existing == null || (existing.thumbUrl.contains("-thumb.") && !item.thumbUrl.contains("-thumb."))) {
+            byId[item.id] = item
+        }
+    }
+
+    /**
+     * One microdata `li` region to a grid item. The page anchor's href is
+     * the identity; the CDN image is preferred at its biggest variant
+     * (`data-srcset`'s preview, then `srcset`, then `data-src`, then the
+     * rendered `src`); dimensions come from the item's own copy (the
+     * description's `dimensions is {W}x{H}px`, the schema.org value
+     * spans, then any flattened `{W}x{H}px` text); the name from the
+     * caption, then the image's own `title`/`alt`.
+     */
+    private fun microdataItem(region: String): GridItem? {
+        val href =
+            ITEM_ANCHOR
+                .findAll(region)
+                .map { it.groupValues[1] }
+                .firstOrNull(::isPageHref) ?: return null
+        val imgTag =
+            IMG_TAG
+                .findAll(region)
+                .firstOrNull { bestImageOf(it.value) != null } ?: return null
+        val thumbUrl = bestImageOf(imgTag.value) ?: return null
+        val id = pageSlugOf(href) ?: return null
+        val keywords = metaContent(region, ITEM_KEYWORDS, ITEM_KEYWORDS_FLIPPED)
+        val tags = tagsOf(keywords)
+        val dims = dimensionsOf(region)
+        val title =
+            captionTitleOf(region, imgTag.value)
+                ?.removeSuffix(",")
+                ?.trim()
+                .orEmpty()
+        return GridItem(
+            id = id,
+            thumbUrl = thumbUrl,
+            fullUrl = PREVIEW_SUFFIX.replace(thumbUrl, ""),
+            title = title,
+            width = dims?.first,
+            height = dims?.second,
+            tags = tags,
+        )
+    }
+
+    /**
+     * The legacy/unknown cell: the href supplies the id, the anchor text
+     * (which older markup printed beside the image) supplies dimensions
+     * and tags. Region text that says nothing keeps them empty — an item
+     * with an id and honest URLs is still worth showing.
+     */
+    private fun fallbackItem(
+        href: String,
         imageUrl: String,
-        a: String,
-        b: String,
-        c: String,
-        slug: String,
         tailHtml: String,
-    ): GridItem {
+    ): GridItem? {
+        val id = pageSlugOf(href) ?: return null
         val tail = textOf(tailHtml)
-        val dims = DIMENSIONS.find(tail)
+        val dims = TEXT_DIMENSIONS.find(tail)
         val dimsRange = dims?.range
         val headText =
             if (dimsRange != null) {
@@ -259,7 +413,7 @@ internal object WallpaperFlareParser {
                 .distinct()
                 .take(MAX_TAGS)
         return GridItem(
-            id = "$a/$b/$c/$slug",
+            id = id,
             thumbUrl = imageUrl,
             fullUrl = PREVIEW_SUFFIX.replace(imageUrl, ""),
             title = title,
@@ -268,6 +422,127 @@ internal object WallpaperFlareParser {
             tags = tags,
         )
     }
+
+    /** True when an href points at the site's own wallpaper pages. */
+    private fun isPageHref(href: String): Boolean = pageSlugOf(href) != null
+
+    /**
+     * The bare page slug of a site URL — the id. Absolute
+     * `https://www.wallpaperflare.com/{slug}` and relative `/{slug}` both
+     * read, unicode letters and resolution marks included (`…-tanjirō-udebl`,
+     * `…-3840×2400-peajp` — the site's own hrefs carry them); site routes
+     * (search, download — no dash, too short), file names (`opensearch.xml`)
+     * and foreign hosts are not wallpaper pages.
+     */
+    private fun pageSlugOf(href: String): String? {
+        val path =
+            href
+                .substringAfter("://", href)
+                .substringAfter('/', "")
+                .substringBefore('?')
+                .substringBefore('#')
+                .trim('/')
+        if (path.length < 8 || !path.contains('-')) return null
+        if (Regex("""[\s/?.:]""").containsMatchIn(path)) return null
+        if (path in SITE_ROUTES) return null
+        return path
+    }
+
+    /** The site's own route words — never a wallpaper page's slug. */
+    private val SITE_ROUTES =
+        setOf(
+            "search",
+            "download",
+            "about",
+            "contact",
+            "login",
+            "register",
+            "terms",
+            "privacy",
+            "dmca",
+            "feed",
+            "sitemap",
+        )
+
+    /**
+     * The best CDN image in an img tag: the preview a `srcset`/`data-srcset`
+     * names first, then `data-src`, then whatever `src` renders — the
+     * bigger variant always wins over the lazy-loading thumb.
+     */
+    private fun bestImageOf(imgTag: String): String? {
+        val candidates =
+            buildList {
+                IMG_SRCSET.findAll(imgTag).forEach { add(it.groupValues[1].substringBefore(' ')) }
+                IMG_DATA_SRC.findAll(imgTag).forEach { add(it.groupValues[1]) }
+                IMG_SRC.findAll(imgTag).forEach { add(it.groupValues[1]) }
+            }
+        return candidates
+            .filter { it.startsWith("http") && CDN_IMAGE.containsMatchIn(it) }
+            .minByOrNull { if (it.contains("-preview.")) 0 else 1 }
+    }
+
+    /** The CDN image host pattern every grid cell discloses. */
+    private val CDN_IMAGE = Regex("""https?://c\d+\.wallpaperflare\.com/wallpaper/""")
+
+    /** Any complete img tag. */
+    private val IMG_TAG = Regex("""<img\b[^>]*>""")
+
+    /** The item's dimensions: description copy, then value spans, then text. */
+    private fun dimensionsOf(region: String): Pair<Int, Int>? {
+        DESCRIPTION_DIMENSIONS.find(region)?.let { dims ->
+            dims.groupValues[1].toIntOrNull()?.let { w ->
+                dims.groupValues[2].toIntOrNull()?.let { h -> return w to h }
+            }
+        }
+        val values =
+            VALUE_SPAN
+                .findAll(region)
+                .mapNotNull { it.groupValues[1].toIntOrNull() }
+                .toList()
+        if (values.size >= 2) return values[0] to values[1]
+        TEXT_DIMENSIONS.find(textOf(region))?.let { dims ->
+            dims.groupValues[1].toIntOrNull()?.let { w ->
+                dims.groupValues[2].toIntOrNull()?.let { h -> return w to h }
+            }
+        }
+        return null
+    }
+
+    /** The item's name: the caption, else the image's `title`/`alt`. */
+    private fun captionTitleOf(
+        region: String,
+        imgTag: String,
+    ): String? {
+        CAPTION.find(region)?.let { return textOf(it.groupValues[1]) }
+        for (attr in listOf("title", "alt")) {
+            val value =
+                Regex("""\s$attr=["']([^"']*)["']""")
+                    .find(imgTag)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    .orEmpty()
+            if (value.isNotBlank()) return value
+        }
+        return null
+    }
+
+    /** The keywords meta's comma row, cleaned and capped. */
+    private fun tagsOf(keywords: String?): List<String> =
+        keywords
+            ?.split(',')
+            ?.map { it.trim() }
+            ?.filter(::isTagWord)
+            ?.map { it.lowercase() }
+            ?.distinct()
+            ?.take(MAX_TAGS)
+            ?: emptyList()
+
+    /** A meta's content by either attribute order. */
+    private fun metaContent(
+        html: String,
+        primary: Regex,
+        flipped: Regex,
+    ): String? = primary.find(html)?.groupValues?.get(1) ?: flipped.find(html)?.groupValues?.get(1)
 
     // ---------------------------------------------------------- pagination
 
@@ -301,7 +576,7 @@ internal object WallpaperFlareParser {
         // encodings that String.format would choke on.
         val template =
             best.first.replaceFirst(
-                Regex("""((?:[?&]page=|/page/))\d{1,4}"""),
+                Regex("""((?:[?&]page=|/page[=/]))\d{1,4}"""),
                 "$1__PAGE__",
             )
         return Pagination(currentPage = current, maxPage = maxPage, nextUrlTemplate = template)
@@ -316,33 +591,47 @@ internal object WallpaperFlareParser {
      */
     fun parseDetail(html: String): DetailRecord? {
         val unescaped = html.replace("&amp;", "&")
-        val image = OG_IMAGE.find(unescaped)?.groupValues?.get(1) ?: OG_IMAGE_FLIPPED.find(unescaped)?.groupValues?.get(1)
+        val image =
+            viewImageOf(unescaped)
+                ?: OG_IMAGE.find(unescaped)?.groupValues?.get(1)
+                ?: OG_IMAGE_FLIPPED.find(unescaped)?.groupValues?.get(1)
         val heading = DETAIL_TITLE.find(unescaped)?.groupValues?.get(1) ?: TITLE_TAG.find(unescaped)?.groupValues?.get(1)
         if (image == null && heading == null) return null
         val text = textOf(unescaped)
-        val dims = Regex("""(\d{3,5})\s*[x×]\s*(\d{3,5})\s*px""").find(text)
+        // The dimension sentence lives in meta CONTENT attributes — tag
+        // stripping eats it — so the raw document is scanned first; the
+        // flattened-text fallback is the last resort.
+        val dims = DESCRIPTION_DIMENSIONS.find(unescaped) ?: TEXT_DIMENSIONS.find(text)
         val license = LICENSES.find(text)?.value
         val title =
             heading
                 ?.let { textOf(it) }
-                // The h1 carries the whole license line — the name is the
-                // part before the « furniture.
-                ?.substringBefore("«")
-                // The <title> carries the site's SEO suffix instead.
+                // The h1 carries the page's own prefix — `HD wallpaper: …`.
+                ?.removePrefix("HD wallpaper:")
+                // The <title> carries the site's SEO furniture instead —
+                // either tail, whichever the page prints.
                 ?.replace(Regex("""\s*1080P,\s*2K,\s*4K,\s*5K.*$"""), "")
+                ?.replace(Regex("""[\s|]*(HD\s+wallpapers?\s+free\s+download)?[\s|~-]*WallpaperFlare\s*$"""), "")
                 ?.replace(TITLE_FURNITURE, " ")
+                ?.replace(TITLE_SUFFIX, "")
                 ?.trim()
                 ?.ifBlank { null }
         val tags =
-            TAG_LINK
-                .findAll(unescaped)
-                .map { it.groupValues[1].replace("+", " ").lowercase() }
-                .filter { it.length in 2..24 && it !in TAG_STOP_WORDS }
-                .distinct()
-                .take(MAX_TAGS)
-                .toList()
+            buildList {
+                addAll(tagsOf(metaContent(unescaped, ITEM_KEYWORDS, ITEM_KEYWORDS_FLIPPED)))
+                addAll(
+                    TAG_LINK
+                        .findAll(unescaped)
+                        .map { it.groupValues[1].replace("+", " ").lowercase() }
+                        .filter { it.length in 2..24 && it !in TAG_STOP_WORDS }
+                        .distinct()
+                        .take(MAX_TAGS),
+                )
+            }.distinct().take(MAX_TAGS)
         return DetailRecord(
-            imageUrl = image?.let { PREVIEW_SUFFIX.replace(it, "") },
+            // The raw display URL — the preview the page shows; the provider
+            // derives both the thumb and the full-size stem from it.
+            imageUrl = image,
             width = dims?.groupValues?.get(1)?.toIntOrNull(),
             height = dims?.groupValues?.get(2)?.toIntOrNull(),
             title = title,
@@ -350,6 +639,13 @@ internal object WallpaperFlareParser {
             tags = tags,
         )
     }
+
+    /** The page's own display image — the `view_img` element's `src`. */
+    private fun viewImageOf(html: String): String? =
+        VIEW_IMG
+            .findAll(html)
+            .mapNotNull { tag -> IMG_SRC.find(tag.value)?.groupValues?.get(1) }
+            .firstOrNull { it.startsWith("http") }
 
     /** The full-size stem of any wallpaperflare image URL. */
     fun toFullUrl(imageUrl: String): String = PREVIEW_SUFFIX.replace(imageUrl, "")

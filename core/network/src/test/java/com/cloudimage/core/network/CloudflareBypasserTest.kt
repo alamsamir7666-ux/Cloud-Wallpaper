@@ -5,9 +5,11 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -32,7 +34,10 @@ import org.junit.Test
  * - the document-fetch rung (v1.2.3): a fetched page's clearance is
  *   cached, a fetch failure cools the FETCH lane without closing the
  *   solve lane, and a clearance earned while a caller waited on the
- *   host lock is handed back instead of a page.
+ *   host lock is handed back instead of a page;
+ * - the WebView-only mode (v1.2.6): a marked host routes straight to the
+ *   document lane, successful fetches refresh the mark, unused marks
+ *   lapse, and a failed document fetch cools its own lane.
  */
 class CloudflareBypasserTest {
     private class ScriptedSolver : CloudflareSolver {
@@ -188,6 +193,7 @@ class CloudflareBypasserTest {
             assertNull(bypasser.bypassStateFor("not a url"))
             assertNull(bypasser.solve("not a url"))
             assertNull(bypasser.webViewFetch("not a url"))
+            assertNull(bypasser.fetchDocument("not a url"))
 
             assertEquals(0, solver.solvedUrls.size)
             assertEquals(0, solver.fetchedUrls.size)
@@ -306,6 +312,87 @@ class CloudflareBypasserTest {
             assertNotNull(stale)
 
             assertEquals("<html>content</html>", bypasser.webViewFetch("https://host.example/grid", staleState = stale)?.html)
+            assertEquals(1, solver.fetchedUrls.size)
+        }
+
+    // ------------------------------------------- WebView-only mode (v1.2.6)
+
+    @Test
+    fun webViewOnlyHostsRouteStraightToTheDocumentLane() =
+        runTest {
+            val solver = ScriptedSolver()
+            val bypasser = CloudflareBypasser(solver)
+
+            assertFalse(bypasser.isWebViewOnly("https://host.example/grid"))
+            bypasser.markWebViewOnly("https://host.example/grid")
+            assertTrue(bypasser.isWebViewOnly("https://host.example/grid"))
+
+            // The lane asks the engine for the document — never a solve, never
+            // a persisted-state look.
+            solver.nextPage = WebViewPage(html = "<html>engine content</html>", clearance = null)
+            val page = bypasser.fetchDocument("https://host.example/grid")
+
+            assertEquals("<html>engine content</html>", page?.html)
+            assertEquals(listOf("https://host.example/grid"), solver.fetchedUrls)
+            assertEquals(0, solver.solvedUrls.size)
+            assertEquals(0, solver.persistedHosts.size)
+
+            // Other hosts are untouched — the mark is per host.
+            assertFalse(bypasser.isWebViewOnly("https://other.example/grid"))
+        }
+
+    @Test
+    fun successfulDocumentFetchesRefreshTheMark() =
+        runTest {
+            var now = 0L
+            val solver =
+                ScriptedSolver().apply {
+                    nextPage = WebViewPage(html = "<html>content</html>", clearance = null)
+                }
+            val bypasser = CloudflareBypasser(solver) { now }
+
+            bypasser.markWebViewOnly("https://host.example/grid")
+            // Twenty-nine minutes in, an actively browsed host fetches again —
+            // the mark slides forward instead of lapsing.
+            now = CloudflareBypasser.WEB_VIEW_ONLY_TTL_MS - 60_000
+            assertNotNull(bypasser.fetchDocument("https://host.example/grid"))
+            now = CloudflareBypasser.WEB_VIEW_ONLY_TTL_MS + 60_000
+            assertTrue(bypasser.isWebViewOnly("https://host.example/grid"))
+        }
+
+    @Test
+    fun unusedWebViewOnlyMarksLapse() =
+        runTest {
+            var now = 0L
+            val solver = ScriptedSolver()
+            val bypasser = CloudflareBypasser(solver) { now }
+
+            bypasser.markWebViewOnly("https://host.example/grid")
+            assertTrue(bypasser.isWebViewOnly("https://host.example/grid"))
+
+            now = CloudflareBypasser.WEB_VIEW_ONLY_TTL_MS + 1
+            assertFalse(bypasser.isWebViewOnly("https://host.example/grid"))
+        }
+
+    @Test
+    fun failedDocumentFetchesCoolTheirOwnLane() =
+        runTest {
+            var now = 0L
+            val solver =
+                ScriptedSolver().apply {
+                    nextPage = null // the engine trip fails
+                }
+            val bypasser = CloudflareBypasser(solver) { now }
+            bypasser.markWebViewOnly("https://host.example/grid")
+
+            assertNull(bypasser.fetchDocument("https://host.example/grid"))
+            assertEquals(1, solver.fetchedUrls.size)
+
+            // Inside the cooldown the solver is not even asked — and a failed
+            // document does NOT mark the host, so a request between cooldowns
+            // runs the honest ladder again instead of looping a dead lane.
+            now = CloudflareBypasser.FAILURE_COOLDOWN_MS / 2
+            assertNull(bypasser.fetchDocument("https://host.example/grid"))
             assertEquals(1, solver.fetchedUrls.size)
         }
 }

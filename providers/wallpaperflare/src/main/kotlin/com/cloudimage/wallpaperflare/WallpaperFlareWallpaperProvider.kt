@@ -22,36 +22,27 @@ import kotlin.random.Random
  * ## Site model
  *
  * WallpaperFlare is one flat, search-first catalogue: the homepage is the
- * popular ranking, `/search?wallpaper={query}` (`+` for spaces) answers
- * every query with the SAME grid markup, and every tag chip on the site
- * links back into that search — there are no category trees or albums to
- * walk. Grid cells self-describe completely: the preview image URL
- * `https://c{1..4}.wallpaperflare.com/wallpaper/{a}/{b}/{c}/{slug}-preview.jpg`
- * carries the wallpaper's identity (its path IS the id), the cell's own
- * text publishes TRUE pixel dimensions (`{W}x{H}px`), a license label and
- * a middot-separated tag row, and the original file is the preview's
- * suffix-stripped stem (`{slug}.jpg`) — so the grid alone fills
- * [Wallpaper] with everything except author and source page.
+ * popular ranking, `/search?wallpaper={query}` (`+` for spaces — the URL
+ * the site's own search form and tag chips build) answers every query with
+ * the SAME microdata grid, and every grid cell self-describes completely:
+ * the anchor's href IS the wallpaper's page (`https://www.wallpaperflare.com/{slug}`
+ * — v1.3.0's anchor, captured live; v1.2.0 guessed `/wallpaper/{a}/{b}/{c}/{slug}`
+ * from the CDN path and every tap answered the site's 404 page), the item's
+ * schema.org microdata publishes the TRUE pixel dimensions (`Original
+ * wallpaper dimensions is {W}x{H}px`), the keyword row, and the display
+ * name, and the image CDN (`https://c{1..4}.wallpaperflare.com/wallpaper/{a}/{b}/{c}/{slug}-preview.jpg`)
+ * serves the original at the preview's suffix-stripped stem.
  *
  * ## Cloudflare
  *
  * The site sits behind a Cloudflare firewall whose bot management
  * decides what to serve by fingerprint: real browsers on phone IPs get
- * the catalogue, and everything else gets answered with a 403 — a
- * challenge page for plain-looking clients, and (as v1.2.5 learned the
- * hard way) a hard WAF BLOCK page for clients that CLAIM to be Chrome
- * while handshaking like Java. That is why this provider wears no
- * identity at all: v1.1.0's full mobile-Chrome navigation fingerprint
- * (User-Agent, sec-ch-ua hints, the sec-fetch family) rode through the
- * host's OkHttp stack, whose TLS signature no header set can imitate —
- * and the zone answered the incoherence by blocking instead of
- * challenging, a page no cookie replay can ever satisfy. An honest
- * request earns a challenge, and a challenge is exactly what the host's
- * [com.cloudimage.core.network] machinery — which every provider rides
- * through [configure] — is built to eat: the WebView solver settles it,
- * the earned clearance is replayed, and the WebView document fetch is
- * the last rung for zones no replay satisfies. Nothing here duplicates
- * that machinery; this plugin only parses what comes back.
+ * the catalogue, and everything else gets answered with a 403 — and, as
+ * v1.2.5 learned, this zone binds its clearance to the WebView's TLS
+ * fingerprint too, so no OkHttp replay ever passes: the host's ladder
+ * fetches every document through the WebView engine (see
+ * [com.cloudimage.core.network]). Nothing here duplicates that machinery;
+ * this plugin only parses what comes back.
  *
  * ## Pagination honesty
  *
@@ -67,16 +58,17 @@ import kotlin.random.Random
  * - [popular] walks the homepage ranking, paged as deep as the site's
  *   own bar allows;
  * - [search] rides `/search?wallpaper=` with `+`-encoded terms — the
- *   one URL shape the site's indexed pages confirm;
+ *   one URL shape the site's own pages link;
  * - [sections] offers query-preset shelves (Nature, Anime, Abstract,
  *   Cars, Games, Movies, Space, Animals, Marvel) — each a term the
  *   site's own search addresses precisely;
- * - [details] fetches `/wallpaper/{a}/{b}/{c}/{slug}` and reads
- *   og:image, the h1, the license line and the tag chips; a miss is a
- *   source failure and the host simply keeps the grid item's own URLs —
- *   browsing never depended on the detail page;
+ * - [details] fetches `/{slug}` and reads the page's view image, the h1,
+ *   the license line and the tag chips; a miss is a source failure and
+ *   the host simply keeps the grid item's own URLs — browsing never
+ *   depended on the detail page (and listings that publish dimensions,
+ *   as this site's do, never fetch it at all);
  * - [suggestTags] serves tags harvested from grids already seen — the
- *   cell text's real middot rows, never a third-party suggest service;
+ *   cells' own keyword rows, never a third-party suggest service;
  * - [random] draws one term from a baked list and serves that search's
  *   first page — a lottery over the site's own ranking, honestly
  *   labeled by NOT claiming [Capability.RANDOM].
@@ -88,7 +80,7 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "WallpaperFlare",
-            versionName = "1.2.0",
+            versionName = "1.3.0",
             author = "Cloudimage",
             description = "HD, 2K, 4K and 5K wallpapers from wallpaperflare.com - scraped, keyless.",
             // The site curates general-audience content and labels its
@@ -174,28 +166,34 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
         )
 
     /**
-     * The wallpaper page's own record — og:image, true dimensions,
+     * The wallpaper page's own record — the view image, true dimensions,
      * license, tags — for the preview screen. A miss here (redesigned
-     * page, moved wallpaper) is reported as the source failure it is:
-     * the host already holds the grid item's own URLs, so the preview
-     * degrades to grid data instead of breaking.
+     * page, moved wallpaper, or a record with no image to show) is
+     * reported as the source failure it is: the host already holds the
+     * grid item's own URLs, so the preview degrades to grid data instead
+     * of breaking. Listings that publish dimensions — as this site's
+     * microdata does — never reach here at all.
      */
     override suspend fun details(id: String): Result<WallpaperDetails> =
         runCatching {
-            // The id IS a path ("a/b/c/slug"), not a query value — its slashes
-            // are legal path characters and must not be percent-encoded.
-            val response = get("$BASE_URL/wallpaper/$id")
+            // The id IS the page's own slug — `https://www.wallpaperflare.com/{slug}`.
+            val response = get("$BASE_URL/$id")
             if (!response.isSuccessful) {
                 throw httpError(response.statusCode)
             }
-            val record = WallpaperFlareParser.parseDetail(response.bodyText) ?: error("unrecognized wallpaper page for '$id'")
+            val record =
+                WallpaperFlareParser.parseDetail(response.bodyText)
+                    ?: error("unrecognized wallpaper page for '$id'")
+            val image =
+                record.imageUrl
+                    ?: error("wallpaper page stated no image for '$id'")
             WallpaperDetails(
                 wallpaper =
                     Wallpaper(
                         id = id,
                         providerId = ID,
-                        thumbUrl = record.imageUrl ?: gridThumbUrl(id),
-                        fullUrl = record.imageUrl ?: gridFullUrl(id),
+                        thumbUrl = image,
+                        fullUrl = WallpaperFlareParser.toFullUrl(image),
                         title = record.title,
                         width = record.width,
                         height = record.height,
@@ -203,7 +201,7 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
                     ),
                 resolution =
                     if (record.width != null && record.height != null) "${record.width}x${record.height}" else null,
-                sourceUrl = "$BASE_URL/wallpaper/$id",
+                sourceUrl = "$BASE_URL/$id",
             )
         }
 
@@ -333,12 +331,6 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
         }
     }
 
-    /** The preview URL an id implies — the `-preview.jpg` of its stem. */
-    private fun gridThumbUrl(id: String): String = "https://$CDN_HOST/wallpaper/$id-preview.jpg"
-
-    /** The original URL an id implies — the stem with its `.jpg`. */
-    private fun gridFullUrl(id: String): String = "https://$CDN_HOST/wallpaper/$id.jpg"
-
     // ------------------------------------------------------------- plumbing
 
     private suspend fun get(url: String): ProviderHttpResponse =
@@ -354,11 +346,6 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
         const val ID = "cloudimage.wallpaperflare"
         const val BASE_URL = "https://www.wallpaperflare.com"
         const val HOME_URL = "$BASE_URL/"
-
-        /**
-         * The image host grid cells disclose; `c4` is the one seen in the wild.
-         */
-        const val CDN_HOST = "c4.wallpaperflare.com"
 
         /** Deep-pagination cap: a hundred pages of one feed is plenty. */
         const val MAX_PAGES = 100

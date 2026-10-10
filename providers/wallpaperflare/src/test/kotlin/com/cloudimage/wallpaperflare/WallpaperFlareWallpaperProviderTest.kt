@@ -13,13 +13,15 @@ import org.junit.Test
 
 /**
  * WallpaperFlare provider over a scripted fake of the plugin-facing HTTP
- * facade, with fixtures cut from the site's own pages as the search
- * engines index them: the grid cell shape (`<img …-preview.jpg>TITLE «
- * »; {W}x{H}px {license} · tags`), the search URL family
- * (`/search?wallpaper={query}` with `+` spaces), the pagination bar in
- * both its `?page=` and `/page/N` dialects, and the wallpaper page's
- * og:image/h1/license record — all covered without a network, exactly
- * like the HDQWalls suite this mirrors.
+ * facade, with fixtures captured from the site's LIVE markup (v1.3.0 —
+ * fetched through a real browser context, not search-engine caches):
+ * the schema.org microdata grid (`li itemprop="associatedMedia"` carrying
+ * keywords, description dimensions, the page-slug anchor and the lazy CDN
+ * image), the search URL family (`/search?wallpaper={query}` with `+`
+ * spaces — the URL the site's own form and tag chips build), the
+ * pagination bar in its `?page=` and `/page=N` dialects, and the
+ * wallpaper page's `view_img`/h1/license record — all covered without a
+ * network, exactly like the HDQWalls suite this mirrors.
  */
 class WallpaperFlareWallpaperProviderTest {
     private val provider = WallpaperFlareWallpaperProvider()
@@ -51,38 +53,79 @@ class WallpaperFlareWallpaperProviderTest {
             provider.configure(this, ProviderSettings { null })
         }
 
-    // Fixtures: shapes captured from wallpaperflare.com's indexed pages.
+    // Fixtures: shapes captured from wallpaperflare.com's live pages.
 
     /**
-     * The grid as the site serves it — the exact cell shape its own
-     * Google-indexed pages show: anchor-wrapped preview image, `« »`
-     * furniture, TRUE dimensions with `px`, license label, middot tag
-     * row. The first cell is the "I'll support you" wallpaper verbatim
-     * in structure (6016x4000, Public Domain).
+     * The grid as the site serves it — the exact microdata shape its own
+     * pages render: one `li itemprop="associatedMedia"` per wallpaper
+     * (keywords meta, description meta stating TRUE dimensions, schema.org
+     * width/height spans, the page-slug anchor, the lazy CDN image with
+     * `-thumb` `data-src` and `-preview` `srcset`, and the caption). The
+     * first cell is the live homepage's own first item verbatim in
+     * structure (2560x1440, "man near Torii gate wallpaper").
      */
     private val searchGrid =
         """
-        <a href="https://www.wallpaperflare.com/wallpaper/929/733/177/i-ll-support-you-so-you-can-carry-me-wallpaper" title="I'll support you. So you can carry me">
-        <img src="https://c4.wallpaperflare.com/wallpaper/929/733/177/i-ll-support-you-so-you-can-carry-me-wallpaper-preview.jpg" width="338" height="190" alt="I'll support you. So you can carry me Wallpaper" />
-        I'll support you. So you can carry me
-        « »; 6016x4000px Public Domain · gray · plane · wing
-        </a>
-        <a href="https://www.wallpaperflare.com/wallpaper/924/6/442/earth-aurora-borealis-colors-lake-wallpaper" title="Earth aurora borealis colors lake">
-        <img src="https://c4.wallpaperflare.com/wallpaper/924/6/442/earth-aurora-borealis-colors-lake-wallpaper-preview.jpg" width="338" height="190" />
-        Earth aurora borealis colors lake
-        « »; 5184x3456px · aurora · night · sky · lake
-        </a>
-        <a href="https://www.wallpaperflare.com/wallpaper/626/958/440/waterfalls-caracol-falls-brazil-forest-wallpaper" title="Waterfalls caracol falls brazil forest">
-        <img src="https://c4.wallpaperflare.com/wallpaper/626/958/440/waterfalls-caracol-falls-brazil-forest-wallpaper-preview.jpg" width="338" height="190" />
-        Waterfalls caracol falls brazil forest
-        « »; 4000x6000px · waterfall · brazil · forest
-        </a>
+        <ul class="coho-list">
+        <li itemprop="associatedMedia" itemscope="" itemtype="http://schema.org/ImageObject" class="item shadow" data-w="366" data-h="206">
+            <meta itemprop="fileFormat" content="image/jpeg">
+            <meta itemprop="keywords" content="landscape, anime, digital art, fantasy art, night, stars, sunset, asia, mountain, HD wallpapers, PC wallpapers, mobile wallpapers, tablet wallpapers, HD desktop, free download, 1080P, 2K, 4K, 5K">
+            <meta itemprop="description" content="This HD wallpaper is about man near Torii gate wallpaper, gray temple wallpaper, landscape, Original wallpaper dimensions is 2560x1440px, file size is 232.07KB">
+            <meta itemprop="contentSize" content="232.07KB">
+            <div class="res">
+                <span itemprop="width" itemscope="" itemtype="http://schema.org/QuantitativeValue">
+                    <span itemprop="value">2560</span>
+                    <meta itemprop="unitText" content="px">
+                </span>x<span itemprop="height" itemscope="" itemtype="http://schema.org/QuantitativeValue">
+                    <span itemprop="value">1440</span>
+                    <meta itemprop="unitText" content="px">
+                </span>px
+            </div>
+            <figure>
+                <a itemprop="url" href="https://www.wallpaperflare.com/man-near-torii-gate-wallpaper-gray-temple-wallpaper-landscape-wallpaper-cqg" target="_blank">
+                    <img itemprop="contentUrl" alt="man near Torii gate wallpaper, gray temple wallpaper, landscape HD wallpaper" title="man near Torii gate wallpaper, gray temple wallpaper, landscape HD wallpaper" class="lazy loading" data-src="https://c4.wallpaperflare.com/wallpaper/142/751/831/landscape-anime-digital-art-fantasy-art-wallpaper-thumb.jpg" data-srcset="https://c4.wallpaperflare.com/wallpaper/142/751/831/landscape-anime-digital-art-fantasy-art-wallpaper-preview.jpg 2x,https://c4.wallpaperflare.com/wallpaper/142/751/831/landscape-anime-digital-art-fantasy-art-wallpaper-preview.jpg 3x" srcset="https://c4.wallpaperflare.com/wallpaper/142/751/831/landscape-anime-digital-art-fantasy-art-wallpaper-preview.jpg 2x" src="https://c4.wallpaperflare.com/wallpaper/142/751/831/landscape-anime-digital-art-fantasy-art-wallpaper-thumb.jpg">
+                </a>
+                <figcaption itemprop="caption" class="overflow">man near Torii gate wallpaper, gray temple wallpaper, landscape</figcaption>
+            </figure>
+        </li>
+        <li itemprop="associatedMedia" itemscope="" itemtype="http://schema.org/ImageObject" class="item shadow" data-w="366" data-h="206">
+            <meta itemprop="keywords" content="digital art, men, city, futuristic, night, neon, science fiction, HD wallpapers, PC wallpapers, mobile wallpapers, free download">
+            <meta itemprop="description" content="This HD wallpaper is about digital art, men, city, futuristic, night, neon, science fiction, Original wallpaper dimensions is 3840x1633px, file size is 1.11MB">
+            <div class="res">
+                <span itemprop="width" itemscope="" itemtype="http://schema.org/QuantitativeValue">
+                    <span itemprop="value">3840</span>
+                </span>x<span itemprop="height" itemscope="" itemtype="http://schema.org/QuantitativeValue">
+                    <span itemprop="value">1633</span>
+                </span>px
+            </div>
+            <figure>
+                <a itemprop="url" href="https://www.wallpaperflare.com/digital-art-men-city-futuristic-night-neon-science-fiction-wallpaper-udroj" target="_blank">
+                    <img itemprop="contentUrl" alt="digital art, men, city, futuristic, night, neon, science fiction HD wallpaper" data-src="https://c4.wallpaperflare.com/wallpaper/39/346/426/digital-art-men-city-futuristic-night-hd-wallpaper-thumb.jpg" src="https://c4.wallpaperflare.com/wallpaper/39/346/426/digital-art-men-city-futuristic-night-hd-wallpaper-thumb.jpg">
+                </a>
+                <figcaption itemprop="caption" class="overflow">digital art, men, city, futuristic, night, neon, science fiction</figcaption>
+            </figure>
+        </li>
+        <li itemprop="associatedMedia" itemscope="" itemtype="http://schema.org/ImageObject" class="item shadow" data-w="366" data-h="206">
+            <meta itemprop="keywords" content="waterfall, brazil, forest, nature">
+            <meta itemprop="description" content="This HD wallpaper is about waterfall, brazil, forest, Original wallpaper dimensions is 4000x6000px, file size is 3.4MB">
+            <div class="res">4000x6000px</div>
+            <figure>
+                <a itemprop="url" href="/waterfalls-caracol-falls-brazil-forest-wallpaper-fgjhh" target="_blank">
+                    <img itemprop="contentUrl" src="https://c1.wallpaperflare.com/wallpaper/626/958/440/waterfalls-caracol-falls-brazil-forest-wallpaper-preview.jpg">
+                </a>
+                <figcaption itemprop="caption" class="overflow">waterfall, brazil, forest</figcaption>
+            </figure>
+        </li>
+        </ul>
         """.trimIndent()
 
-    /** The same first wallpaper through a `-thumb` image — the related-rows variant. */
-    private val thumbCell =
+    /**
+     * A legacy/unknown grid: anchors wrapping CDN images with the text the
+     * old markup printed beside them — the generalized fallback's input.
+     */
+    private val legacyGrid =
         """
-        <a href="https://www.wallpaperflare.com/wallpaper/87/470/339/abstract-grunge-texture-old-wallpaper">
+        <a href="https://www.wallpaperflare.com/abstract-grunge-texture-old-wallpaper-yeqdd" title="abstract grunge texture old">
         <img src="https://c4.wallpaperflare.com/wallpaper/87/470/339/abstract-grunge-texture-old-wallpaper-thumb.jpg" width="338" />
         abstract grunge texture old
         « »; 1920x1200px · texture · grunge
@@ -100,27 +143,31 @@ class WallpaperFlareWallpaperProviderTest {
         </ul>
         """.trimIndent()
 
-    /** A pagination bar in the path dialect, no current marker. */
+    /** A pagination bar in the site's path-keyed dialect (`/page=N`). */
     private val paginationPathStyle =
         """
         <ul class="pagination">
-        <li><a href="https://www.wallpaperflare.com/page/1">1</a></li>
-        <li><a href="https://www.wallpaperflare.com/page/2">2</a></li>
+        <li><a href="https://www.wallpaperflare.com/search/wallpaper=nature/page=1">1</a></li>
+        <li><a href="https://www.wallpaperflare.com/search/wallpaper=nature/page=2">2</a></li>
         </ul>
         """.trimIndent()
 
-    /** A wallpaper page: og:image, h1, the site's title furniture, tags linking into its own search. */
+    /** A wallpaper page: the view image, the h1, the site's own furniture, tag chips. */
     private val detailPage =
         """
         <html><head>
-        <title>I'll support you. So you can carry me 1080P, 2K, 4K, 5K HD wallpapers free download - WallpaperFlare</title>
-        <meta property="og:image" content="https://c4.wallpaperflare.com/wallpaper/929/733/177/i-ll-support-you-so-you-can-carry-me-wallpaper-preview.jpg" />
-        <meta property="og:title" content="I'll support you. So you can carry me" />
+        <title>HD wallpaper: man near Torii gate wallpaper, gray temple wallpaper, landscape 1080P, 2K, 4K, 5K HD wallpapers free download - WallpaperFlare</title>
+        <meta name="keywords" content="landscape, anime, digital art, fantasy art">
+        <meta name="description" content="This HD wallpaper is about man near Torii gate wallpaper, gray temple wallpaper, landscape, Original wallpaper dimensions is 2560x1440px, file size is 232.07KB">
         </head><body>
-        <h1>I'll support you. So you can carry me « » ; 6016x4000px Public Domain</h1>
+        <h1>HD wallpaper: man near Torii gate wallpaper, gray temple wallpaper, landscape</h1>
+        <meta itemprop="representativeOfPage" content="true">
+        <figure>
+        <img itemprop="contentUrl" class="view_img" id="vimg" data-height="410" alt="man near Torii gate wallpaper, gray temple wallpaper, landscape, HD wallpaper" src="https://c4.wallpaperflare.com/wallpaper/142/751/831/landscape-anime-digital-art-fantasy-art-wallpaper-preview.jpg">
+        <figcaption>man near Torii gate wallpaper, gray temple wallpaper, landscape, HD wallpaper</figcaption>
+        </figure>
         <a href="https://www.wallpaperflare.com/search?wallpaper=gray">gray</a>
-        <a href="https://www.wallpaperflare.com/search?wallpaper=plane">plane</a>
-        <a href="https://www.wallpaperflare.com/search?wallpaper=wing">wing</a>
+        <a href="https://www.wallpaperflare.com/search?wallpaper=temple">temple</a>
         </body></html>
         """.trimIndent()
 
@@ -166,9 +213,6 @@ class WallpaperFlareWallpaperProviderTest {
             provider.popular(2, Filters.None).getOrThrow()
 
             val headers = client.headerLog.single()
-            // Deep pages once carried a same-origin Referer and the same
-            // browser fingerprint; v1.2.5 sends them as bare as the first
-            // page — the host's ladder owns every identity decision.
             assertTrue(
                 "deep pages must stay as honest as first pages: $headers",
                 headers.isEmpty(),
@@ -176,7 +220,7 @@ class WallpaperFlareWallpaperProviderTest {
         }
 
     @Test
-    fun searchParsesGridCellsIntoCompleteWallpapers() =
+    fun searchParsesMicrodataCellsIntoCompleteWallpapers() =
         runTest {
             val client =
                 configureWith(
@@ -190,27 +234,77 @@ class WallpaperFlareWallpaperProviderTest {
             assertEquals(3, page.wallpapers.size)
             assertEquals(2, page.nextPage)
             val first = page.wallpapers[0]
-            assertEquals("929/733/177/i-ll-support-you-so-you-can-carry-me-wallpaper", first.id)
+            // The id is the PAGE's own slug — the site's href, not the CDN path.
+            assertEquals("man-near-torii-gate-wallpaper-gray-temple-wallpaper-landscape-wallpaper-cqg", first.id)
             assertEquals("cloudimage.wallpaperflare", first.providerId)
+            // The preview a srcset names wins over the lazy thumb.
             assertEquals(
-                "https://c4.wallpaperflare.com/wallpaper/929/733/177/i-ll-support-you-so-you-can-carry-me-wallpaper-preview.jpg",
+                "https://c4.wallpaperflare.com/wallpaper/142/751/831/landscape-anime-digital-art-fantasy-art-wallpaper-preview.jpg",
                 first.thumbUrl,
             )
             // The original is the preview's suffix-stripped stem.
             assertEquals(
-                "https://c4.wallpaperflare.com/wallpaper/929/733/177/i-ll-support-you-so-you-can-carry-me-wallpaper.jpg",
+                "https://c4.wallpaperflare.com/wallpaper/142/751/831/landscape-anime-digital-art-fantasy-art-wallpaper.jpg",
                 first.fullUrl,
             )
-            assertEquals("I'll support you. So you can carry me", first.title)
-            assertEquals(6016, first.width)
-            assertEquals(4000, first.height)
-            assertEquals(listOf("gray", "plane", "wing"), first.tags)
+            assertEquals("man near Torii gate wallpaper, gray temple wallpaper, landscape", first.title)
+            assertEquals(2560, first.width)
+            assertEquals(1440, first.height)
+            // The keyword row's real tags, furniture filtered, capped at eight.
+            assertEquals(
+                listOf("landscape", "anime", "digital art", "fantasy art", "night", "stars", "sunset", "asia"),
+                first.tags,
+            )
             // The request used the site's own URL family, + for spaces.
             assertEquals(
                 "https://www.wallpaperflare.com/search?wallpaper=nature",
                 client.requests.single(),
             )
         }
+
+    @Test
+    fun cellsWithoutSrcsetServeTheThumbTheyRender() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://www.wallpaperflare.com/search?wallpaper=nature" to ok(searchGrid),
+                    ),
+                )
+
+            val page = provider.search("nature", 1, Filters.None).getOrThrow()
+
+            // The second cell carries only `data-src`/`src` thumbs — the
+            // thumb it renders is the thumb served, and the stem still
+            // points at the original.
+            val second = page.wallpapers[1]
+            assertEquals("digital-art-men-city-futuristic-night-neon-science-fiction-wallpaper-udroj", second.id)
+            assertEquals(
+                "https://c4.wallpaperflare.com/wallpaper/39/346/426/digital-art-men-city-futuristic-night-hd-wallpaper-thumb.jpg",
+                second.thumbUrl,
+            )
+            assertEquals(
+                "https://c4.wallpaperflare.com/wallpaper/39/346/426/digital-art-men-city-futuristic-night-hd-wallpaper.jpg",
+                second.fullUrl,
+            )
+            assertEquals(3840, second.width)
+            assertEquals(1633, second.height)
+        }
+
+    @Test
+    fun relativeHrefAndTextDimensionsStillParse() {
+        // The third cell: a RELATIVE href and dimensions only as flattened
+        // text — both spellings the site's own pages use.
+        val items = WallpaperFlareParser.parseGrid(searchGrid)
+        val third = items.first { it.id == "waterfalls-caracol-falls-brazil-forest-wallpaper-fgjhh" }
+        assertEquals("waterfall, brazil, forest", third.title)
+        assertEquals(4000, third.width)
+        assertEquals(6000, third.height)
+        assertEquals(
+            "https://c1.wallpaperflare.com/wallpaper/626/958/440/waterfalls-caracol-falls-brazil-forest-wallpaper-preview.jpg",
+            third.thumbUrl,
+        )
+    }
 
     @Test
     fun searchEncodesSpacesAsPluses() =
@@ -248,24 +342,30 @@ class WallpaperFlareWallpaperProviderTest {
         }
 
     @Test
-    fun previewWinsWhenTheSameWallpaperAlsoAppearsAsThumb() {
-        val items = WallpaperFlareParser.parseGrid(searchGrid + thumbCell)
-        val ids = items.map { it.id }
-        assertTrue(ids.contains("87/470/339/abstract-grunge-texture-old-wallpaper"))
-        val supported = items.first { it.id == "929/733/177/i-ll-support-you-so-you-can-carry-me-wallpaper" }
-        assertTrue(supported.thumbUrl.endsWith("-preview.jpg"))
-    }
-
-    @Test
-    fun thumbOnlyCellStillYieldsUsableUrls() {
-        val items = WallpaperFlareParser.parseGrid(thumbCell)
+    fun legacyAnchorCellsStillYieldUsableItems() {
+        // A grid with no microdata li at all: the fallback reads the
+        // anchor's href as the id and the anchor text for the record.
+        val items = WallpaperFlareParser.parseGrid(legacyGrid)
         assertEquals(1, items.size)
         val item = items[0]
+        assertEquals("abstract-grunge-texture-old-wallpaper-yeqdd", item.id)
         assertTrue(item.thumbUrl.endsWith("-thumb.jpg"))
         assertEquals("https://c4.wallpaperflare.com/wallpaper/87/470/339/abstract-grunge-texture-old-wallpaper.jpg", item.fullUrl)
         assertEquals(1920, item.width)
         assertEquals(1200, item.height)
         assertEquals(listOf("texture", "grunge"), item.tags)
+    }
+
+    @Test
+    fun routeHrefsAreNeverTakenAsWallpaperIds() {
+        // Search and download links never masquerade as pages, whatever
+        // markup wraps them.
+        val html =
+            """
+            <a href="https://www.wallpaperflare.com/search?wallpaper=nature"><img src="https://c4.wallpaperflare.com/wallpaper/1/2/3/foo-thumb.jpg"></a>
+            <a href="https://www.wallpaperflare.com/download"><img src="https://c4.wallpaperflare.com/wallpaper/1/2/3/bar-thumb.jpg"></a>
+            """.trimIndent()
+        assertTrue(WallpaperFlareParser.parseGrid(html).isEmpty())
     }
 
     @Test
@@ -301,6 +401,28 @@ class WallpaperFlareWallpaperProviderTest {
             )
             assertEquals(3, page2.wallpapers.size)
             assertEquals(3, page2.nextPage)
+        }
+
+    @Test
+    fun thePathKeyedDialectIsLearnedToo() =
+        runTest {
+            // `/page=N` — the dialect the site's own indexed URLs show — is
+            // both recognized and templated, so deep pages ride it.
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://www.wallpaperflare.com/search/wallpaper=nature/page=2" to ok(searchGrid + paginationPathStyle),
+                        "https://www.wallpaperflare.com/search?wallpaper=nature" to ok(searchGrid + paginationPathStyle),
+                    ),
+                )
+
+            provider.search("nature", 1, Filters.None).getOrThrow()
+            provider.search("nature", 2, Filters.None).getOrThrow()
+
+            assertEquals(
+                "https://www.wallpaperflare.com/search/wallpaper=nature/page=2",
+                client.requests.last(),
+            )
         }
 
     @Test
@@ -367,30 +489,36 @@ class WallpaperFlareWallpaperProviderTest {
     @Test
     fun detailsReadsTheWallpaperPage() =
         runTest {
-            configureWith(
-                mapOf(
-                    "https://www.wallpaperflare.com/wallpaper/929/733/177/i-ll-support-you-so-you-can-carry-me-wallpaper" to ok(detailPage),
-                ),
-            )
+            val pageUrl = "https://www.wallpaperflare.com/man-near-torii-gate-wallpaper-gray-temple-wallpaper-landscape-wallpaper-cqg"
+            configureWith(mapOf(pageUrl to ok(detailPage)))
 
             val details =
                 provider
-                    .details("929/733/177/i-ll-support-you-so-you-can-carry-me-wallpaper")
+                    .details("man-near-torii-gate-wallpaper-gray-temple-wallpaper-landscape-wallpaper-cqg")
                     .getOrThrow()
 
-            assertEquals("I'll support you. So you can carry me", details.wallpaper.title)
-            assertEquals(6016, details.wallpaper.width)
-            assertEquals(4000, details.wallpaper.height)
-            assertEquals("6016x4000", details.resolution)
+            assertEquals("man near Torii gate wallpaper, gray temple wallpaper, landscape", details.wallpaper.title)
+            assertEquals(2560, details.wallpaper.width)
+            assertEquals(1440, details.wallpaper.height)
+            assertEquals("2560x1440", details.resolution)
+            // The thumb is the page's own view image; the original is its stem.
             assertEquals(
-                "https://c4.wallpaperflare.com/wallpaper/929/733/177/i-ll-support-you-so-you-can-carry-me-wallpaper.jpg",
+                "https://c4.wallpaperflare.com/wallpaper/142/751/831/landscape-anime-digital-art-fantasy-art-wallpaper-preview.jpg",
+                details.wallpaper.thumbUrl,
+            )
+            assertEquals(
+                "https://c4.wallpaperflare.com/wallpaper/142/751/831/landscape-anime-digital-art-fantasy-art-wallpaper.jpg",
                 details.wallpaper.fullUrl,
             )
             assertEquals(
-                "https://www.wallpaperflare.com/wallpaper/929/733/177/i-ll-support-you-so-you-can-carry-me-wallpaper",
+                "https://www.wallpaperflare.com/man-near-torii-gate-wallpaper-gray-temple-wallpaper-landscape-wallpaper-cqg",
                 details.sourceUrl,
             )
-            assertEquals(listOf("gray", "plane", "wing"), details.wallpaper.tags)
+            // Keywords meta first, then the page's own tag chips.
+            assertEquals(
+                listOf("landscape", "anime", "digital art", "fantasy art", "gray", "temple"),
+                details.wallpaper.tags,
+            )
         }
 
     @Test
@@ -398,11 +526,25 @@ class WallpaperFlareWallpaperProviderTest {
         runTest {
             configureWith(
                 mapOf(
-                    "https://www.wallpaperflare.com/wallpaper/929" to ok("<html><body>moved</body></html>"),
+                    "https://www.wallpaperflare.com/moved" to ok("<html><body>moved</body></html>"),
                 ),
             )
 
-            assertTrue(provider.details("929").isFailure)
+            assertTrue(provider.details("moved").isFailure)
+        }
+
+    @Test
+    fun detailsFailsCleanlyWhenThePageStatesNoImage() =
+        runTest {
+            // A page with a name but no view image has nothing honest to
+            // show — the host keeps the grid item's own URLs instead.
+            configureWith(
+                mapOf(
+                    "https://www.wallpaperflare.com/imageless" to ok("<html><body><h1>HD wallpaper: a name</h1></body></html>"),
+                ),
+            )
+
+            assertTrue(provider.details("imageless").isFailure)
         }
 
     @Test
@@ -431,7 +573,7 @@ class WallpaperFlareWallpaperProviderTest {
             )
 
             provider.search("nature", 1, Filters.None).getOrThrow()
-            val suggestions = provider.suggestTags("wa").getOrThrow()
+            val suggestions = provider.suggestTags("wat").getOrThrow()
 
             assertEquals(listOf("waterfall"), suggestions)
             assertTrue(provider.suggestTags("zzz").getOrThrow().isEmpty())
