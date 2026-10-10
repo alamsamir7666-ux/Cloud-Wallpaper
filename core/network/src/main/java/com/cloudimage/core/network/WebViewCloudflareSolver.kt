@@ -9,6 +9,8 @@ import android.graphics.drawable.ColorDrawable
 import android.view.ViewGroup
 import android.view.Window
 import android.webkit.CookieManager
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -18,6 +20,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import java.io.ByteArrayInputStream
 import kotlin.coroutines.resume
 
 /**
@@ -144,14 +147,25 @@ internal class WebViewCloudflareSolver(
             } else {
                 // v1.2.6's invisible lane: with a clearance in the jar there
                 // is no challenge to settle, so the document loads fine in
-                // a DETACHED WebView — no dialog, nothing the user sees. A
-                // detached trip that lands on the interstitial instead
+                // a hidden WebView — no dialog, nothing the user sees. A
+                // hidden trip that lands on the interstitial instead
                 // proves the cookies dead: wipe them (the next solve
                 // deserves a clean slate) and escalate to the attached
                 // dialog, where the challenge gets the real viewport it
                 // needs — the one visible dialog per cookie lifetime.
+                //
+                // v1.2.7 sharpens "hidden": when a foreground window
+                // exists the trip runs in an INVISIBLY-ATTACHED WebView —
+                // a full-screen dialog whose window alpha is zero. The
+                // page still reads as attached and visible (a real
+                // viewport, `document.visibilityState === "visible"`),
+                // which is exactly what a page's own post-load widgets —
+                // WallpaperFlare's Turnstile, in the wild — need to run
+                // their checks, while the user still sees nothing at all.
+                // Only when no window exists does the trip fall back to
+                // the truly detached WebView.
                 if (hasClearanceFor(host)) {
-                    fetchDetached(url, host)?.let { return@withContext it }
+                    fetchQuiet(url, host)?.let { return@withContext it }
                     clearCookiesFor(host)
                 }
                 val activity =
@@ -164,6 +178,26 @@ internal class WebViewCloudflareSolver(
                 }
             }
         }
+
+    /**
+     * The invisible lane's quiet trip: an invisibly-attached WebView when
+     * a live window exists, else a detached one. Both run the fetch
+     * discipline — [DEADLINE][fetchDetached], fail-fast on the
+     * interstitial — so a dead cookie escalates to the visible dialog
+     * exactly as v1.2.6's detached trip did.
+     */
+    private suspend fun fetchQuiet(
+        url: String,
+        host: String,
+    ): WebViewPage? {
+        val activity = foregroundActivity()?.takeUnless { it.isFinishing || it.isDestroyed }
+        return if (activity == null) {
+            fetchDetached(url, host)
+        } else {
+            runCatching { fetchInvisible(activity, url, host) }.getOrNull()
+                ?: fetchDetached(url, host)
+        }
+    }
 
     /** Whether the system jar still holds a clearance for [host]. */
     private fun hasClearanceFor(host: String): Boolean {
@@ -243,6 +277,41 @@ internal class WebViewCloudflareSolver(
         activity: Activity,
         url: String,
         host: String,
+    ): WebViewPage? = fetchInDialog(activity, url, host, visible = true)
+
+    /**
+     * The invisible document fetch (v1.2.7): the same full-screen dialog,
+     * but with the window's alpha at zero — attached to a real window and
+     * laid out at real viewport size (so the page's own post-load widgets,
+     * WallpaperFlare's Turnstile among them, read a genuinely visible
+     * document), while compositing nothing the user can see. A trip here
+     * still fail-fasts on the interstitial like the detached lane: a
+     * challenge the user cannot see is a challenge the user cannot solve,
+     * so it escalates to the visible dialog instead of parking in the
+     * dark for a minute.
+     */
+    private suspend fun fetchInvisible(
+        activity: Activity,
+        url: String,
+        host: String,
+    ): WebViewPage? = fetchInDialog(activity, url, host, visible = false)
+
+    /**
+     * One document-fetch trip in a dialog window over [activity]: visible
+     * when [visible], fully transparent otherwise. The dialog discipline —
+     * non-cancelable, dismissed in `finally`, WebView torn down with it —
+     * is identical for both; only the window's compositing differs, and
+     * with it the interstitial policy: a VISIBLE dialog is where a
+     * challenge settles in front of the user (fail-fast off — the page
+     * that arrives after the settle is the fetch's answer), while an
+     * INVISIBLE one the user cannot interact with treats the interstitial
+     * as a dead end and escalates (fail-fast on).
+     */
+    private suspend fun fetchInDialog(
+        activity: Activity,
+        url: String,
+        host: String,
+        visible: Boolean,
     ): WebViewPage? {
         val client = ChallengeClient()
         val webView = createWebView(client)
@@ -264,12 +333,29 @@ internal class WebViewCloudflareSolver(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT,
                     )
+                    if (!visible) {
+                        // Zero alpha, zero dim: the window attaches and lays
+                        // out — the page runs as a real, visible document —
+                        // while the compositor draws nothing over the app.
+                        attributes =
+                            attributes.apply {
+                                alpha = 0f
+                                dimAmount = 0f
+                            }
+                    }
                 }
             }
         return try {
             dialog.show()
             webView.loadUrl(url)
-            awaitDocument(client, webView, host, url, FETCH_DEADLINE_MS, failFastOnInterstitial = false)
+            awaitDocument(
+                client,
+                webView,
+                host,
+                url,
+                FETCH_DEADLINE_MS,
+                failFastOnInterstitial = !visible,
+            )
         } finally {
             runCatching { dialog.dismiss() }
             runCatching { webView.stopLoading() }
@@ -397,17 +483,24 @@ internal class WebViewCloudflareSolver(
      * settle beat for the DOM to complete) and asks
      * [CloudflareChallenge.isInterstitialDocument] whether Cloudflare's
      * furniture is still on screen. The first extraction that reads like
-     * site content wins, carrying whatever clearance the trip earned.
-     * Like the solve path there is no reload (v1.2.4) — a page that parks
-     * simply rides the full deadline. A page that never settles by the
-     * deadline is a failure — null, no partial credit.
+     * site content then holds the page open for its POST-LOAD JAVASCRIPT
+     * (v1.2.7): pages increasingly assemble their payload after
+     * `onPageFinished` — WallpaperFlare's download page runs a Turnstile
+     * widget, POSTs its token, and only then writes the original image's
+     * URL into the DOM — so the document is re-read the moment the page
+     * goes QUIET (no subresource or interception activity for
+     * [JS_QUIET_MS]), or at the [POST_LOAD_GRACE_MS] cap for pages whose
+     * analytics never stop. Like the solve path there is no reload
+     * (v1.2.4) — a page that parks simply rides the full deadline. A page
+     * that never settles by the deadline is a failure — null, no partial
+     * credit.
      *
-     * [failFastOnInterstitial] is the detached lane's discipline
+     * [failFastOnInterstitial] is the detached/invisible lane's discipline
      * (v1.2.6): a hidden document cannot settle a challenge — that is
-     * the v1.0.16 lesson — so a detached trip that settles on the
+     * the v1.0.16 lesson — so a hidden trip that settles on the
      * interstitial returns null IMMEDIATELY instead of parking for a
      * minute, letting the caller escalate to the attached dialog. The
-     * attached lane keeps waiting, because there the interstitial is a
+     * visible lane keeps waiting, because there the interstitial is a
      * challenge actively settling in front of the user.
      */
     private suspend fun awaitDocument(
@@ -427,11 +520,55 @@ internal class WebViewCloudflareSolver(
             if (settled && client.finished != extractedForFinish) {
                 extractedForFinish = client.finished
                 val html = webView.extractHtml() ?: continue
-                if (!CloudflareChallenge.isInterstitialDocument(html)) {
-                    runCatching { cookieManager.flush() }
-                    return WebViewPage(html = html, clearance = clearanceFor(host, url))
+                if (CloudflareChallenge.isInterstitialDocument(html)) {
+                    if (failFastOnInterstitial) return null
+                    continue
                 }
-                if (failFastOnInterstitial) return null
+                // Site content — but its JavaScript may still be writing the
+                // parts this fetch exists to read. Hold the page open until
+                // it goes quiet (or the grace cap, or a new navigation takes
+                // over), then read the FINAL document.
+                //
+                // A page that embeds Cloudflare Turnstile (the wallpaperflare
+                // download page, in the wild) gets the patient regime: its
+                // token → POST → DOM-write chain runs 1–5 s after load, and
+                // the POST itself may never touch the resource clock (it is
+                // an XHR, and not every WebView version routes those through
+                // the interception hook) — so a minimum hold rides along
+                // that no quiet signal can cut short. Every other page —
+                // the site's server-rendered listings, which carry no
+                // widget at all — returns on the plain quiet window.
+                val turnstilePage = TURNSTILE_MARKER.containsMatchIn(html)
+                val graceCap = if (turnstilePage) TURNSTILE_GRACE_MS else POST_LOAD_GRACE_MS
+                val quietWindow = if (turnstilePage) TURNSTILE_QUIET_MS else JS_QUIET_MS
+                val graceDeadline =
+                    minOf(System.currentTimeMillis() + graceCap, deadline)
+                val minHoldUntil =
+                    if (turnstilePage) {
+                        minOf(System.currentTimeMillis() + TURNSTILE_MIN_HOLD_MS, graceDeadline)
+                    } else {
+                        0L
+                    }
+                var navigatedAgain = false
+                while (System.currentTimeMillis() < graceDeadline) {
+                    delay(POLL_INTERVAL_MS)
+                    if (client.finished != extractedForFinish) {
+                        navigatedAgain = true
+                        break
+                    }
+                    if (System.currentTimeMillis() < minHoldUntil) continue
+                    val quietFor =
+                        if (client.lastResourceAt == 0L) {
+                            Long.MAX_VALUE
+                        } else {
+                            System.currentTimeMillis() - client.lastResourceAt
+                        }
+                    if (quietFor >= quietWindow) break
+                }
+                if (navigatedAgain) continue
+                val finalHtml = webView.extractHtml() ?: html
+                runCatching { cookieManager.flush() }
+                return WebViewPage(html = finalHtml, clearance = clearanceFor(host, url))
             }
         }
         // No page ever settled — wipe the failed trip's cookies so the next
@@ -503,10 +640,25 @@ internal class WebViewCloudflareSolver(
 
     /**
      * The solver's [WebViewClient]: default navigation behavior (challenge
-     * redirects stay in the view) plus a count of finished page loads and
-     * when the latest finished, for the reload and settle heuristics.
-     * Both the callbacks and the poll loop run on the main thread, so the
-     * counters need no synchronization.
+     * redirects stay in the view) plus the page-load and resource-activity
+     * clocks the settle heuristics read — when the latest page finished
+     * and when any subresource last moved, the signal the post-load
+     * JavaScript quiet window keys on. The callbacks run on the main
+     * thread while [shouldInterceptRequest] runs on a background one, so
+     * the timestamp writes are `@Volatile`.
+     *
+     * v1.2.7 adds one narrow interception: requests for
+     * `r{N}.wallpaperflare.com` — the original-image host the site's own
+     * download flow assigns into the DOM after its Turnstile settles —
+     * answer with a stub instead of the multi-megabyte original. The
+     * fetch lane only needs the URL, not the bytes (the app re-downloads
+     * the file through its HTTP client right after), and letting a
+     * hidden WebView pull full-resolution wallpapers on every tap would
+     * double the user's bandwidth for nothing. Everything else passes
+     * through untouched — `null` IS the default handling, the exact path
+     * every non-intercepted request takes, so the challenge orchestration
+     * (its scripts, iframes and XHRs, none of which live on that host)
+     * behaves precisely as before.
      */
     private class ChallengeClient : WebViewClient() {
         var finished: Int = 0
@@ -515,12 +667,37 @@ internal class WebViewCloudflareSolver(
         var lastFinishedAt: Long = 0
             private set
 
+        /** When any subresource was last requested — 0 until one is. */
+        @Volatile
+        var lastResourceAt: Long = 0
+            private set
+
         override fun onPageFinished(
             view: WebView,
             url: String,
         ) {
             finished += 1
             lastFinishedAt = System.currentTimeMillis()
+        }
+
+        override fun onLoadResource(
+            view: WebView,
+            url: String,
+        ) {
+            lastResourceAt = System.currentTimeMillis()
+        }
+
+        override fun shouldInterceptRequest(
+            view: WebView,
+            request: WebResourceRequest,
+        ): WebResourceResponse? {
+            lastResourceAt = System.currentTimeMillis()
+            val host = request.url.host ?: return null
+            return if (ORIGINAL_IMAGE_HOST.containsMatchIn(host)) {
+                WebResourceResponse("image/jpeg", null, ByteArrayInputStream(ByteArray(0)))
+            } else {
+                null
+            }
         }
     }
 
@@ -583,5 +760,59 @@ internal class WebViewCloudflareSolver(
          * mid-swap only ever sees the shell.
          */
         const val SETTLE_AFTER_FINISH_MS = 700L
+
+        /**
+         * How still a page must be before its post-load JavaScript is
+         * judged finished — no subresource or interception activity for
+         * this long means the DOM the fetch reads is the settled one
+         * (v1.2.7). Server-rendered listings settle here within a beat of
+         * their own load.
+         */
+        const val JS_QUIET_MS = 1_200L
+
+        /**
+         * The cap on the quiet wait — pages whose analytics keep the
+         * resource clock warm forever still return at this mark, with
+         * whatever DOM they have (v1.2.7). Long enough for slow post-load
+         * scripts, short enough that an ordinary fetch through the engine
+         * never feels it.
+         */
+        const val POST_LOAD_GRACE_MS = 6_000L
+
+        /**
+         * The widget marker that switches a fetch into the patient regime —
+         * the Turnstile API script or the `cf-turnstile` widget element.
+         * WallpaperFlare's download page embeds one to gate its original-
+         * image URLs behind a token exchange; its listings carry no widget
+         * at all, so the patient regime never taxes the feeds.
+         */
+        val TURNSTILE_MARKER =
+            Regex("""challenges\.cloudflare\.com/turnstile|class=["'][^"']*cf-turnstile""")
+
+        /**
+         * Quiet window under the patient regime — wider, because the
+         * widget's token POST is an XHR the resource clock may never see
+         * and the DOM write that matters follows it (v1.2.7).
+         */
+        const val TURNSTILE_QUIET_MS = 2_000L
+
+        /**
+         * How long a widget-bearing page is held open unconditionally —
+         * the token flow typically completes within 1–3 s of the page
+         * finishing, and this floor covers the invisible-XHR gap no quiet
+         * signal can (v1.2.7).
+         */
+        const val TURNSTILE_MIN_HOLD_MS = 3_000L
+
+        /** The patient regime's cap — a slow Turnstile still returns by here. */
+        const val TURNSTILE_GRACE_MS = 8_000L
+
+        /**
+         * The original-image CDN of the one site whose download flow
+         * assigns full-resolution files into the DOM after page load —
+         * intercepted (stubbed) so a hidden fetch never pays for bytes
+         * the HTTP client re-downloads seconds later (v1.2.7).
+         */
+        val ORIGINAL_IMAGE_HOST = Regex("""^r\d+\.wallpaperflare\.com$""")
     }
 }

@@ -81,6 +81,11 @@ import kotlin.math.roundToInt
  *   the screen and a corner chip reports byte-accurate progress — but only
  *   after a grace period, so a warm page never blinks its loading
  *   furniture;
+ * - a listing whose full URL is BLANK (v1.2.7: sources that mint the
+ *   original's address per wallpaper) has nothing to load YET — the page
+ *   keeps its blurred backdrop and loading furniture while the ViewModel
+ *   resolves the real URL, starts the load the moment it lands, and offers
+ *   the same retry surface if the resolution itself fails;
  * - a downward drag dismisses: the image translates down 1:1 with the
  *   finger and fades, and nothing scales, skews or resizes at any point;
  *   released past a threshold (or flung) the close continues on its own,
@@ -129,13 +134,21 @@ internal fun WallpaperViewerPage(
     onDismiss: () -> Unit,
     onOpenInfo: () -> Unit,
     onZoomedChange: (Boolean) -> Unit,
+    resolutionFailed: Boolean = false,
+    onRetryResolution: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var retryAttempt by remember { mutableIntStateOf(0) }
-    var loadFailed by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val url = wallpaper.fullUrl
+
+    // Load state keys on the URL (v1.2.7): a page slot's wallpaper can
+    // change underneath it — the pager reuses compositions per index, and
+    // the resolution flow replaces a blank-URL item in place — so a
+    // failure or retry attempt belonging to the old URL must never leak
+    // into the new one's load.
+    var retryAttempt by remember(url) { mutableIntStateOf(0) }
+    var loadFailed by remember(url) { mutableStateOf(false) }
     val progress = ImageProgressRegistry.observe(url).collectAsState()
 
     // The gesture layer reads whatever the latest composition parked here —
@@ -262,29 +275,38 @@ internal fun WallpaperViewerPage(
                     }
                 }
 
-                ZoomableAsyncImage(
-                    model =
-                        ImageRequest
-                            .Builder(context)
-                            .data(wallpaper.fullUrl)
-                            // No crossfade on purpose: the pager's own page
-                            // motion is the transition, and a fade from
-                            // transparent over the black scrim reads as a
-                            // blink on every swipe.
-                            // Bumping the attempt re-executes the request; the
-                            // memoryCacheKey changes with it so retries re-fetch.
-                            .setParameter("retry", retryAttempt, memoryCacheKey = "retry-$retryAttempt")
-                            .listener(
-                                onError = { _, _ -> loadFailed = true },
-                                onSuccess = { _, _ ->
-                                    loadFailed = false
-                                    ImageProgressRegistry.finish(url)
-                                },
-                            ).build(),
-                    contentDescription = stringResource(R.string.detail_preview),
-                    state = imageState,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                // The image itself only mounts once there is something to
+                // load (v1.2.7): a BLANK full URL is not a load attempt but
+                // the signal that the real address is still being resolved —
+                // the blurred backdrop and its furniture cover that wait,
+                // and the resolved URL arriving here is what starts the
+                // download. Firing a request at nothing would only flash
+                // the retry furniture for a failure that is not one.
+                if (url.isNotBlank()) {
+                    ZoomableAsyncImage(
+                        model =
+                            ImageRequest
+                                .Builder(context)
+                                .data(url)
+                                // No crossfade on purpose: the pager's own page
+                                // motion is the transition, and a fade from
+                                // transparent over the black scrim reads as a
+                                // blink on every swipe.
+                                // Bumping the attempt re-executes the request; the
+                                // memoryCacheKey changes with it so retries re-fetch.
+                                .setParameter("retry", retryAttempt, memoryCacheKey = "retry-$retryAttempt")
+                                .listener(
+                                    onError = { _, _ -> loadFailed = true },
+                                    onSuccess = { _, _ ->
+                                        loadFailed = false
+                                        ImageProgressRegistry.finish(url)
+                                    },
+                                ).build(),
+                        contentDescription = stringResource(R.string.detail_preview),
+                        state = imageState,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
 
                 // Corner loading chip: how much of the original has arrived.
                 if (showLoadingFurniture && !loadFailed) {
@@ -298,11 +320,15 @@ internal fun WallpaperViewerPage(
                     )
                 }
 
-                if (loadFailed) {
+                if (loadFailed || (url.isBlank() && resolutionFailed)) {
                     RetryOverlay(
                         onRetry = {
-                            loadFailed = false
-                            retryAttempt += 1
+                            if (url.isNotBlank()) {
+                                loadFailed = false
+                                retryAttempt += 1
+                            } else {
+                                onRetryResolution()
+                            }
                         },
                         modifier =
                             Modifier

@@ -31,7 +31,25 @@ import kotlin.random.Random
  * schema.org microdata publishes the TRUE pixel dimensions (`Original
  * wallpaper dimensions is {W}x{H}px`), the keyword row, and the display
  * name, and the image CDN (`https://c{1..4}.wallpaperflare.com/wallpaper/{a}/{b}/{c}/{slug}-preview.jpg`)
- * serves the original at the preview's suffix-stripped stem.
+ * serves the previews and thumbs the grids carry.
+ *
+ * ## The original's URL (v1.2.7's lesson)
+ *
+ * The original file is NOT a derivable URL — v1.3.0 shipped the preview's
+ * suffix-stripped stem and the CDN answered every such request with a
+ * 404, which is exactly what installs in the wild reported as previews
+ * that never load and saves that end in "server error". The site MINTS
+ * the original's URL per wallpaper: the download page
+ * (`/{slug}/download`) embeds a Cloudflare Turnstile widget whose
+ * callback exchanges a token for a 32-hex hash and then writes
+ * `https://r{N}.wallpaperflare.com/…/…-{hash}.jpg` into the page's
+ * `show_img` — a URL that IS publicly fetchable afterwards. Listings
+ * therefore carry a BLANK [Wallpaper.fullUrl], and [details] fetches the
+ * download page (through the host's WebView document lane, which
+ * executes that JavaScript exactly as a browser would) and reads the
+ * minted URL out of the rendered DOM. The hash is stable per wallpaper,
+ * so a resolved record is remembered for the instance's lifetime and a
+ * second open of the same wallpaper costs nothing.
  *
  * ## Cloudflare
  *
@@ -62,11 +80,12 @@ import kotlin.random.Random
  * - [sections] offers query-preset shelves (Nature, Anime, Abstract,
  *   Cars, Games, Movies, Space, Animals, Marvel) — each a term the
  *   site's own search addresses precisely;
- * - [details] fetches `/{slug}` and reads the page's view image, the h1,
- *   the license line and the tag chips; a miss is a source failure and
- *   the host simply keeps the grid item's own URLs — browsing never
- *   depended on the detail page (and listings that publish dimensions,
- *   as this site's do, never fetch it at all);
+ * - [details] fetches `/{slug}/download` and reads the MINTED original
+ *   URL (plus the true dimensions and file size) out of the rendered
+ *   page — the one place the site discloses it; a miss is a source
+ *   failure and the host keeps the grid item's own values, with the
+ *   preview honestly reporting an unresolved image rather than loading
+ *   a URL that never existed;
  * - [suggestTags] serves tags harvested from grids already seen — the
  *   cells' own keyword rows, never a third-party suggest service;
  * - [random] draws one term from a baked list and serves that search's
@@ -80,7 +99,7 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "WallpaperFlare",
-            versionName = "1.3.0",
+            versionName = "1.4.0",
             author = "Cloudimage",
             description = "HD, 2K, 4K and 5K wallpapers from wallpaperflare.com - scraped, keyless.",
             // The site curates general-audience content and labels its
@@ -166,43 +185,55 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
         )
 
     /**
-     * The wallpaper page's own record — the view image, true dimensions,
-     * license, tags — for the preview screen. A miss here (redesigned
-     * page, moved wallpaper, or a record with no image to show) is
-     * reported as the source failure it is: the host already holds the
-     * grid item's own URLs, so the preview degrades to grid data instead
-     * of breaking. Listings that publish dimensions — as this site's
-     * microdata does — never reach here at all.
+     * The wallpaper's definitive record, minted off its DOWNLOAD page —
+     * the one page whose JavaScript writes the original's URL into the
+     * DOM. The response carries the minted file as [Wallpaper.fullUrl]
+     * (a BLANK thumb: the grid item's own preview is better than
+     * anything this page states, and the host overlays non-blank values
+     * only), the page's TRUE dimensions and file size for the info sheet,
+     * and the wallpaper page as the source URL. Resolutions are remembered
+     * per id — the hash is stable per wallpaper, so the second open of
+     * anything already seen costs no trip at all.
+     *
+     * A miss — a page the widget never minted (its token flow was still
+     * mid-flight when the host read the DOM, or the site changed its
+     * plumbing) — is the source failure it is: the host keeps the grid
+     * item's values and the preview reports an unresolved image rather
+     * than pretending a derivable URL exists.
      */
     override suspend fun details(id: String): Result<WallpaperDetails> =
         runCatching {
-            // The id IS the page's own slug — `https://www.wallpaperflare.com/{slug}`.
-            val response = get("$BASE_URL/$id")
+            synchronized(resolutionLock) { resolved[id] }?.let { return@runCatching it }
+            val response = get("$BASE_URL/$id/download")
             if (!response.isSuccessful) {
                 throw httpError(response.statusCode)
             }
             val record =
-                WallpaperFlareParser.parseDetail(response.bodyText)
-                    ?: error("unrecognized wallpaper page for '$id'")
-            val image =
-                record.imageUrl
-                    ?: error("wallpaper page stated no image for '$id'")
-            WallpaperDetails(
-                wallpaper =
-                    Wallpaper(
-                        id = id,
-                        providerId = ID,
-                        thumbUrl = image,
-                        fullUrl = WallpaperFlareParser.toFullUrl(image),
-                        title = record.title,
-                        width = record.width,
-                        height = record.height,
-                        tags = record.tags,
-                    ),
-                resolution =
-                    if (record.width != null && record.height != null) "${record.width}x${record.height}" else null,
-                sourceUrl = "$BASE_URL/$id",
-            )
+                WallpaperFlareParser.parseDownloadPage(response.bodyText)
+                    ?: error("download page stated no original for '$id'")
+            val details =
+                WallpaperDetails(
+                    wallpaper =
+                        Wallpaper(
+                            id = id,
+                            providerId = ID,
+                            // Blank on purpose: the grid item's preview is
+                            // the better thumb, and the host keeps it.
+                            thumbUrl = "",
+                            fullUrl = record.originalUrl,
+                            title = null,
+                            width = record.width,
+                            height = record.height,
+                        ),
+                    resolution =
+                        if (record.width != null && record.height != null) "${record.width}x${record.height}" else null,
+                    fileSizeBytes = record.fileSizeBytes,
+                    sourceUrl = "$BASE_URL/$id",
+                )
+            synchronized(resolutionLock) {
+                if (resolved.size < RESOLUTION_CACHE_LIMIT) resolved[id] = details
+            }
+            details
         }
 
     /**
@@ -354,6 +385,9 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
         const val TAG_POOL_LIMIT = 200
         const val TAG_SUGGESTION_LIMIT = 8
 
+        /** How many minted originals to remember — a browsing session's worth. */
+        const val RESOLUTION_CACHE_LIMIT = 200
+
         /** The lottery the honest [random] draws from. */
         val RANDOM_TERMS =
             listOf(
@@ -379,4 +413,13 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
 
     /** The deep-page URL shape learned from the first listing's bar, if any. */
     private var pageUrlTemplate: String? = null
+
+    /**
+     * Minted originals remembered per id — the site's hashes are stable,
+     * so a resolution outlives the instance's every later use of it.
+     */
+    private val resolved = LinkedHashMap<String, WallpaperDetails>()
+
+    /** One lock over the resolution cache. */
+    private val resolutionLock = Any()
 }

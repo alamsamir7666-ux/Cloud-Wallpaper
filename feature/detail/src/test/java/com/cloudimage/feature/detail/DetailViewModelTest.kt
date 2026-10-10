@@ -36,6 +36,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -267,6 +268,98 @@ class DetailViewModelTest {
 
             assertNull(viewModel.state.value.details)
             assertEquals(undimensioned, viewModel.state.value.wallpaper)
+        }
+
+    @Test
+    fun aBlankFileUrlIsResolvedThroughDetailsAndMergedOntoTheScreen() =
+        runTest {
+            sources.setSources(capableSource)
+            // A listing that knows the dimensions but NOT the file URL —
+            // wallpaperflare's shape: the grid keeps everything but the
+            // original's address, which the site mints per wallpaper.
+            val unresolved = wallpaper.copy(fullUrl = "")
+            val minted =
+                Wallpaper(
+                    id = "e1abc2",
+                    providerId = "wallhaven",
+                    thumbUrl = "",
+                    fullUrl = "https://r4.wallpaperflare.com/wallpaper/1/2/3/base-9b468c3dc3116f4905f43bc9cddc0cf0.jpg",
+                    width = 2560,
+                    height = 1440,
+                )
+            sources.enqueueDetails(
+                NetworkResult.Success(
+                    WallpaperDetails(wallpaper = minted, resolution = "2560x1440", fileSizeBytes = 237_639),
+                ),
+            )
+
+            val viewModel = createViewModel(DetailDestination.encode(unresolved))
+            advanceUntilIdle()
+
+            assertEquals(listOf(unresolved), sources.detailsCalls)
+            val onScreen = viewModel.state.value.wallpaper
+            // The minted URL replaced the blank one; the listing's own
+            // thumb (the record's was blank) and title survived.
+            assertEquals(minted.fullUrl, onScreen?.fullUrl)
+            assertEquals(unresolved.thumbUrl, onScreen?.thumbUrl)
+            assertEquals(2560, onScreen?.width)
+            assertEquals(1440, onScreen?.height)
+            assertFalse(viewModel.state.value.resolutionFailed)
+            // The pager's own slot carries the resolved item too — swiping
+            // away and back rebinds the MINTED wallpaper, not the blank one.
+            assertEquals(
+                minted.fullUrl,
+                viewModel.state.value.viewerList
+                    .first()
+                    .fullUrl,
+            )
+        }
+
+    @Test
+    fun aBlankFileUrlThatFailsToResolveSurfacesItsRetryState() =
+        runTest {
+            sources.setSources(capableSource)
+            val unresolved = wallpaper.copy(fullUrl = "")
+            sources.enqueueDetails(NetworkResult.Failure(NetworkError.Source("challenge refused")))
+
+            val viewModel = createViewModel(DetailDestination.encode(unresolved))
+            advanceUntilIdle()
+
+            assertTrue(viewModel.state.value.resolutionFailed)
+            assertEquals(
+                "",
+                viewModel.state.value.wallpaper
+                    ?.fullUrl,
+            )
+
+            // The preview's retry surface: one more attempt, a fresh load.
+            sources.enqueueDetails(
+                NetworkResult.Success(
+                    WallpaperDetails(wallpaper = wallpaper.copy(fullUrl = "https://r4.example.com/1-abc.jpg")),
+                ),
+            )
+            viewModel.retryDetails()
+            advanceUntilIdle()
+
+            assertFalse(viewModel.state.value.resolutionFailed)
+            assertEquals(
+                "https://r4.example.com/1-abc.jpg",
+                viewModel.state.value.wallpaper
+                    ?.fullUrl,
+            )
+        }
+
+    @Test
+    fun retryDetailsDoesNothingOnceTheUrlIsResolved() =
+        runTest {
+            sources.setSources(capableSource)
+            val viewModel = createViewModel(DetailDestination.encode(wallpaper))
+            advanceUntilIdle()
+
+            viewModel.retryDetails()
+            advanceUntilIdle()
+
+            assertTrue(sources.detailsCalls.isEmpty())
         }
 
     @Test

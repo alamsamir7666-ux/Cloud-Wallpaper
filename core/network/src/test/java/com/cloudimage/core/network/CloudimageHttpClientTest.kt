@@ -207,6 +207,50 @@ class CloudimageHttpClientTest {
         }
 
     @Test
+    fun downloadWithABlankUrlFailsAsAnHonest404InsteadOfThrowing() =
+        runTest {
+            // A listing that could not derive the real file URL carries a
+            // blank one (v1.2.7's wallpaperflare contract); a save that
+            // races the resolution must fail typed, never crash the builder.
+            val result = client.download("")
+
+            assertEquals(NetworkResult.Failure(NetworkError.Http(code = 404, url = "")), result)
+            assertEquals(0, server.requestCount)
+        }
+
+    @Test
+    fun downloadOnAWebViewOnlyHostSkipsTheSolveTheater() =
+        runTest {
+            // Earn the mark the way the ladder does: a challenge no replay
+            // could pass, answered by a document the engine delivered.
+            server.enqueue(MockResponse().setResponseCode(403).setBody(challengeBody))
+            val solver =
+                BypassSolver().apply {
+                    earned = null
+                    fetched = WebViewPage(html = "<html>the real grid</html>", clearance = null)
+                }
+            val httpClient = clientWith(solver)
+            httpClient.getRaw(server.url("/grid").toString())
+
+            val url = server.url("/full/challenged.jpg").toString()
+            server.enqueue(MockResponse().setResponseCode(403).setBody(challengeBody))
+            val progress = mutableListOf<Pair<Long, Long?>>()
+
+            val result =
+                httpClient.download(url) { read, total ->
+                    progress += read to total
+                }
+
+            // The zone's honest answer, one plain request, and the solve
+            // rung never ran — a fingerprint-strict host's clearance cannot
+            // pass an HTTP-client exchange, so the save path never flashes
+            // the challenge dialog for one (v1.2.7).
+            assertEquals(NetworkResult.Failure(NetworkError.Http(code = 403, url = url)), result)
+            assertEquals(1, solver.solveCalls)
+            assertTrue(progress.isEmpty())
+        }
+
+    @Test
     fun getRawSendsExtraHeaders() =
         runTest {
             server.enqueue(MockResponse().setBody("{}"))

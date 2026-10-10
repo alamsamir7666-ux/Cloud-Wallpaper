@@ -224,6 +224,15 @@ fun DetailScreen(
                     onDismiss = onBack,
                     onOpenInfo = { showInfoSheet = true },
                     onZoomedChange = { pageZoomed[page] = it },
+                    // The blank-URL resolution state belongs to the screen's
+                    // CURRENT wallpaper only — a neighbouring page a swipe
+                    // away never inherits another item's retry surface.
+                    resolutionFailed =
+                        state.resolutionFailed &&
+                            pageWallpaper.fullUrl.isBlank() &&
+                            pageWallpaper.id == state.wallpaper?.id &&
+                            pageWallpaper.providerId == state.wallpaper?.providerId,
+                    onRetryResolution = viewModel::retryDetails,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

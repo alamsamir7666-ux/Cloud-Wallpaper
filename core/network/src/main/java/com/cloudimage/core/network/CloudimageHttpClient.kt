@@ -199,6 +199,16 @@ class CloudimageHttpClient
             bypass: CloudflareBypass?,
             onProgress: ((bytesRead: Long, totalBytes: Long?) -> Unit)? = null,
         ): HttpPayload {
+            // A blank URL is not a request OkHttp would accept — its builder
+            // throws before any typed failure the callers here can handle.
+            // Listings that cannot derive a wallpaper's real file (v1.2.7's
+            // wallpaperflare contract: the original's URL is minted by the
+            // download page, not derivable) carry one until the detail
+            // record resolves it, and this guard answers those races with a
+            // synthesized 404 instead of a crash.
+            if (url.isBlank()) {
+                return HttpPayload(statusCode = 404, headers = emptyMap(), body = ByteArray(0))
+            }
             val replayHeaders =
                 if (bypass == null) {
                     extraHeaders
@@ -274,6 +284,19 @@ class CloudimageHttpClient
          * Progress only flows on 2xx bodies: error pages and Cloudflare
          * challenges are tiny and buffered as usual, so a solve-and-replay
          * never emits misleading byte counts.
+         *
+         * v1.2.7: a host the engine has learned is fingerprint-strict — the
+         * [CloudflareBypasser.isWebViewOnly] mark — answers EVERY HTTP-client
+         * exchange with a challenge, so the solve rung here is pure theater
+         * the user pays for as a challenge dialog flash per save. Such a host
+         * skips straight to one plain request: the zone's honest answer is
+         * returned (almost always the 403 itself), the same degradation
+         * [getRaw]'s WebView-only lane applies to documents — minus the
+         * document lane itself, which cannot serve image BYTES (the engine
+         * renders pages, it does not stream files). Wallpaper image hosts —
+         * `c{N}`/`r{N}.wallpaperflare.com`, public and unchallenged for
+         * real-device IPs — never carry the mark, so wallpaper downloads
+         * ride the ordinary ladder below.
          */
         suspend fun download(
             url: String,
@@ -281,17 +304,21 @@ class CloudimageHttpClient
         ): NetworkResult<ByteArray> =
             withContext(Dispatchers.IO) {
                 try {
-                    val state = cloudflare.bypassStateFor(url)
-                    val first = execute(url, emptyMap(), state, onProgress)
                     val payload =
-                        if (!CloudflareChallenge.isChallenge(first)) {
-                            first
+                        if (cloudflare.isWebViewOnly(url)) {
+                            execute(url, emptyMap(), null, onProgress)
                         } else {
-                            val bypass = cloudflare.solve(url, staleState = state)
-                            if (bypass == null) {
+                            val state = cloudflare.bypassStateFor(url)
+                            val first = execute(url, emptyMap(), state, onProgress)
+                            if (!CloudflareChallenge.isChallenge(first)) {
                                 first
                             } else {
-                                execute(url, emptyMap(), bypass, onProgress)
+                                val bypass = cloudflare.solve(url, staleState = state)
+                                if (bypass == null) {
+                                    first
+                                } else {
+                                    execute(url, emptyMap(), bypass, onProgress)
+                                }
                             }
                         }
                     if (payload.isSuccessful) {

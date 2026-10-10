@@ -48,6 +48,26 @@ package com.cloudimage.wallpaperflare
  *   `<img class="view_img" src="…-preview.jpg">`; its download routes
  *   (`/{slug}/download[/{W}x{H}]`) confirm the slug's authority.
  *
+ * v1.2.7's hard-won anchor: THE ORIGINAL FILE'S URL. The CDN stem
+ * (`…/{base}.jpg`, the preview's suffix-stripped form v1.3.0 shipped)
+ * answers **404** — it never existed. The real original is MINTED per
+ * wallpaper by the download page's own flow: the page embeds
+ * `code='{W}_{H}_{ts}'` and a Cloudflare Turnstile widget; the widget's
+ * callback POSTs `token`+`code` to `/captcha`; the response text is a
+ * 32-hex hash; and the page's JavaScript rewrites the preview URL into
+ * `https://r{N}.wallpaperflare.com/wallpaper/{a}/{b}/{c}/{base}-{hash}.jpg`
+ * — the `r` host, same path, hash-suffixed filename. The hash is stable
+ * per wallpaper (verified by refetch), and the URL it builds is publicly
+ * fetchable like any preview. Because all of that runs as page
+ * JavaScript, the HOST's WebView document lane is the only place the
+ * minted URL can be observed — the host fetch already executes the
+ * page's scripts (that is how it passes the zone), and the download
+ * page's `show_img` carries the resolved URL once the flow lands:
+ * `<img … id="show_img" src="https://r4…-{hash}.jpg">`. The provider
+ * therefore lists wallpapers with a BLANK full URL (nothing honest to
+ * put there) and mints it in [details] off the download page — see
+ * [WallpaperFlareWallpaperProvider].
+ *
  * The parsers stay narrow on purpose: every one keys on those semantic
  * anchors rather than document order, so cosmetic redesigns degrade
  * parsing to "nothing found" instead of producing garbage. All functions
@@ -70,7 +90,13 @@ internal object WallpaperFlareParser {
         val id: String,
         /** Absolute preview/thumb URL (`…/wallpaper/{a}/{b}/{c}/{slug}-preview.jpg`). */
         val thumbUrl: String,
-        /** Absolute full-size URL (`…/{slug}.jpg`) — the suffix-stripped stem. */
+        /**
+         * BLANK since v1.2.7: the listing cannot know the original's URL —
+         * the site mints it per wallpaper on its download page (see the
+         * class KDoc). The host treats a blank file URL as "resolve through
+         * [WallpaperFlareWallpaperProvider.details]" and overlays the minted
+         * URL onto the grid record when it lands.
+         */
         val fullUrl: String,
         /** Display title, `HD wallpaper` furniture already stripped. */
         val title: String,
@@ -103,6 +129,21 @@ internal object WallpaperFlareParser {
         val title: String?,
         val license: String?,
         val tags: List<String>,
+    )
+
+    /**
+     * The download page's minted record (v1.2.7): the original's URL as
+     * the page's own JavaScript wrote it into `show_img`, plus the true
+     * dimensions and file size the page states in plain copy —
+     * `Original wallpaper dimensions is 2560x1440px, file size is 232.07KB`.
+     */
+    data class DownloadRecord(
+        /** The minted original: `https://r{N}.wallpaperflare.com/…/…-{32-hex}.jpg`. */
+        val originalUrl: String,
+        val width: Int?,
+        val height: Int?,
+        /** The page's stated file size, decoded from KB/MB copy into bytes. */
+        val fileSizeBytes: Long?,
     )
 
     // ------------------------------------------------------------- patterns
@@ -271,9 +312,6 @@ internal object WallpaperFlareParser {
     /** A tag chip: every tag on this site links into its own search. */
     private val TAG_LINK = Regex("""[?&]wallpaper=([a-z0-9+%*-]+)["']""")
 
-    /** The preview/thumb suffix, stripped to reach the full-size stem. */
-    private val PREVIEW_SUFFIX = Regex("""-(?:preview|thumb)(?=\.jpg)""")
-
     /** Strips tags, entities and runs of whitespace — the text miner's soap. */
     private fun textOf(html: String): String =
         html
@@ -361,7 +399,10 @@ internal object WallpaperFlareParser {
         return GridItem(
             id = id,
             thumbUrl = thumbUrl,
-            fullUrl = PREVIEW_SUFFIX.replace(thumbUrl, ""),
+            // Blank: the original's URL does not exist until the download
+            // page mints it — see the class KDoc. The host resolves it
+            // through details() on first open.
+            fullUrl = "",
             title = title,
             width = dims?.first,
             height = dims?.second,
@@ -415,7 +456,8 @@ internal object WallpaperFlareParser {
         return GridItem(
             id = id,
             thumbUrl = imageUrl,
-            fullUrl = PREVIEW_SUFFIX.replace(imageUrl, ""),
+            // Blank — the minted original is unknowable at listing time.
+            fullUrl = "",
             title = title,
             width = dims?.groupValues?.get(1)?.toIntOrNull(),
             height = dims?.groupValues?.get(2)?.toIntOrNull(),
@@ -647,8 +689,66 @@ internal object WallpaperFlareParser {
             .mapNotNull { tag -> IMG_SRC.find(tag.value)?.groupValues?.get(1) }
             .firstOrNull { it.startsWith("http") }
 
-    /** The full-size stem of any wallpaperflare image URL. */
-    fun toFullUrl(imageUrl: String): String = PREVIEW_SUFFIX.replace(imageUrl, "")
+    /**
+     * The download page's minted record (v1.2.7). The original's URL is
+     * read from the `show_img` element once the page's Turnstile flow has
+     * assigned it — attribute order agnostic, because the host hands back
+     * the DOM as the page's JavaScript left it — with a whole-document
+     * scan for the minted-URL SHAPE as the fallback (a 32-hex-suffixed
+     * original on the `r` host is distinctive enough to trust wherever it
+     * appears). Dimensions and file size ride the page's own copy. Null
+     * when none of the minted shape is present — the caller decides what
+     * an unminted page means.
+     */
+    fun parseDownloadPage(html: String): DownloadRecord? {
+        val unescaped = html.replace("&amp;", "&")
+        val minted =
+            IMG_TAG
+                .findAll(unescaped)
+                .filter { tag -> SHOW_IMG_ID.containsMatchIn(tag.value) }
+                .mapNotNull { tag -> IMG_SRC.find(tag.value)?.groupValues?.get(1) }
+                .firstOrNull { MINTED_ORIGINAL.matches(it) }
+                ?: MINTED_ORIGINAL.findAll(unescaped).map { it.value }.firstOrNull()
+                ?: return null
+        val dims = DESCRIPTION_DIMENSIONS.find(unescaped)
+        return DownloadRecord(
+            originalUrl = minted,
+            width = dims?.groupValues?.get(1)?.toIntOrNull(),
+            height = dims?.groupValues?.get(2)?.toIntOrNull(),
+            fileSizeBytes = fileSizeOf(unescaped),
+        )
+    }
+
+    /** The `show_img` id attribute the download page's display image carries. */
+    private val SHOW_IMG_ID = Regex("""\bid=["']show_img["']""")
+
+    /**
+     * A minted original URL, whole: the `r`-host CDN, either directory
+     * shape the site's download JavaScript builds (`/wallpaper/{a}/{b}/{c}/`
+     * and `/path/`), any slug, the 32-hex hash, the extension.
+     */
+    private val MINTED_ORIGINAL =
+        Regex(
+            """https://r\d+\.wallpaperflare\.com/(?:wallpaper/\d+/\d+/\d+/|path/)[^\"'\s<>]+?-[0-9a-f]{32}\.(?:jpg|jpeg|png|webp)""",
+        )
+
+    /**
+     * The file size the page's copy states — `file size is 232.07KB`,
+     * `4.07MB` — decoded into bytes. Null when the page says nothing.
+     */
+    private fun fileSizeOf(html: String): Long? {
+        val match = FILE_SIZE.find(html) ?: return null
+        val value = match.groupValues[1].toDoubleOrNull() ?: return null
+        return when (match.groupValues[2].uppercase()) {
+            "KB" -> (value * 1024).toLong()
+            "MB" -> (value * 1024 * 1024).toLong()
+            "B" -> value.toLong()
+            else -> null
+        }
+    }
+
+    /** `file size is 232.07KB` — the unit riding along. */
+    private val FILE_SIZE = Regex("""file\s+size\s+is\s+([\d.]+)\s*(KB|MB|B)\b""", RegexOption.IGNORE_CASE)
 
     private const val MAX_TAGS = 8
 }

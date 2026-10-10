@@ -141,6 +141,14 @@ data class DetailUiState(
      */
     val moreLikeThis: List<Wallpaper> = emptyList(),
     /**
+     * True when the wallpaper's real file URL could not be resolved — the
+     * listing carried a BLANK full URL (a source that mints the original's
+     * address per wallpaper, wallpaperflare-style) and the detail record
+     * that mints it failed to arrive. The preview shows its retry surface
+     * instead of an image that can never load (v1.2.7).
+     */
+    val resolutionFailed: Boolean = false,
+    /**
      * The source's definitive record (v1.0.21) — the TRUE resolution and
      * download size a listing could not carry, plus the author and the
      * page URL. Null until it arrives, and permanently when the listing
@@ -251,6 +259,7 @@ class DetailViewModel
                     viewerIndex = page,
                     details = null,
                     moreLikeThis = emptyList(),
+                    resolutionFailed = false,
                     isFavorite = false,
                     isDownloaded = false,
                     applyOp = OperationState.Idle,
@@ -416,23 +425,93 @@ class DetailViewModel
 
         /**
          * Asks the source for the definitive record — but only when the
-         * listing could not state the wallpaper's dimensions. Listings that
-         * publish true dimensions (Wallhaven's API, WallpaperCave's topic
-         * pages) have nothing to gain: one extra request per opened preview
-         * would cost an API-keyed source real quota for a file size the
-         * info sheet can live without. Listings that cannot — HDQWalls's
-         * grid publishes only its uniform card crop — gain the file's TRUE
-         * resolution, and with it the download size and the page URL when
-         * the site states them. Every failure is silent: the info sheet
-         * keeps the grid item's own values.
+         * listing could not state the whole story. Listings that publish
+         * true dimensions AND a real file URL (Wallhaven's API,
+         * WallpaperCave's topic pages) have nothing to gain: one extra
+         * request per opened preview would cost an API-keyed source real
+         * quota for a file size the info sheet can live without. Listings
+         * that cannot — HDQWalls's grid publishes only its uniform card
+         * crop — gain the file's TRUE resolution, and with it the download
+         * size and the page URL when the site states them. And since
+         * v1.2.7, a listing whose full URL is BLANK (wallpaperflare's: the
+         * original's address is minted by the site's download page, never
+         * derivable) gains the minted URL itself — the preview and every
+         * save depend on it.
+         *
+         * A successful record is MERGED onto the grid item (v1.2.7): the
+         * definitive values overlay the listing's — a non-blank resolved
+         * URL replaces the blank one, truer dimensions replace absent ones
+         * — while everything the grid already knew better than the detail
+         * page (its preview, its tags, its title) survives. The pager's own
+         * slot in [DetailUiState.viewerList] is updated too, so swiping
+         * away and back rebinds the RESOLVED wallpaper, not the blank one.
+         * Every failure is quiet unless the listing left the file URL
+         * blank — that failure the preview must surface as a retry, so
+         * [DetailUiState.resolutionFailed] carries it.
          */
         private suspend fun loadDetails(wallpaper: Wallpaper) {
-            if (wallpaper.width != null && wallpaper.height != null) return
+            if (wallpaper.width != null && wallpaper.height != null && wallpaper.fullUrl.isNotBlank()) return
             sources.sources.filterNotNull().first()
             when (val outcome = sources.details(wallpaper)) {
-                is NetworkResult.Failure -> Unit
-                is NetworkResult.Success -> _state.update { it.copy(details = outcome.value) }
+                is NetworkResult.Failure ->
+                    if (wallpaper.fullUrl.isBlank()) {
+                        _state.update { state ->
+                            if (state.wallpaper?.id == wallpaper.id && state.wallpaper?.providerId == wallpaper.providerId) {
+                                state.copy(resolutionFailed = true)
+                            } else {
+                                state
+                            }
+                        }
+                    }
+                is NetworkResult.Success -> {
+                    val record = outcome.value
+                    val resolved = record.wallpaper
+                    val merged =
+                        wallpaper.copy(
+                            fullUrl = resolved.fullUrl.ifBlank { wallpaper.fullUrl },
+                            thumbUrl = resolved.thumbUrl.ifBlank { wallpaper.thumbUrl },
+                            width = resolved.width ?: wallpaper.width,
+                            height = resolved.height ?: wallpaper.height,
+                            title = resolved.title ?: wallpaper.title,
+                            tags = if (resolved.tags.isNotEmpty()) resolved.tags else wallpaper.tags,
+                        )
+                    _state.update { state ->
+                        val onScreen =
+                            state.wallpaper?.id == wallpaper.id && state.wallpaper?.providerId == wallpaper.providerId
+                        state.copy(
+                            details = if (onScreen) record else state.details,
+                            resolutionFailed = if (onScreen) false else state.resolutionFailed,
+                            wallpaper = if (onScreen) merged else state.wallpaper,
+                            viewerList =
+                                state.viewerList.mapIndexed { index, item ->
+                                    if (index == state.viewerIndex &&
+                                        item.id == wallpaper.id &&
+                                        item.providerId == wallpaper.providerId
+                                    ) {
+                                        merged
+                                    } else {
+                                        item
+                                    }
+                                },
+                        )
+                    }
+                }
             }
+        }
+
+        /**
+         * One more attempt at minting the current wallpaper's file URL —
+         * the preview's retry surface calls this when a blank full URL
+         * never resolved (v1.2.7). A fresh load, not a cache replay: the
+         * failure that left the URL blank may have been a transient
+         * challenge trip, and the source remembers its successes anyway.
+         */
+        fun retryDetails() {
+            val wallpaper = _state.value.wallpaper ?: return
+            if (wallpaper.fullUrl.isNotBlank()) return
+            loadsJob?.cancel()
+            loadsJob =
+                viewModelScope.launch { loadDetails(wallpaper) }
         }
 
         /**
