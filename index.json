@@ -1,0 +1,115 @@
+{
+  "name": "Cloudimage official repository",
+  "packages": [
+    {
+      "id": "cloudimage.hdqwalls",
+      "fileName": "cloudimage.hdqwalls.zip",
+      "sha256": "5bc19e4b2b42a782fa1b4229f0b3660152f46f84e46639d81bf43cb156895725",
+      "sizeBytes": 18378,
+      "name": "HDQWalls",
+      "versionName": "1.0.1",
+      "versionCode": 2,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "HD, 4K, 5K and 8K wallpapers from hdqwalls.com - scraped, keyless.",
+      "categories": []
+    },
+    {
+      "id": "cloudimage.pexels",
+      "fileName": "cloudimage.pexels.zip",
+      "sha256": "90edfecf2b2e52092e4804e08bf8dc11b5275eb798cac8f42afc716b82f56b4f",
+      "sizeBytes": 17209,
+      "name": "Pexels",
+      "versionName": "1.0.0",
+      "versionCode": 1,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "Free stock photos and wallpapers from pexels.com. Requires a free API key.",
+      "categories": [
+        "photography",
+        "nature"
+      ]
+    },
+    {
+      "id": "cloudimage.pixabay",
+      "fileName": "cloudimage.pixabay.zip",
+      "sha256": "8db995e83fd28d5d0f978fe4c135049a78c71002ff8204db3e08e3627b77952f",
+      "sizeBytes": 15436,
+      "name": "Pixabay",
+      "versionName": "1.0.0",
+      "versionCode": 1,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "Free images and vector art from pixabay.com. Requires a free API key.",
+      "categories": [
+        "nature",
+        "photography",
+        "abstract"
+      ]
+    },
+    {
+      "id": "cloudimage.unsplash",
+      "fileName": "cloudimage.unsplash.zip",
+      "sha256": "27b00f0efdf26e972298bcbddd65935dc07ec174818475181adde87e2b524ede",
+      "sizeBytes": 20246,
+      "name": "Unsplash",
+      "versionName": "1.0.0",
+      "versionCode": 1,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "Free high-resolution photography from unsplash.com. Requires a free API key.",
+      "categories": [
+        "photography",
+        "nature",
+        "minimal"
+      ]
+    },
+    {
+      "id": "cloudimage.wallhaven",
+      "fileName": "cloudimage.wallhaven.zip",
+      "sha256": "55ebf6045b0469a9e3e99679a3c24c13a1865eeb06dedd4bc3afdfba966cd40b",
+      "sizeBytes": 27082,
+      "name": "Wallhaven",
+      "versionName": "1.0.0",
+      "versionCode": 1,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "Wallpapers from wallhaven.cc - the app's original default source.",
+      "categories": [
+        "anime",
+        "abstract",
+        "nature"
+      ]
+    },
+    {
+      "id": "cloudimage.wallpapercave",
+      "fileName": "cloudimage.wallpapercave.zip",
+      "sha256": "d989c55bdb6187dbe58baac3bca8fbfd4943c6d9597321acb3201e549be2aa3e",
+      "sizeBytes": 25494,
+      "name": "WallpaperCave",
+      "versionName": "1.2.0",
+      "versionCode": 3,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "Wallpapers from wallpapercave.com - scraped, keyless.",
+      "categories": []
+    },
+    {
+      "id": "cloudimage.wallpaperflare",
+      "fileName": "cloudimage.wallpaperflare.zip",
+      "sha256": "89d1a19609a2494474d391e8c7cb1c0b7621a2fd9639eab0ccf419fd891adf98",
+      "sizeBytes": 23705,
+      "name": "WallpaperFlare",
+      "versionName": "1.4.0",
+      "versionCode": 5,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "HD, 2K, 4K and 5K wallpapers from wallpaperflare.com - scraped, keyless.",
+      "categories": [
+        "nature",
+        "abstract",
+        "anime"
+      ]
+    }
+  ]
+}
