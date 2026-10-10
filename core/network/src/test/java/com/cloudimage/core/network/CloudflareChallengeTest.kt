@@ -11,21 +11,25 @@ import org.junit.Test
  * What is pinned here:
  * - every challenge status with the modern `cf-mitigated: challenge`
  *   header is a challenge, header case and value case notwithstanding;
+ * - every challenge status SERVED BY A CLOUDFLARE EDGE is a challenge,
+ *   whatever the body says (v1.2.5, CloudStream's own trigger — see the
+ *   block-page cases below for why that U-turn from v1.0.16 was made);
  * - interstitial bodies — current (challenge-platform scripts) and legacy
  *   (`jschl` forms) — are recognized without the header;
- * - everything that looks like Cloudflare but is NOT solvable by a
- *   WebView stays asleep: plain API 403s (bad keys are not challenges),
- *   the "Attention Required" hard block page (an IP block cannot be
- *   solved), and 2xx pages that merely mention the interstitial copy
- *   (a blog post about Cloudflare is not a challenge).
+ * - plain API 403s with non-Cloudflare servers stay asleep (bad keys are
+ *   not challenges), and 2xx pages that merely mention the interstitial
+ *   copy (a blog post about Cloudflare) never wake the bypass.
  *
- * v1.0.16 additions: the block-page tests use the LIVE page shape — a real
- * "Attention Required!" response captured from wallpaperflare.com carries
- * a `challenge-platform` script for its ray-ID copy button, so the v1.0.15
- * marker-only rule misclassified blocks as challenges and burned a
- * 20-second WebView solve on hopeless IPs. Block copy now vetoes the
- * markers; the header still outranks everything (an answer that says
- * `cf-mitigated: challenge` is one, whatever else it says).
+ * v1.0.16 added the block-page veto ("Attention Required" copy must not
+ * burn a solve an IP block can never pass) and v1.2.5 scoped it: the
+ * veto now applies only to responses NO Cloudflare edge served. A zone
+ * can answer the HTTP client's fingerprint with the block page while
+ * serving the very same WebView a challenge it settles — the live
+ * WallpaperFlare regression: the block copy vetoed the markers, the
+ * ladder never woke, and the user's only signal was the 403 banner with
+ * NO challenge dialog at all. CloudStream's CloudflareKiller fires on
+ * any cloudflare-served 403/503 with no block exception for exactly this
+ * reason; the detector now lets the WebView decide what a block bound.
  */
 class CloudflareChallengeTest {
     private val challengeStatuses = listOf(403, 429, 503)
@@ -51,6 +55,52 @@ class CloudflareChallengeTest {
     fun mitigatedHeaderWithOtherValuesIsNotAChallenge() {
         assertFalse(
             CloudflareChallenge.isChallenge(403, mapOf("cf-mitigated" to listOf("block")), ""),
+        )
+    }
+
+    @Test
+    fun cloudflareEdgeAnswersEveryChallengeStatusAsSolverWorthy() {
+        // v1.2.5, CloudStream's rule: `server: cloudflare` + 403/429/503
+        // wakes the WebView, no matter the body — the block may bind the
+        // HTTP client's fingerprint without binding the browser engine.
+        for (status in challengeStatuses) {
+            assertTrue(
+                "status $status from a Cloudflare edge must wake the solver",
+                CloudflareChallenge.isChallenge(status, mapOf("server" to listOf("cloudflare")), ""),
+            )
+        }
+    }
+
+    @Test
+    fun cloudflareEdgeServerHeaderIsCaseInsensitive() {
+        assertTrue(
+            CloudflareChallenge.isChallenge(403, mapOf("Server" to listOf("Cloudflare")), ""),
+        )
+    }
+
+    @Test
+    fun legacyCloudflareNginxServerSpellingAlsoWakesTheSolver() {
+        assertTrue(
+            CloudflareChallenge.isChallenge(503, mapOf("server" to listOf("cloudflare-nginx")), ""),
+        )
+    }
+
+    @Test
+    fun cloudflareEdgeBlockPageWakesTheSolver() {
+        // The v1.2.5 U-turn, pinned: the live WallpaperFlare regression had
+        // the zone answering the app's OkHttp requests with this exact body
+        // while the WebView sailed through — so block copy on a Cloudflare
+        // edge must NOT veto the ladder. The WebView decides what the block
+        // binds, not the detector.
+        val body =
+            """
+            <html><head><title>Attention Required! | Cloudflare</title></head>
+            <body>Sorry, you have been blocked. You are unable to access
+            wallpaperflare.com. Ray ID: 8f2a-example</body></html>
+            """.trimIndent()
+
+        assertTrue(
+            CloudflareChallenge.isChallenge(403, mapOf("server" to listOf("cloudflare")), body),
         )
     }
 
@@ -87,9 +137,11 @@ class CloudflareChallengeTest {
     }
 
     @Test
-    fun hardBlockPageIsNotAChallenge() {
+    fun hardBlockPageWithoutACloudflareServerIsNotAChallenge() {
         // "Attention Required" is the IP-block page — a WebView solve cannot
-        // lift it, so it must not trigger one.
+        // lift it, so it must not trigger one. v1.2.5 keeps this veto for
+        // responses no Cloudflare edge served (a plain nginx 403 wearing
+        // block copy is somebody's error page, not a solvable challenge).
         val body =
             """
             <html><head><title>Attention Required! | Cloudflare</title></head>
@@ -101,11 +153,13 @@ class CloudflareChallengeTest {
     }
 
     @Test
-    fun liveHardBlockPageIsNotAChallenge() {
+    fun liveHardBlockPageWithoutACloudflareServerIsNotAChallenge() {
         // The REAL block page, shape captured from wallpaperflare.com: the
         // ray-ID copy button loads a challenge-platform script, so the
         // v1.0.15 marker-only rule woke a solve on a page no solve can ever
-        // pass. The block copy must veto the marker.
+        // pass. Served WITHOUT a Cloudflare server header (the captured
+        // exchange carried one, but the veto must stand on its own for
+        // proxies that strip it), block copy still vetoes the marker.
         val body =
             """
             <!DOCTYPE html><html lang="en-US"><head>

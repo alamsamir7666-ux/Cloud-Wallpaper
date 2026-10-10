@@ -47,31 +47,45 @@ data class WebViewPage(
  * A challenge is one of:
  * - a 403/429/503 carrying the modern `cf-mitigated: challenge` response
  *   header (the strongest signal, checked first), or
+ * - a 403/429/503 served by a Cloudflare edge (`server: cloudflare`, the
+ *   `cloudflare-nginx` legacy spelling included), or
  * - a 403/429/503 whose body carries an interstitial marker (the
  *   `cdn-cgi/challenge-platform` scripts every current page loads, the
  *   interstitial title, or the legacy `jschl` forms).
  *
- * Deliberately NOT recognized: the "Attention Required" hard block page.
- * A WebView solve cannot lift an IP-level block — it would burn its whole
- * timeout and a cooldown for nothing — so blocked hosts fall through as
- * ordinary non-2xx responses and sources surface their own readable
- * errors, exactly as they did before the bypass existed. Only challenges
- * that JavaScript in a real WebView can settle are worth waking it for.
+ * The server rule is CloudStream's, verbatim in spirit — its CloudflareKiller
+ * fires on ANY `403/503` whose `Server` header is a Cloudflare spelling, with
+ * no exception for block pages — and it exists because of what v1.2.5
+ * learned in the wild: a zone's WAF can answer the HTTP client's requests
+ * with the "Attention Required" BLOCK page (the v1.2.4 detector correctly
+ * recognized the copy and declined to wake the solver) while the very same
+ * zone serves the WebView a challenge it settles, or even plain content —
+ * the block targeted the client's TLS/UA fingerprint, not the browser
+ * engine. Giving up on block copy therefore strands sources the WebView
+ * could have saved, and the user's only signal that the ladder is dead is
+ * the 403 banner with no challenge dialog at all. The detector now lets
+ * the WebView decide: block copy only vetoes markers on responses NOT
+ * served by a Cloudflare edge, where no WebView experiment could help.
  *
- * Telling the two apart needs more than the interstitial markers: the LIVE
- * block page also loads a `challenge-platform` script (its ray-ID copy
- * button), so markers alone misclassify blocks as challenges — verified
- * against a real "Attention Required!" response captured from
- * wallpaperflare.com. The block page's own copy is what separates it, so
- * [BLOCK_MARKERS] are consulted between the header and the interstitial
- * markers, and a body carrying block copy is never a challenge no matter
- * which scripts it loads. The header stays authoritative: an answer that
- * explicitly says `cf-mitigated: challenge` is one.
+ * Deliberately NOT recognized: plain API 403s with non-Cloudflare servers —
+ * a bad API key is not something a WebView can settle — and 2xx pages that
+ * merely mention interstitial copy (a blog post about Cloudflare is not a
+ * challenge; the status gate runs before any marker).
  */
 object CloudflareChallenge {
     private val CHALLENGE_STATUSES = setOf(403, 429, 503)
 
     private const val HEADER_CF_MITIGATED = "cf-mitigated"
+
+    /** The edge software header — `server: cloudflare` and its legacy spelling. */
+    private const val HEADER_SERVER = "server"
+
+    /**
+     * The `Server` values a Cloudflare edge answers with — CloudStream's
+     * CLOUDFLARE_SERVERS list. A 403/429/503 from one of these is
+     * solver-worthy no matter what its body says.
+     */
+    private val CLOUDFLARE_SERVERS = setOf("cloudflare", "cloudflare-nginx")
 
     /** Body markers of the challenge interstitials, current and legacy. */
     private val MARKERS =
@@ -188,9 +202,12 @@ object CloudflareChallenge {
      * The detection rule on raw parts — status gate first (a challenge is
      * never a 2xx, and a 200 page that merely mentions the interstitial
      * copy, a blog post about Cloudflare say, must not wake the bypass),
-     * then the header (the strongest signal), then the block copy (an
-     * unsolvable page must not burn a solve), then the interstitial
-     * markers.
+     * then the header (the strongest signal), then the Cloudflare server
+     * rule (v1.2.5: a Cloudflare edge's 403/429/503 wakes the WebView
+     * whatever its body says, CloudStream's own trigger — the block may
+     * bind the HTTP client's fingerprint without binding the browser
+     * engine), then the block copy (which only vetoes markers on responses
+     * no Cloudflare edge served), then the interstitial markers.
      */
     fun isChallenge(
         statusCode: Int,
@@ -199,6 +216,8 @@ object CloudflareChallenge {
     ): Boolean {
         if (statusCode !in CHALLENGE_STATUSES) return false
         if (headers.headerValue(HEADER_CF_MITIGATED)?.equals("challenge", ignoreCase = true) == true) return true
+        val fromCloudflareEdge = headers.headerValue(HEADER_SERVER)?.lowercase() in CLOUDFLARE_SERVERS
+        if (fromCloudflareEdge) return true
         if (bodyText.isEmpty()) return false
         if (BLOCK_MARKERS.any(bodyText::contains)) return false
         return MARKERS.any(bodyText::contains)

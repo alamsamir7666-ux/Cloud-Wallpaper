@@ -77,6 +77,18 @@ import kotlin.coroutines.resume
  * rise to a full minute, CloudStream's window for slow and interactive
  * challenges.
  *
+ * v1.2.5: two more lessons from the wild, both CloudStream-faithful.
+ * First, the solve bails out EARLY when the WebView settles on real,
+ * unchallenged content with no `cf_clearance` to wait for — that is the
+ * shape of a zone whose WAF blocks the HTTP client's fingerprint but
+ * serves the browser engine plainly, and waiting the full minute for a
+ * cookie that will never arrive only delays the caller's next rung (the
+ * WebView document fetch, which handles exactly that zone). Second, a
+ * solve or fetch that times out WIPES the host's cookies from the system
+ * jar — CloudStream's CloudflareKiller clears cookies between sessions
+ * for the same reason: a jar poisoned by a failed challenge loop makes
+ * the next WebView trip start from the losing state instead of clean.
+ *
  * Everything runs on the main dispatcher: WebView demands a Looper thread,
  * and the main thread is the one that always has one. The poll loop below
  * is `delay`-based, so the caller's timeout (see [CloudflareBypasser])
@@ -179,7 +191,7 @@ internal class WebViewCloudflareSolver(
         return try {
             dialog.show()
             webView.loadUrl(url)
-            waitForClearance(host, url)
+            waitForClearance(client, webView, host, url)
         } finally {
             runCatching { dialog.dismiss() }
             runCatching { webView.stopLoading() }
@@ -201,7 +213,7 @@ internal class WebViewCloudflareSolver(
         val webView = createWebView(client)
         return try {
             webView.loadUrl(url)
-            waitForClearance(host, url)
+            waitForClearance(client, webView, host, url)
         } finally {
             runCatching { webView.stopLoading() }
             runCatching { webView.destroy() }
@@ -302,8 +314,22 @@ internal class WebViewCloudflareSolver(
      * simply gets the full deadline to finish. The hard deadline is a
      * backstop above the engine's own timeout; whichever fires first, the
      * caller's `finally` still tears the WebView down.
+     *
+     * v1.2.5 adds the early exit and the wipe. A page that finished,
+     * settled, and reads as real CONTENT (no Cloudflare furniture, per
+     * [CloudflareChallenge.isInterstitialDocument]) means the zone is not
+     * challenging the WebView at all — the block that woke the solver
+     * bound the HTTP client's fingerprint, not the browser engine — so
+     * there is no clearance to wait for and the caller's WebView-fetch
+     * rung is the answer, now instead of fifty seconds from now. A
+     * deadline that expires with nothing earned wipes the host's cookies:
+     * CloudStream clears its jar between solve sessions for exactly this
+     * reason, and a jar that still carries a failed trip's state makes
+     * the next trip start from the loser's position.
      */
     private suspend fun waitForClearance(
+        client: ChallengeClient,
+        webView: WebView,
         host: String,
         url: String,
     ): CloudflareBypass? {
@@ -311,6 +337,7 @@ internal class WebViewCloudflareSolver(
         // that cannot report a default agent cannot earn an honest pair.
         val agent = defaultUserAgent() ?: return null
         val deadline = System.currentTimeMillis() + SOLVE_DEADLINE_MS
+        var contentCheckedForFinish = -1
         while (System.currentTimeMillis() < deadline) {
             delay(POLL_INTERVAL_MS)
             val cookies =
@@ -325,7 +352,21 @@ internal class WebViewCloudflareSolver(
                     userAgent = agent,
                 )
             }
+            // The unchallenged-content early exit — see the KDoc above. The
+            // clearance check runs first so a settle-and-swap navigation
+            // (cookie lands, then content replaces the shell) returns the
+            // earned state rather than bailing.
+            val finishedAt = client.lastFinishedAt
+            val settled = finishedAt > 0 && System.currentTimeMillis() - finishedAt >= SETTLE_AFTER_FINISH_MS
+            if (settled && client.finished != contentCheckedForFinish) {
+                contentCheckedForFinish = client.finished
+                val html = webView.extractHtml() ?: continue
+                if (!CloudflareChallenge.isInterstitialDocument(html)) return null
+            }
         }
+        // Nothing earned in the window — the jar carries this failed trip's
+        // cookies, and the next solve deserves a clean slate.
+        clearCookiesFor(host)
         return null
     }
 
@@ -364,6 +405,9 @@ internal class WebViewCloudflareSolver(
                 }
             }
         }
+        // No page ever settled — wipe the failed trip's cookies so the next
+        // attempt over this host starts clean (v1.2.5).
+        clearCookiesFor(host)
         return null
     }
 
@@ -379,6 +423,33 @@ internal class WebViewCloudflareSolver(
         if (CLEARANCE_COOKIE !in cookies) return null
         val agent = defaultUserAgent() ?: return null
         return CloudflareBypass(cookieHeader = cookies, userAgent = agent)
+    }
+
+    /**
+     * Drops every cookie the system jar holds for [host] — the v1.2.5
+     * fresh-slate discipline for failed trips (CloudStream's
+     * CloudflareKiller clears its jar between solve sessions for the same
+     * reason). [CookieManager] exposes no per-domain removal, so each
+     * cookie is re-set for the host URL with a past `Expires` and
+     * `Max-Age=0`, which the jar's RFC 6265 semantics honor as a deletion;
+     * only this host's names are touched, other sources' clearances ride
+     * on untouched. Best-effort by design — a jar that ignores the expiry
+     * only keeps stale cookies, and the ladder re-earns whatever it needs.
+     */
+    private fun clearCookiesFor(host: String) {
+        runCatching {
+            val url = "https://$host"
+            val cookies = cookieManager.getCookie(url) ?: return
+            for (pair in cookies.split(';')) {
+                val name = pair.substringBefore('=').trim()
+                if (name.isEmpty()) continue
+                cookieManager.setCookie(
+                    url,
+                    "$name=; Path=/; Domain=$host; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0",
+                )
+            }
+            cookieManager.flush()
+        }
     }
 
     /**

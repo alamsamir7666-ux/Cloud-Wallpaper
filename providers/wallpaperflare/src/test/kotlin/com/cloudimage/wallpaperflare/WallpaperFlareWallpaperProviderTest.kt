@@ -127,7 +127,7 @@ class WallpaperFlareWallpaperProviderTest {
     // ------------------------------------------------------------------ grid
 
     @Test
-    fun everyDocumentRequestWearsTheBrowserFingerprint() =
+    fun everyDocumentRequestRidesTheHostsOwnIdentity() =
         runTest {
             val client =
                 configureWith(
@@ -139,24 +139,22 @@ class WallpaperFlareWallpaperProviderTest {
             provider.popular(1, Filters.None).getOrThrow()
 
             val headers = client.headerLog.single()
-            // The identity that earns Cloudflare's browser lane, verbatim —
-            // v1.0.0 shipped bare OkHttp requests and phones were challenged.
-            assertEquals(
-                "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-                headers["User-Agent"],
+            // v1.2.5: the provider impersonates NOTHING — no User-Agent, no
+            // sec-fetch family, no sec-ch-ua hints. v1.1.0's full mobile-Chrome
+            // fingerprint rode through the host's OkHttp stack, whose TLS
+            // signature no header set can imitate, and the zone answered that
+            // incoherence with a hard WAF block instead of a challenge — a
+            // response no cookie replay can satisfy and the exact regression
+            // v1.2.5 exists to undo. An honest request earns a challenge, and
+            // a challenge is what the host's WebView machinery is built to eat.
+            assertTrue(
+                "the provider must send no identity of its own: $headers",
+                headers.isEmpty(),
             )
-            assertTrue("browser Accept must ride along", headers["Accept"]!!.startsWith("text/html,"))
-            assertEquals("document", headers["Sec-Fetch-Dest"])
-            assertEquals("navigate", headers["Sec-Fetch-Mode"])
-            assertEquals("none", headers["Sec-Fetch-Site"])
-            assertEquals("?1", headers["Sec-Fetch-User"])
-            assertEquals("?1", headers["sec-ch-ua-mobile"])
-            assertEquals("\"Android\"", headers["sec-ch-ua-platform"])
-            assertTrue("client hints must match the UA's Chrome major", headers["sec-ch-ua"]!!.contains("\"Chromium\";v=\"131\""))
         }
 
     @Test
-    fun deepNavigationsAreSameOriginWithTheSiteAsReferrer() =
+    fun deepNavigationsStayEquallyHonest() =
         runTest {
             val client =
                 configureWith(
@@ -168,11 +166,12 @@ class WallpaperFlareWallpaperProviderTest {
             provider.popular(2, Filters.None).getOrThrow()
 
             val headers = client.headerLog.single()
-            assertEquals("same-origin", headers["Sec-Fetch-Site"])
-            assertEquals("https://www.wallpaperflare.com/", headers["Referer"])
-            assertEquals(
-                "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-                headers["User-Agent"],
+            // Deep pages once carried a same-origin Referer and the same
+            // browser fingerprint; v1.2.5 sends them as bare as the first
+            // page — the host's ladder owns every identity decision.
+            assertTrue(
+                "deep pages must stay as honest as first pages: $headers",
+                headers.isEmpty(),
             )
         }
 

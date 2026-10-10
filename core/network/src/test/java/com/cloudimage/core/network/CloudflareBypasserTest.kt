@@ -110,8 +110,9 @@ class CloudflareBypasserTest {
             assertNull(bypasser.solve("https://host.example/grid"))
             assertEquals(1, solver.solvedUrls.size)
 
-            // Inside the cooldown the solver is not even asked.
-            now = 30_000
+            // Inside the cooldown the solver is not even asked — half the
+            // window, so the case stays meaningful at any cooldown length.
+            now = CloudflareBypasser.FAILURE_COOLDOWN_MS / 2
             assertNull(bypasser.solve("https://host.example/grid"))
             assertEquals(1, solver.solvedUrls.size)
 
@@ -234,7 +235,7 @@ class CloudflareBypasserTest {
             assertEquals(1, solver.fetchedUrls.size)
 
             // Inside the fetch cooldown the solver is not even asked again.
-            now = 30_000
+            now = CloudflareBypasser.FAILURE_COOLDOWN_MS / 2
             assertNull(bypasser.webViewFetch("https://host.example/grid"))
             assertEquals(1, solver.fetchedUrls.size)
 

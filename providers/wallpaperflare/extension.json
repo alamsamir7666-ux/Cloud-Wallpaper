@@ -1,8 +1,8 @@
 {
   "id": "cloudimage.wallpaperflare",
   "name": "WallpaperFlare",
-  "versionName": "1.1.0",
-  "versionCode": 2,
+  "versionName": "1.2.0",
+  "versionCode": 3,
   "author": "Cloudimage",
   "description": "HD, 2K, 4K and 5K wallpapers from wallpaperflare.com - scraped, keyless.",
   "categories": [

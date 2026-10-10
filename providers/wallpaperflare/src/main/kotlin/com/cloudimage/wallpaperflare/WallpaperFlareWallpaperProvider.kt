@@ -36,27 +36,22 @@ import kotlin.random.Random
  * ## Cloudflare
  *
  * The site sits behind a Cloudflare firewall whose bot management
- * challenges clients that do not look like browsers — the plain OkHttp
- * request the host sends by default (a non-browser User-Agent, no
- * Accept, no sec-fetch headers) is challenged EVEN on residential and
- * carrier IPs, which is exactly what WallpaperFlare 1.0.0 installs
- * reported: the host's WebView solver woke, Cloudflare's page loaded,
- * the Turnstile challenge never settled inside the WebView, and the
- * source failed with HTTP 403.
- *
- * The fix is to not look like a bot in the first place: every document
- * request here carries a complete, internally-coherent mobile-Chrome
- * navigation fingerprint — browser User-Agent, browser Accept and
- * Accept-Language, the full sec-fetch family, and matching sec-ch-ua
- * client hints, with same-origin Referer headers on deep navigations.
- * Cloudflare serves real browsers on phone IPs unchallenged, and a
- * request that scores like one rides the same lane. When a challenge
- * still fires (a hostile zone, a bad-IP day), the host's
+ * decides what to serve by fingerprint: real browsers on phone IPs get
+ * the catalogue, and everything else gets answered with a 403 — a
+ * challenge page for plain-looking clients, and (as v1.2.5 learned the
+ * hard way) a hard WAF BLOCK page for clients that CLAIM to be Chrome
+ * while handshaking like Java. That is why this provider wears no
+ * identity at all: v1.1.0's full mobile-Chrome navigation fingerprint
+ * (User-Agent, sec-ch-ua hints, the sec-fetch family) rode through the
+ * host's OkHttp stack, whose TLS signature no header set can imitate —
+ * and the zone answered the incoherence by blocking instead of
+ * challenging, a page no cookie replay can ever satisfy. An honest
+ * request earns a challenge, and a challenge is exactly what the host's
  * [com.cloudimage.core.network] machinery — which every provider rides
- * through [configure] — solves it with its WebView bypass and, since
- * app v1.2.3, can fall back to fetching the document through the
- * WebView itself; nothing here duplicates that machinery, this plugin
- * only parses what comes back.
+ * through [configure] — is built to eat: the WebView solver settles it,
+ * the earned clearance is replayed, and the WebView document fetch is
+ * the last rung for zones no replay satisfies. Nothing here duplicates
+ * that machinery; this plugin only parses what comes back.
  *
  * ## Pagination honesty
  *
@@ -93,7 +88,7 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "WallpaperFlare",
-            versionName = "1.1.0",
+            versionName = "1.2.0",
             author = "Cloudimage",
             description = "HD, 2K, 4K and 5K wallpapers from wallpaperflare.com - scraped, keyless.",
             // The site curates general-audience content and labels its
@@ -189,8 +184,7 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
         runCatching {
             // The id IS a path ("a/b/c/slug"), not a query value — its slashes
             // are legal path characters and must not be percent-encoded.
-            // A detail page is an in-site navigation: same-origin, referred.
-            val response = get("$BASE_URL/wallpaper/$id", DEEP_NAV_HEADERS)
+            val response = get("$BASE_URL/wallpaper/$id")
             if (!response.isSuccessful) {
                 throw httpError(response.statusCode)
             }
@@ -250,10 +244,9 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
             } else {
                 deepUrl(url, page)
             }
-        // Deep pages navigate like a browser following the site's own
-        // pagination: same-origin, referred from the site root. The first
-        // page is a fresh address-bar navigation.
-        val response = get(requestUrl, if (page == 1) FIRST_NAV_HEADERS else DEEP_NAV_HEADERS)
+        // The host client's own identity rides the request — see the class
+        // KDoc's Cloudflare section for why this plugin impersonates nothing.
+        val response = get(requestUrl)
         if (!response.isSuccessful) {
             throw httpError(response.statusCode)
         }
@@ -348,11 +341,8 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
 
     // ------------------------------------------------------------- plumbing
 
-    private suspend fun get(
-        url: String,
-        headers: Map<String, String>,
-    ): ProviderHttpResponse =
-        httpClient?.get(url, headers)
+    private suspend fun get(url: String): ProviderHttpResponse =
+        httpClient?.get(url, emptyMap())
             ?: error("configure() was not called")
 
     private fun httpError(statusCode: Int): IllegalStateException = IllegalStateException("wallpaperflare answered HTTP $statusCode")
@@ -366,49 +356,8 @@ class WallpaperFlareWallpaperProvider : WallpaperProvider {
         const val HOME_URL = "$BASE_URL/"
 
         /**
-         * The browser identity every document request wears — a current
-         * mobile Chrome on Android, fully coherent: the User-Agent's
-         * Chrome major (131) matches the `sec-ch-ua` brands, the platform
-         * hint matches the UA's Android, and the sec-fetch family says
-         * "top-level navigation" exactly like a tapped link would. No
-         * `Accept-Encoding` on purpose — the host's OkHttp adds (and
-         * transparently decompresses) its own.
-         *
-         * These ride as facade headers, which override the host's own
-         * User-Agent for this provider's requests — EXCEPT when the host
-         * replays under a WebView-earned clearance, whose cookies are
-         * bound to the UA that earned them; that override is correct and
-         * wins, and the rest of this set still rides along.
+         * The image host grid cells disclose; `c4` is the one seen in the wild.
          */
-        val BROWSER_NAV_HEADERS: Map<String, String> =
-            mapOf(
-                "User-Agent" to
-                    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-                "Accept" to
-                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                "Accept-Language" to "en-US,en;q=0.9",
-                "Upgrade-Insecure-Requests" to "1",
-                "Sec-Fetch-Dest" to "document",
-                "Sec-Fetch-Mode" to "navigate",
-                "Sec-Fetch-User" to "?1",
-                "sec-ch-ua" to
-                    "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"",
-                "sec-ch-ua-mobile" to "?1",
-                "sec-ch-ua-platform" to "\"Android\"",
-            )
-
-        /** A fresh, address-bar-style navigation — `Sec-Fetch-Site: none`, no Referer. */
-        val FIRST_NAV_HEADERS: Map<String, String> = BROWSER_NAV_HEADERS + ("Sec-Fetch-Site" to "none")
-
-        /** An in-site navigation — same-origin with the site as the referrer. */
-        val DEEP_NAV_HEADERS: Map<String, String> =
-            BROWSER_NAV_HEADERS +
-                mapOf(
-                    "Sec-Fetch-Site" to "same-origin",
-                    "Referer" to HOME_URL,
-                )
-
-        /** The image host grid cells disclose; `c4` is the one seen in the wild. */
         const val CDN_HOST = "c4.wallpaperflare.com"
 
         /** Deep-pagination cap: a hundred pages of one feed is plenty. */

@@ -179,8 +179,19 @@ class CloudflareBypasser(
          */
         const val FETCH_TIMEOUT_MS = 60_000L
 
-        /** A failed host goes this quiet before another solve is attempted. */
-        const val FAILURE_COOLDOWN_MS = 60_000L
+        /**
+         * A failed host goes this quiet before another solve or fetch is
+         * attempted — v1.2.5 cut it from 60s to 15s. The cooldown's real job
+         * is within one screen load: the home grid fires a dozen rows at the
+         * same host, the host lock serializes them, and after the first
+         * failure the rest must fail fast instead of stacking WebView trips.
+         * That whole stampede lands within seconds, so 15s covers it — while
+         * 60s had the side effect of swallowing a human's Retry: pressing
+         * Retry a minute after a failure got an instant 403 with no dialog
+         * at all, which reads as "the app is dead" rather than "the ladder
+         * is cooling down".
+         */
+        const val FAILURE_COOLDOWN_MS = 15_000L
 
         /**
          * A bypasser with no machinery behind it: never a state, never a
