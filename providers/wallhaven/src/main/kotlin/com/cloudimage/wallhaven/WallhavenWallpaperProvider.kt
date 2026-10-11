@@ -19,7 +19,8 @@ import java.net.URLEncoder
  *
  * Keyless by design in V1: NSFW is never requested (the API requires a key
  * for it), so the app's SFW switch is honored through the host-side purity
- * filters alone.
+ * filters alone. SFW-only also matches what wallhaven.cc itself shows a
+ * logged-out visitor, so a default install mirrors the website's results.
  *
  * The provider speaks the host's filter vocabulary (see the Filters KDoc):
  * `category`, `purity`, `sorting`, `order`, `seed`.
@@ -32,7 +33,7 @@ class WallhavenWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "Wallhaven",
-            versionName = "1.0.0",
+            versionName = "1.1.0",
             author = "Cloudimage",
             description = "Wallpapers from wallhaven.cc.",
             contentRating = ContentRating.SKETCHY,
@@ -139,11 +140,12 @@ class WallhavenWallpaperProvider : WallpaperProvider {
         filters: Filters,
         page: Int,
     ): String {
+        val searched = query?.takeIf { it.isNotBlank() }
         val builder = UrlBuilder("$BASE_URL/search")
-        query?.takeIf { it.isNotBlank() }?.let { builder.param("q", it) }
+        searched?.let { builder.param("q", it) }
         builder.param("categories", categoriesParam(filters))
         builder.param("purity", purityParam(filters))
-        builder.param("sorting", sortingParam(filters))
+        builder.param("sorting", sortingParam(filters, hasQuery = searched != null))
         builder.param("order", if (filters.isSelected("order", "asc")) "asc" else "desc")
         builder.param("page", page.toString())
         filters
@@ -183,12 +185,28 @@ class WallhavenWallpaperProvider : WallpaperProvider {
         }
     }
 
-    private fun sortingParam(filters: Filters): String =
+    /**
+     * Sorting translation, query-aware (v1.1.0). The host vocabulary says
+     * "date"; Wallhaven's API enum says "date_added" — the literal word got
+     * a 200 with a silently EMPTY page 1, which is what blanked the Latest
+     * tab. "relevance" needs a query on the API side, so a relevance ask
+     * without one degrades to date_added. And a queried feed that would
+     * otherwise run "toplist" switches to "relevance": toplist is
+     * Wallhaven's all-time favorites INDEX, so a query under it only
+     * matches inside that index — most searches answer zero, while the
+     * website's own search default is Relevance. A user who explicitly
+     * picks Toplist and then searches gets relevance-ordered results — a
+     * deliberate deviation so a search can never silently answer nothing.
+     */
+    internal fun sortingParam(
+        filters: Filters,
+        hasQuery: Boolean,
+    ): String =
         when (filters.valuesFor("sorting").firstOrNull()) {
-            "date" -> "date"
+            "date" -> "date_added"
             "random" -> "random"
-            "relevance" -> "relevance"
-            else -> "toplist"
+            "relevance" -> if (hasQuery) "relevance" else "date_added"
+            else -> if (hasQuery) "relevance" else "toplist"
         }
 
     private fun httpError(statusCode: Int): IllegalStateException = IllegalStateException("wallhaven answered HTTP $statusCode")

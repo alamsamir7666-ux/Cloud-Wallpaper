@@ -52,6 +52,41 @@ class WallhavenWallpaperProviderTest {
     }
 
     @Test
+    fun `searched feed defaults to website relevance ordering`() {
+        val url = provider.buildSearchUrl(query = "lana rhoades", filters = Filters.None, page = 1)
+
+        assertEquals(
+            "https://wallhaven.cc/api/v1/search?q=lana%20rhoades&categories=111&purity=100" +
+                "&sorting=relevance&order=desc&page=1",
+            url,
+        )
+    }
+
+    @Test
+    fun `explicit toplist under a query falls back to relevance`() {
+        val filters = Filters.of("sorting" to "toplist")
+
+        assertEquals("relevance", provider.sortingParam(filters, hasQuery = true))
+        assertEquals("toplist", provider.sortingParam(filters, hasQuery = false))
+    }
+
+    @Test
+    fun `relevance without a query degrades to date_added`() {
+        val filters = Filters.of("sorting" to "relevance")
+
+        assertEquals("date_added", provider.sortingParam(filters, hasQuery = false))
+    }
+
+    @Test
+    fun `latest section preset translates to the api date_added value`() =
+        runTest {
+            val latest = provider.sections().single { it.id == "latest" }
+            val url = provider.buildSearchUrl(query = null, filters = latest.filters, page = 1)
+
+            assertTrue(url.contains("sorting=date_added"))
+        }
+
+    @Test
     fun `text query and filters land in the url`() {
         val filters =
             Filters.of(
@@ -67,7 +102,7 @@ class WallhavenWallpaperProviderTest {
 
         assertEquals(
             "https://wallhaven.cc/api/v1/search?q=mountain%20lake&categories=011&purity=010" +
-                "&sorting=date&order=asc&page=3&seed=abcd1234",
+                "&sorting=date_added&order=asc&page=3&seed=abcd1234",
             url,
         )
     }
