@@ -26,7 +26,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
-import { URL } from 'node:url';
+import { URL, pathToFileURL } from 'node:url';
 import { lookup } from 'node:dns/promises';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
@@ -508,11 +508,12 @@ async function handleProxyImage(req, res) {
     return;
   }
 
-  // Bandwidth optimization is the proxy's only job — we don't actually
-  // resize (would need sharp/jimp), we just pass through with strong
-  // caching headers. The OSS originals are already right-sized for most
-  // thumbnail contexts; the width param is honored as a hint for future
-  // optimization without breaking the contract.
+  // Bandwidth optimization is the proxy's only job — we don't resize
+  // locally (would need sharp/jimp). Wikimedia gets the special path:
+  // their own thumbnail renders ARE the resize, so a wikimedia original
+  // at card width is rewritten to the standard-size thumb and fetched
+  // from their CDN at a few hundred KB instead of ~11 MB. Every other
+  // host passes through as before with strong caching headers.
   const cacheKey = `${target}|${width}|${fmt}`;
   const cached = proxyCache.get(cacheKey);
   if (cached) {
@@ -521,8 +522,18 @@ async function handleProxyImage(req, res) {
     return;
   }
 
+  const thumbTarget = wikimediaThumbFor(target, width);
+  let upstream;
   try {
-    const upstream = await fetchImage(target);
+    upstream = await fetchImage(thumbTarget || target);
+  } catch (err) {
+    if (!thumbTarget) throw err;
+    // The thumb render can miss (an upscale of a smaller original, an odd
+    // file type); the untouched original is still worth serving.
+    console.warn(`[proxy] wikimedia thumb miss (${err.message}); serving the original`);
+    upstream = await fetchImage(target);
+  }
+  try {
     const headers = {
       'content-type': upstream.contentType || 'image/jpeg',
       'cache-control': 'public, max-age=86400, immutable',
@@ -539,6 +550,29 @@ async function handleProxyImage(req, res) {
     res.end(`proxy error: ${err.message}`);
   }
 }
+
+/**
+ * Wikimedia's hotlink policy: upload.wikimedia.org only serves /thumb/
+ * requests at its production standard widths (see "Common thumbnail
+ * sizes": 250, 330, 500, 960, 1280, 1920, 3840) and 403s any request
+ * without a descriptive User-Agent (fetchImage sends PROXY_USER_AGENT).
+ * Maps an original to the smallest standard width at or above the wanted
+ * width — their thumbnail renders are the resize, so the proxy stops
+ * paying ~11 MB pass-through originals for card-width requests. Returns
+ * null for anything that should keep the pass-through path (non-wikimedia
+ * host, already-thumb URL, oversized ask).
+ */
+function wikimediaThumbFor(target, wantedWidth) {
+  const m = WIKIMEDIA_ORIGINAL_PATH.exec(target);
+  if (!m) return null;
+  const width = WIKIMEDIA_STANDARD_WIDTHS.find((w) => w >= wantedWidth);
+  if (!width) return null;
+  return `https://upload.wikimedia.org/${m[1]}/thumb/${m[2]}/${m[3]}/${m[4]}/${width}px-${m[4]}`;
+}
+
+const WIKIMEDIA_STANDARD_WIDTHS = [250, 330, 500, 960, 1280, 1920, 3840];
+const WIKIMEDIA_ORIGINAL_PATH =
+  /^https:\/\/upload\.wikimedia\.org\/(wikipedia\/[a-z-]+)\/([0-9a-f])\/([0-9a-f]{2})\/([^/?#]+)$/i;
 
 function fetchImage(targetUrl, redirectsLeft = 4) {
   return new Promise((resolve, reject) => {
@@ -636,20 +670,27 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[cloudimage-search-bridge] listening on :${PORT}`);
-  console.log(`  search provider: ${PROVIDER}${PROVIDER === 'searxng' ? ` (${SEARXNG_BASE})` : ''}`);
-  if (PROVIDER === 'none') {
-    console.log('  (!) no provider configured — searches will 502 until one is available:');
-    console.log('      SEARXNG_BASE (bundled metasearch, recommended) or SEARCH_PROVIDER=googlecse');
-    console.log('      plus GOOGLE_CSE_KEY / GOOGLE_CSE_CX (see DEPLOY.md)');
-  }
-  console.log(`  POST /api/search        — image search (${PROVIDER})`);
-  console.log(`  GET  /api/proxy-image   — image proxy with caching`);
-  console.log(`  GET  /health            — health check`);
-});
+// server.js doubles as the container entrypoint AND a module the tests can
+// import for its pure helpers — the listener (and the SIGTERM handler that
+// goes with it) belongs to the entrypoint role only.
+if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`[cloudimage-search-bridge] listening on :${PORT}`);
+    console.log(`  search provider: ${PROVIDER}${PROVIDER === 'searxng' ? ` (${SEARXNG_BASE})` : ''}`);
+    if (PROVIDER === 'none') {
+      console.log('  (!) no provider configured — searches will 502 until one is available:');
+      console.log('      SEARXNG_BASE (bundled metasearch, recommended) or SEARCH_PROVIDER=googlecse');
+      console.log('      plus GOOGLE_CSE_KEY / GOOGLE_CSE_CX (see DEPLOY.md)');
+    }
+    console.log(`  POST /api/search        — image search (${PROVIDER})`);
+    console.log(`  GET  /api/proxy-image   — image proxy with caching`);
+    console.log(`  GET  /health            — health check`);
+  });
 
-process.on('SIGTERM', () => {
-  console.log('[bridge] SIGTERM received, shutting down');
-  server.close(() => process.exit(0));
-});
+  process.on('SIGTERM', () => {
+    console.log('[bridge] SIGTERM received, shutting down');
+    server.close(() => process.exit(0));
+  });
+}
+
+export { wikimediaThumbFor };

@@ -364,8 +364,15 @@ class CloudimageHttpClient
              */
             internal const val PROGRESS_CHUNK_BYTES = 64L * 1024
 
-            /** Sent with every request; some public APIs require identification. */
-            internal const val USER_AGENT =
+            /**
+             * The descriptive User-Agent every unbranded request from this
+             * app should carry. Public (v1.2.9) so the app-wide Coil loader
+             * can brand image fetches too — Wikimedia's upload CDN 403s any
+             * request without a descriptive agent, which is exactly how the
+             * global-search previews of Wikipedia images died while the
+             * proxied thumbnails kept working.
+             */
+            const val USER_AGENT =
                 "Cloudimage/1.0 (Android; +https://github.com/alamsamir7666-ux/Cloud-Wallpaper)"
         }
     }

@@ -189,25 +189,62 @@ class BrowserSearchEngine(
         )
     }
 
-    private fun ImageResultDto.toWallpaper(base: String): Wallpaper =
-        Wallpaper(
+    private fun ImageResultDto.toWallpaper(base: String): Wallpaper {
+        val width = originalWidth.asDimension()
+        return Wallpaper(
             id = "$ID_PREFIX$originalUrl",
             providerId = GLOBAL_SEARCH_PROVIDER_ID,
             // v1.2.1: thumbnails ride the backend's image proxy at card
             // width — the phone stops paying for full-resolution originals
-            // it will only ever show a few hundred pixels wide. The detail
-            // screen, downloads and share keep the untouched original,
-            // where quality is the whole point.
-            thumbUrl = buildProxyUrl(base, originalUrl, THUMB_WIDTH),
+            // it will only ever show a few hundred pixels wide. v1.2.9 adds
+            // the Wikimedia fast path: their own thumbnail render serves the
+            // card straight from their CDN at a standard width, skipping the
+            // proxy hop entirely (and its multi-megabyte pass-through).
+            thumbUrl = wikimediaGridThumbUrl(originalUrl, width) ?: buildProxyUrl(base, originalUrl, THUMB_WIDTH),
             fullUrl = originalUrl,
             // The backend searches with ranking off for speed, so captions
             // arrive empty and `source` — the site's name — is the title
             // that matters: it is what the grid's provenance overlay and
             // the share sheet both show.
             title = source?.takeIf { it.isNotBlank() },
-            width = originalWidth.asDimension(),
+            width = width,
             height = originalHeight.asDimension(),
         )
+    }
+
+    /**
+     * Wikimedia's own thumbnail service as the grid's fast path (v1.2.9).
+     *
+     * upload.wikimedia.org only serves hotlinked thumbnails at its
+     * production standard widths (250/330/500/960/1280/1920/3840 — verified
+     * live: any other width is a 400, and an upscale of a smaller original
+     * is a miss), and it 403s requests without a descriptive User-Agent,
+     * which the app-wide Coil loader now brands. Serving the card from the
+     * 960px render instead of the proxy's pass-through original cuts a
+     * typical tile from ~11 MB to a few hundred kilobytes and removes the
+     * Render hop (and its free-tier cold start) from the grid entirely.
+     *
+     * The ladder picks the largest standard width the original can serve
+     * without upscaling; results with unknown or sub-250 widths keep the
+     * proxy URL — never worse than the previous behavior. Non-Wikimedia
+     * hosts are untouched.
+     */
+    internal fun wikimediaGridThumbUrl(
+        originalUrl: String,
+        originalWidth: Int?,
+    ): String? {
+        if (originalWidth == null || originalWidth < WIKIMEDIA_SMALLEST_STANDARD) return null
+        val width =
+            when {
+                originalWidth >= WIKIMEDIA_GRID_WIDTH -> WIKIMEDIA_GRID_WIDTH
+                originalWidth >= 500 -> 500
+                originalWidth >= 330 -> 330
+                else -> WIKIMEDIA_SMALLEST_STANDARD
+            }
+        val match = WIKIMEDIA_ORIGINAL_PATH.find(originalUrl) ?: return null
+        val (repo, shard, pair, file) = match.destructured
+        return "https://upload.wikimedia.org/$repo/thumb/$shard/$pair/$file/${width}px-$file"
+    }
 
     /**
      * The backend normalizes dimensions to plain numbers, but the upstream
@@ -268,6 +305,16 @@ class BrowserSearchEngine(
          * a dense phone while a fraction of the original's bytes.
          */
         private const val THUMB_WIDTH = 640
+
+        /** Wikimedia's smallest production standard thumbnail width. */
+        private const val WIKIMEDIA_SMALLEST_STANDARD = 250
+
+        /** The card-width slot in Wikimedia's standard set (never an upscale). */
+        private const val WIKIMEDIA_GRID_WIDTH = 960
+
+        /** upload.wikimedia.org originals: /{repo}/{1}/{2}/{file} — shards then file. */
+        private val WIKIMEDIA_ORIGINAL_PATH =
+            Regex("""^https://upload\.wikimedia\.org/(wikipedia/[a-z-]+)/([0-9a-f])/([0-9a-f]{2})/([^/?#]+)$""", RegexOption.IGNORE_CASE)
 
         /** The backend's own CLI budget is 120s; read timeout sits above it. */
         private const val CONNECT_TIMEOUT_S = 15L

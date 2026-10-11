@@ -5,6 +5,7 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import com.cloudimage.core.network.CloudimageHttpClient
 import com.cloudimage.core.network.ForegroundActivityTracker
 import com.cloudimage.core.network.ImageProgressRegistry
 import dagger.hilt.android.HiltAndroidApp
@@ -67,6 +68,13 @@ class CloudimageApplication :
      * - [ImageProgressRegistry]'s interceptor rides along so the fullscreen
      *   viewer can report byte-accurate loading progress. It is a no-op
      *   pass-through for every URL nobody observes.
+     *
+     * v1.2.9 adds the User-Agent brander: Coil builds its own requests, so
+     * the app client's per-request agent never rode along — and image hosts
+     * with a UA policy (Wikimedia's upload CDN 403s anything undescriptive)
+     * rejected exactly those loads. The interceptor only fills the header
+     * when absent, so explicitly-branded requests (the Cloudflare clearance
+     * replay) keep the agent they earned.
      */
     override fun newImageLoader(): ImageLoader =
         ImageLoader
@@ -76,6 +84,18 @@ class CloudimageApplication :
                     .newBuilder()
                     .callTimeout(0, TimeUnit.SECONDS)
                     .addInterceptor(ImageProgressRegistry.interceptor())
-                    .build(),
+                    .addInterceptor { chain ->
+                        val request = chain.request()
+                        val branded =
+                            if (request.header("User-Agent") == null) {
+                                request
+                                    .newBuilder()
+                                    .header("User-Agent", CloudimageHttpClient.USER_AGENT)
+                                    .build()
+                            } else {
+                                request
+                            }
+                        chain.proceed(branded)
+                    }.build(),
             ).build()
 }

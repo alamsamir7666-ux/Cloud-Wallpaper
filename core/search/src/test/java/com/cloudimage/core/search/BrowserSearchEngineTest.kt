@@ -259,6 +259,62 @@ class BrowserSearchEngineTest {
         }
 
     @Test
+    fun wikimediaResultsServeTheGridFromTheirOwnThumbnails() =
+        runTest {
+            server.enqueue(
+                MockResponse()
+                    .setBody(
+                        """
+                        {
+                          "success": true, "page": 1, "hasMore": false,
+                          "results": [
+                            {"original_url": "https://upload.wikimedia.org/wikipedia/commons/9/99/big.jpg",
+                             "source": "upload.wikimedia.org", "original_width": 7004, "original_height": 4672},
+                            {"original_url": "https://upload.wikimedia.org/wikipedia/commons/e/e6/mid.jpg",
+                             "source": "upload.wikimedia.org", "original_width": 600, "original_height": 400},
+                            {"original_url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/unknown.jpg",
+                             "source": "upload.wikimedia.org"},
+                            {"original_url": "https://i.pinimg.com/originals/62/20/24/pin.jpg",
+                             "source": "i.pinimg.com", "original_width": 1328, "original_height": 747}
+                          ]
+                        }
+                        """.trimIndent(),
+                    ).setHeader("Content-Type", "application/json"),
+            )
+
+            val page = (engine.search("q", 1, GlobalSearchFilters()) as Success).page
+
+            // Big original -> the 960px standard render, straight from
+            // Wikimedia's CDN; the original URL stays the fullUrl.
+            val big = page.results[0]
+            assertEquals(
+                "https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/big.jpg/960px-big.jpg",
+                big.thumbUrl,
+            )
+            assertEquals("https://upload.wikimedia.org/wikipedia/commons/9/99/big.jpg", big.fullUrl)
+
+            // A 600px original ladders DOWN to the 500px standard — never
+            // an upscale request, which the CDN rejects.
+            val mid = page.results[1]
+            assertEquals(
+                "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e6/mid.jpg/500px-mid.jpg",
+                mid.thumbUrl,
+            )
+
+            // Unknown width -> the proxy URL, exactly the pre-v1.2.9 path.
+            val unknown = page.results[2]
+            assertTrue(
+                "unknown-width wikimedia keeps the proxy, was: ${unknown.thumbUrl}",
+                unknown.thumbUrl.contains("/api/proxy-image?"),
+            )
+
+            // Non-Wikimedia hosts are untouched.
+            val pin = page.results[3]
+            assertTrue(pin.thumbUrl.contains("/api/proxy-image?"))
+            assertTrue(pin.thumbUrl.contains("url="))
+        }
+
+    @Test
     fun blankQueryFailsWithoutTouchingTheNetwork() =
         runTest {
             val outcome = engine.search("   ", 1, GlobalSearchFilters())
