@@ -271,9 +271,31 @@ internal fun cloudflareZoneOf(host: String): String {
  */
 private val ZONE_SUFFIX_GUARD =
     setOf(
-        "co.uk", "org.uk", "gov.uk", "ac.uk", "edu.au", "com.au", "net.au", "org.au", "gov.au",
-        "co.jp", "or.jp", "ne.jp", "co.in", "co.nz", "co.za", "com.bd", "com.br", "com.cn",
-        "com.hk", "com.mx", "com.pk", "com.sg", "com.tr", "com.tw", "com.ar",
+        "co.uk",
+        "org.uk",
+        "gov.uk",
+        "ac.uk",
+        "edu.au",
+        "com.au",
+        "net.au",
+        "org.au",
+        "gov.au",
+        "co.jp",
+        "or.jp",
+        "ne.jp",
+        "co.in",
+        "co.nz",
+        "co.za",
+        "com.bd",
+        "com.br",
+        "com.cn",
+        "com.hk",
+        "com.mx",
+        "com.pk",
+        "com.sg",
+        "com.tr",
+        "com.tw",
+        "com.ar",
     )
 
 /**

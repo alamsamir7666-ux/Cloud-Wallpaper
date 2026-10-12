@@ -468,6 +468,7 @@ internal class WebViewCloudflareSolver(
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(HINT_BACKGROUND)
             val density = resources.displayMetrics.density
+
             fun dp(value: Int): Int = (value * density).toInt()
             addView(
                 TextView(activity).apply {
