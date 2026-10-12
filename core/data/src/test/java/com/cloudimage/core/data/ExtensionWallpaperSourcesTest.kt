@@ -17,6 +17,7 @@ import com.cloudimage.extensions.core.ExtensionStatus
 import com.cloudimage.extensions.core.InstallResult
 import com.cloudimage.extensions.core.InstalledExtension
 import com.cloudimage.extensions.core.LoadResult
+import com.cloudimage.extensions.core.ProviderCloudflareException
 import com.cloudimage.extensions.core.ProviderTransportException
 import com.cloudimage.provider.api.Album
 import com.cloudimage.provider.api.Capability
@@ -1354,5 +1355,39 @@ class ExtensionWallpaperSourcesTest {
             val failure = result as NetworkResult.Failure
             val error = failure.error as NetworkError.Source
             assertTrue(error.reason.contains("503"))
+        }
+
+    @Test
+    fun `a source the zone firewalled surfaces the Cloudflare story, not a bare status`() =
+        runTest {
+            // The facade raises ProviderCloudflareException when a source's
+            // final answer is Cloudflare's own page; the mapping must keep
+            // that message — the one that tells the user what happened and
+            // what to do — instead of flattening it to a classname.
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallpapersden"),
+                    capabilities = setOf(Capability.ALBUMS),
+                )
+            val engine =
+                FakeEngine(
+                    object : WallpaperProvider by provider {
+                        override val meta = provider.meta
+                        override val capabilities = provider.capabilities
+
+                        override suspend fun homeAlbums(): Result<List<Album>> =
+                            Result.failure(ProviderCloudflareException("wallpapersden.com", 403))
+                    },
+                )
+            engine.publish(extension("cloudimage.wallpapersden"))
+            val sources = sources(engine)
+
+            val result = sources.homeAlbums("cloudimage.wallpapersden")
+
+            val failure = result as NetworkResult.Failure
+            val error = failure.error as NetworkError.Source
+            assertTrue(error.reason.contains("wallpapersden.com"))
+            assertTrue(error.reason.contains("Cloudflare protection refused this connection"))
+            assertTrue(error.reason.contains("Retry"))
         }
 }

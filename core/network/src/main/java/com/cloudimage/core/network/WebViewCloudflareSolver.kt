@@ -309,7 +309,14 @@ internal class WebViewCloudflareSolver(
         return try {
             dialog.show()
             webView.loadUrl(url)
-            waitForClearance(client, webView, host, url) { dialog.isShowing }
+            waitForClearance(
+                client,
+                webView,
+                host,
+                url,
+                dismissed = { dialog.isShowing },
+                allowChallengeRefresh = true,
+            )
         } finally {
             runCatching { dialog.dismiss() }
             runCatching { webView.stopLoading() }
@@ -552,6 +559,15 @@ internal class WebViewCloudflareSolver(
      * CloudStream clears its jar between solve sessions for exactly this
      * reason, and a jar that still carries a failed trip's state makes
      * the next trip start from the loser's position.
+     *
+     * v1.2.13 adds the one late refresh (attached trips only —
+     * [allowChallengeRefresh]): a challenge still interstitial half a
+     * minute after its page loaded is either untapped or re-looping, and
+     * a re-looping Turnstile instance refuses every tap forever while a
+     * FRESH one often settles on the next tap, so the trip reloads the
+     * page once for a new instance instead of staring at the same
+     * checkbox until the deadline. See [CHALLENGE_REFRESH_AFTER_MS] for
+     * the timing's safety argument against v1.2.4's never-reload rule.
      */
     private suspend fun waitForClearance(
         client: ChallengeClient,
@@ -559,12 +575,16 @@ internal class WebViewCloudflareSolver(
         host: String,
         url: String,
         dismissed: () -> Boolean = { false },
+        allowChallengeRefresh: Boolean = false,
     ): CloudflareBypass? {
         // Read once: the identity this solve binds its cookies to. A device
         // that cannot report a default agent cannot earn an honest pair.
         val agent = defaultUserAgent() ?: return null
         val deadline = System.currentTimeMillis() + SOLVE_DEADLINE_MS
         var contentCheckedForFinish = -1
+
+        // 0 while no refresh has fired — one per trip, never reset.
+        var refreshedAt = 0L
         while (System.currentTimeMillis() < deadline) {
             if (dismissed()) {
                 // v1.2.11: the user backed out of the challenge — this trip
@@ -607,6 +627,22 @@ internal class WebViewCloudflareSolver(
                     return null
                 }
                 if (!CloudflareChallenge.isInterstitialDocument(html)) return null
+            }
+            // The one late refresh — v1.2.13, attached trips only. The
+            // document is re-read right before the reload fires: a page
+            // that quietly became CONTENT in place (a settle whose cookie
+            // is still propagating, say) exits through the rung's own
+            // early-return instead of being reset, so the refresh can
+            // only ever hit a page that still reads as Cloudflare's shell.
+            if (allowChallengeRefresh &&
+                refreshedAt == 0L &&
+                finishedAt > 0 &&
+                System.currentTimeMillis() - finishedAt >= CHALLENGE_REFRESH_AFTER_MS
+            ) {
+                val current = webView.extractHtml() ?: continue
+                if (!CloudflareChallenge.isInterstitialDocument(current)) return null
+                refreshedAt = System.currentTimeMillis()
+                runCatching { webView.reload() }
             }
         }
         // Nothing earned in the window — the jar carries this failed trip's
@@ -916,6 +952,23 @@ internal class WebViewCloudflareSolver(
         const val SETTLE_AFTER_FINISH_MS = 700L
 
         /**
+         * How long a challenge page may sit interstitial before the one
+         * refresh fires (v1.2.13). The v1.2.4 rule — never reload, a
+         * reload mid-settle resets the challenge, fatal mid-tap — stays
+         * sacred for everything INSIDE this window, and the window is
+         * sized so that window's cases are done: a managed challenge
+         * settles in 3–8 s, a human reads the hint strip and taps within
+         * a few seconds more, and anything still interstitial at thirty
+         * is an interactive challenge nobody is tapping or a re-looping
+         * widget whose instance is poisoned — a FRESH instance often
+         * settles on the very next tap (CloudStream's solver reloads for
+         * exactly this reason), which one bounded reload buys. The rare
+         * tap that lands inside the last second before the refresh pays
+         * one reset, and the hint strip now says to tap again.
+         */
+        const val CHALLENGE_REFRESH_AFTER_MS = 30_000L
+
+        /**
          * How still a page must be before its post-load JavaScript is
          * judged finished — no subresource or interception activity for
          * this long means the DOM the fetch reads is the settled one
@@ -987,12 +1040,15 @@ internal class WebViewCloudflareSolver(
         const val HINT_TEXT_SIZE_SP = 13f
 
         /**
-         * The strip's copy: what is happening, the ONE thing to do, and
-         * the promise that it is not asked often — the three facts a
-         * full-screen Cloudflare page never tells the user itself.
+         * The strip's copy: what is happening, the ONE thing to do, the
+         * one re-loop instruction (v1.2.13 — a check that restarts is a
+         * poisoned instance the trip is about to refresh, not a lost
+         * cause), and the promise that it is not asked often — the four
+         * facts a full-screen Cloudflare page never tells the user itself.
          */
         const val HINT_FORMAT =
-            "%s is checking your browser. Tap the checkbox if the page shows one — done once, the app remembers it."
+            "%s is checking your browser. Tap the checkbox if the page shows one — " +
+                "if the check restarts, tap it again. Done once, the app remembers it."
     }
 
     /** When a visible challenge trip last failed, per zone — see [recentlyFailedAttached]. */

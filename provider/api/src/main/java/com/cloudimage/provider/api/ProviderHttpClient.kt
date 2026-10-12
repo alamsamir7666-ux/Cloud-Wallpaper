@@ -57,8 +57,12 @@ interface ProviderHttpClient {
      * WebView-earned Cloudflare clearance is bound to the agent it was
      * earned with, so on replayed challenged requests the host overrides
      * the agent back — clearance binding wins over provider identity.
-     * Throws [ProviderHttpException] only on transport failure, never
-     * for a non-2xx status.
+     * Throws [ProviderHttpException] on transport failure, never for an
+     * ordinary non-2xx status — the host may additionally raise its own
+     * [ProviderHttpException] subclass when the answer is Cloudflare's
+     * own block or challenge page rather than the source's (the host's
+     * bypass machinery already ran by then), which plugins should let
+     * propagate exactly like a transport failure.
      */
     suspend fun get(
         url: String,

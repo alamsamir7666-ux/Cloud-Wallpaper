@@ -79,4 +79,71 @@ class CloudimageProviderHttpClientTest {
             assertTrue(failure is ProviderHttpException)
             assertTrue(failure!!.message!!.contains("/down"))
         }
+
+    @Test
+    fun cloudflareBlockPageThrowsCloudflareException() =
+        runTest {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(403)
+                    .setHeader("Server", "cloudflare")
+                    .setBody(
+                        "<html><head><title>Attention Required! | Cloudflare</title></head>" +
+                            "<body><h1>Sorry, you have been blocked</h1>" +
+                            "<p>You are unable to access wallpapersden.com</p></body></html>",
+                    ),
+            )
+
+            val failure = runCatching { facade.get(server.url("/latest/").toString()) }.exceptionOrNull()
+
+            assertTrue(failure is ProviderCloudflareException)
+            val cloudflare = failure as ProviderCloudflareException
+            assertEquals(403, cloudflare.statusCode)
+            assertEquals("localhost", cloudflare.host)
+            // The message the user reads must say what happened and what to do.
+            assertTrue(cloudflare.message!!.contains("Cloudflare protection refused this connection"))
+            assertTrue(cloudflare.message!!.contains("Retry"))
+        }
+
+    @Test
+    fun cloudflareChallengePageThrowsCloudflareException() =
+        runTest {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(503)
+                    .setHeader("Server", "cloudflare")
+                    .setBody(
+                        "<html><head><title>Just a moment...</title></head><body>" +
+                            "Enable JavaScript and cookies to continue" +
+                            "<script src=\"/cdn-cgi/challenge-platform/hbeta/jsd/main.js\"></script>" +
+                            "</body></html>",
+                    ),
+            )
+
+            val failure = runCatching { facade.get(server.url("/").toString()) }.exceptionOrNull()
+
+            assertTrue(failure is ProviderCloudflareException)
+            assertEquals(503, (failure as ProviderCloudflareException).statusCode)
+        }
+
+    @Test
+    fun cloudflareEdgeApiErrorStillFlowsThroughUntouched() =
+        runTest {
+            // A Cloudflare-fronted API's legitimate 403: the edge's server
+            // header wakes the ladder's detector, but the body is the
+            // source's own JSON — no Cloudflare furniture — so the plugin
+            // must keep its right to phrase the error itself.
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(403)
+                    .setHeader("Server", "cloudflare")
+                    .setBody("{\"error\":\"invalid_api_key\"}"),
+            )
+
+            val response = facade.get(server.url("/api").toString())
+
+            assertFalse(response.isSuccessful)
+            assertEquals(403, response.statusCode)
+            assertEquals("{\"error\":\"invalid_api_key\"}", response.bodyText)
+        }
 }
