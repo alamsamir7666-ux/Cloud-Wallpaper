@@ -34,6 +34,24 @@ import java.util.concurrent.ConcurrentHashMap
  * (the two rungs fail for different reasons: a clearance that cannot be
  * earned versus a page that never settles).
  *
+ * ## Zone-keyed clearances (v1.2.11)
+ *
+ * Clearances, host locks and cooldowns are keyed by the request host's
+ * ZONE (see [cloudflareZoneOf]), not the hostname: Cloudflare issues
+ * `cf_clearance` for the whole registrable domain, so a site's solve is
+ * its image CDN's solve too. wallpapersden.com is the case in the wild —
+ * the site and `images.wallpapersden.com` share one zone, and before
+ * this change a challenge solved for the site left the CDN's requests
+ * (thumbnails in Coil, originals in the viewer) carrying nothing, while
+ * the CDN's own solve lane could pop a SECOND dialog for the very zone
+ * the user had just cleared. One zone, one identity, one dialog.
+ *
+ * The WebView-only mark stays EXACT-HOST on purpose (v1.2.6's semantics):
+ * it routes DOCUMENT requests to the engine lane, and only document
+ * hosts earn it — an image host that happens to sit in a marked zone
+ * still walks the honest ladder, now with the zone's clearance riding
+ * its first attempt.
+ *
  * ## WebView-only hosts (v1.2.6)
  *
  * Some zones — wallpaperflare.com is the one in the wild — bind their
@@ -55,19 +73,19 @@ class CloudflareBypasser(
     private val solver: CloudflareSolver,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
-    /** One lock per host — solves for different hosts never block each other. */
-    private val hostLocks = ConcurrentHashMap<String, Mutex>()
+    /** One lock per zone — solves for different zones never block each other. */
+    private val zoneLocks = ConcurrentHashMap<String, Mutex>()
 
-    /** Earned clearances by host; the User-Agent rides along inside each. */
+    /** Earned clearances by zone; the User-Agent rides along inside each. */
     private val cleared = ConcurrentHashMap<String, CloudflareBypass>()
 
-    /** Timestamps of the last failed solve per host, for the solve cooldown. */
+    /** Timestamps of the last failed solve per zone, for the solve cooldown. */
     private val solveFailedAt = ConcurrentHashMap<String, Long>()
 
-    /** Timestamps of the last failed document fetch per host — its own cooldown. */
+    /** Timestamps of the last failed document fetch per zone — its own cooldown. */
     private val fetchFailedAt = ConcurrentHashMap<String, Long>()
 
-    /** Hosts already asked for a persisted clearance this launch. */
+    /** Zones already asked for a persisted clearance this launch. */
     private val warmChecked = ConcurrentHashMap.newKeySet<String>()
 
     /**
@@ -82,15 +100,31 @@ class CloudflareBypasser(
      * host has none on file. Cheap by design — every request calls it.
      */
     suspend fun bypassStateFor(url: String): CloudflareBypass? {
-        val host = url.toHttpUrlOrNull()?.host ?: return null
-        cleared[host]?.let { return it }
-        // One warm look per host per launch: the WebView cookie jar outlives
+        val zone = url.toHttpUrlOrNull()?.host?.let(::cloudflareZoneOf) ?: return null
+        cleared[zone]?.let { return it }
+        // One warm look per zone per launch: the WebView cookie jar outlives
         // the process, so a clearance earned yesterday can still be valid —
         // and if it is not, the challenge it earns is simply solved again.
-        if (!warmChecked.add(host)) return null
-        val persisted = solver.persistedStateFor(host) ?: return null
-        return persisted.also { cleared[host] = it }
+        if (!warmChecked.add(zone)) return null
+        val persisted = solver.persistedStateFor(zone) ?: return null
+        return persisted.also { cleared[zone] = it }
     }
+
+    /**
+     * The zone's clearance as a non-suspending snapshot — the seam the
+     * app's image pipeline (Coil) consults per request from OkHttp's own
+     * dispatcher threads (v1.2.11). Image loads never ride the document
+     * ladder, so an image host that sits in the same Cloudflare zone as
+     * its site (wallpapersden.com's `images.` CDN) used to ask for a
+     * clearance that existed and receive nothing; the snapshot hands it
+     * the earned (cookies, User-Agent) pair so its requests replay under
+     * the identity the challenge was earned with. Null when the zone has
+     * no clearance on file — the caller brands its request as usual.
+     *
+     * Deliberately memory-only: the persisted warm read stays on the
+     * ladder's own first request for the zone, where it already lives.
+     */
+    fun currentBypassFor(host: String): CloudflareBypass? = cleared[cloudflareZoneOf(host)]
 
     /**
      * Solves a challenge for the host of [url] and returns the fresh
@@ -107,14 +141,14 @@ class CloudflareBypasser(
         url: String,
         staleState: CloudflareBypass? = null,
     ): CloudflareBypass? {
-        val host = url.toHttpUrlOrNull()?.host ?: return null
-        return hostLocks.computeIfAbsent(host) { Mutex() }.withLock {
-            val current = cleared[host]
+        val zone = url.toHttpUrlOrNull()?.host?.let(::cloudflareZoneOf) ?: return null
+        return zoneLocks.computeIfAbsent(zone) { Mutex() }.withLock {
+            val current = cleared[zone]
             if (current != null && current !== staleState) {
                 // Solved while we waited on the lock — ride the newer state.
                 return@withLock current
             }
-            if (solveFailedAt[host]?.let { clock() - it < FAILURE_COOLDOWN_MS } == true) {
+            if (solveFailedAt[zone]?.let { clock() - it < FAILURE_COOLDOWN_MS } == true) {
                 return@withLock null
             }
             val fresh =
@@ -122,12 +156,12 @@ class CloudflareBypasser(
                     withTimeoutOrNull(SOLVE_TIMEOUT_MS) { solver.solve(url) }
                 }.getOrNull()
             if (fresh != null) {
-                cleared[host] = fresh
-                solveFailedAt.remove(host)
+                cleared[zone] = fresh
+                solveFailedAt.remove(zone)
                 fresh
             } else {
-                cleared.remove(host)
-                solveFailedAt[host] = clock()
+                cleared.remove(zone)
+                solveFailedAt[zone] = clock()
                 null
             }
         }
@@ -167,9 +201,9 @@ class CloudflareBypasser(
      * into the visible ladder while its cookie is alive.
      */
     suspend fun fetchDocument(url: String): WebViewPage? {
-        val host = url.toHttpUrlOrNull()?.host ?: return null
-        return hostLocks.computeIfAbsent(host) { Mutex() }.withLock {
-            if (fetchFailedAt[host]?.let { clock() - it < FAILURE_COOLDOWN_MS } == true) {
+        val zone = url.toHttpUrlOrNull()?.host?.let(::cloudflareZoneOf) ?: return null
+        return zoneLocks.computeIfAbsent(zone) { Mutex() }.withLock {
+            if (fetchFailedAt[zone]?.let { clock() - it < FAILURE_COOLDOWN_MS } == true) {
                 return@withLock null
             }
             val page =
@@ -177,11 +211,11 @@ class CloudflareBypasser(
                     withTimeoutOrNull(FETCH_TIMEOUT_MS) { solver.fetch(url) }
                 }.getOrNull()
             if (page == null) {
-                fetchFailedAt[host] = clock()
+                fetchFailedAt[zone] = clock()
                 null
             } else {
-                fetchFailedAt.remove(host)
-                page.clearance?.let { cleared[host] = it }
+                fetchFailedAt.remove(zone)
+                page.clearance?.let { cleared[zone] = it }
                 markWebViewOnly(url)
                 page
             }
@@ -207,9 +241,9 @@ class CloudflareBypasser(
         url: String,
         staleState: CloudflareBypass? = null,
     ): WebViewPage? {
-        val host = url.toHttpUrlOrNull()?.host ?: return null
-        return hostLocks.computeIfAbsent(host) { Mutex() }.withLock {
-            val current = cleared[host]
+        val zone = url.toHttpUrlOrNull()?.host?.let(::cloudflareZoneOf) ?: return null
+        return zoneLocks.computeIfAbsent(zone) { Mutex() }.withLock {
+            val current = cleared[zone]
             if (current != null && current !== staleState) {
                 // Earned while we waited — cheaper than a page load; the
                 // caller replays under this instead.
@@ -220,7 +254,7 @@ class CloudflareBypasser(
             // they fail for different reasons, and the exchange that
             // could not earn a clearance is the one that most needs the
             // page fetched through the WebView.
-            if (fetchFailedAt[host]?.let { clock() - it < FAILURE_COOLDOWN_MS } == true) {
+            if (fetchFailedAt[zone]?.let { clock() - it < FAILURE_COOLDOWN_MS } == true) {
                 return@withLock null
             }
             val page =
@@ -228,15 +262,15 @@ class CloudflareBypasser(
                     withTimeoutOrNull(FETCH_TIMEOUT_MS) { solver.fetch(url) }
                 }.getOrNull()
             if (page == null) {
-                fetchFailedAt[host] = clock()
+                fetchFailedAt[zone] = clock()
                 // The state this fetch's challenged request carried is dead
                 // too — the replay under it already failed. Drop it so later
                 // requests stop trying it.
-                if (cleared[host] === staleState) cleared.remove(host)
+                if (cleared[zone] === staleState) cleared.remove(zone)
                 null
             } else {
-                fetchFailedAt.remove(host)
-                page.clearance?.let { cleared[host] = it }
+                fetchFailedAt.remove(zone)
+                page.clearance?.let { cleared[zone] = it }
                 page
             }
         }

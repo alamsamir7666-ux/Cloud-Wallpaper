@@ -37,7 +37,12 @@ import org.junit.Test
  *   host lock is handed back instead of a page;
  * - the WebView-only mode (v1.2.6): a marked host routes straight to the
  *   document lane, successful fetches refresh the mark, unused marks
- *   lapse, and a failed document fetch cools its own lane.
+ *   lapse, and a failed document fetch cools its own lane;
+ * - the zone keying (v1.2.11): clearances, locks, cooldowns and warm
+ *   checks are keyed by the request host's registrable domain, so a
+ *   site's clearance serves its image CDN — wallpapersden.com's shape —
+ *   and the snapshot seam ([CloudflareBypasser.currentBypassFor]) hands
+ *   that same identity to the app's image pipeline.
  */
 class CloudflareBypasserTest {
     private class ScriptedSolver : CloudflareSolver {
@@ -394,5 +399,85 @@ class CloudflareBypasserTest {
             now = CloudflareBypasser.FAILURE_COOLDOWN_MS / 2
             assertNull(bypasser.fetchDocument("https://host.example/grid"))
             assertEquals(1, solver.fetchedUrls.size)
+        }
+
+    // ------------------------------------------- zone keying (v1.2.11)
+
+    @Test
+    fun zoneApproximationHoldsTheLine() {
+        // The plain cases: a registrable domain is its own zone, deeper
+        // hosts collapse onto it.
+        assertEquals("wallpapersden.com", cloudflareZoneOf("wallpapersden.com"))
+        assertEquals("wallpapersden.com", cloudflareZoneOf("images.wallpapersden.com"))
+        assertEquals("wallpaperflare.com", cloudflareZoneOf("www.wallpaperflare.com"))
+        assertEquals("wallpaperflare.com", cloudflareZoneOf("c4.wallpaperflare.com"))
+        // Guarded suffixes step one label deeper, so sibling hosts under a
+        // country-code second level still share ONE zone — not the suffix.
+        assertEquals("site.co.uk", cloudflareZoneOf("www.site.co.uk"))
+        assertEquals("site.co.uk", cloudflareZoneOf("cdn.site.co.uk"))
+        // Short and degenerate inputs return as-is; they never earn state.
+        assertEquals("localhost", cloudflareZoneOf("localhost"))
+        assertEquals("host.example", cloudflareZoneOf("host.example"))
+    }
+
+    @Test
+    fun aClearanceEarnedForTheSiteServesTheImageCdn() =
+        runTest {
+            val solver = ScriptedSolver()
+            val bypasser = CloudflareBypasser(solver)
+
+            // The document host's challenge solved once...
+            val earned = bypasser.solve("https://wallpapersden.com/popular-wallpapers/")
+            assertNotNull(earned)
+            assertEquals(1, solver.solvedUrls.size)
+
+            // ...and the image CDN of the SAME zone rides it — no second
+            // solve, no second dialog, the one-identity contract that
+            // wallpapersden.com's shared zone demanded.
+            assertSame(earned, bypasser.bypassStateFor("https://images.wallpapersden.com/image/ws-x_1.jpg"))
+            assertEquals(1, solver.solvedUrls.size)
+
+            // The snapshot seam tells the app's image pipeline the same
+            // story — by host, not URL.
+            assertSame(earned, bypasser.currentBypassFor("images.wallpapersden.com"))
+            assertNull(bypasser.currentBypassFor("c4.wallpaperflare.com"))
+        }
+
+    @Test
+    fun oneWarmProbePerZoneServesEverySibling() =
+        runTest {
+            val solver = ScriptedSolver()
+            val bypasser = CloudflareBypasser(solver)
+
+            // Whichever sibling asks first reads the jar; the second
+            // sibling's lookups ride the cached answer — one probe per
+            // ZONE per launch, not per hostname.
+            solver.persisted = CloudflareBypass(cookieHeader = "cf_clearance=kept", userAgent = "WebViewDefault/1")
+            val first = bypasser.bypassStateFor("https://wallpapersden.com/popular-wallpapers/")
+            val second = bypasser.bypassStateFor("https://images.wallpapersden.com/image/ws-x_1.jpg")
+
+            assertEquals("cf_clearance=kept", first?.cookieHeader)
+            assertSame(first, second)
+            assertEquals(listOf("wallpapersden.com"), solver.persistedHosts)
+        }
+
+    @Test
+    fun aFailedSolveCoolsTheWholeZone() =
+        runTest {
+            var now = 0L
+            val solver =
+                ScriptedSolver().apply {
+                    next = null // the challenge never settles
+                }
+            val bypasser = CloudflareBypasser(solver) { now }
+
+            assertNull(bypasser.solve("https://wallpapersden.com/popular-wallpapers/"))
+            assertEquals(1, solver.solvedUrls.size)
+
+            // The CDN's solve lane is the SITE's lane — the same zone just
+            // failed, and no sibling spawns its own dialog inside the window.
+            now = CloudflareBypasser.FAILURE_COOLDOWN_MS / 2
+            assertNull(bypasser.solve("https://images.wallpapersden.com/image/ws-x_1.jpg"))
+            assertEquals(1, solver.solvedUrls.size)
         }
 }

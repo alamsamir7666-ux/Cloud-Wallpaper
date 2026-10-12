@@ -6,6 +6,7 @@ import android.app.Dialog
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
+import android.view.View
 import android.view.ViewGroup
 import android.view.Window
 import android.webkit.CookieManager
@@ -14,6 +15,8 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.LinearLayout
+import android.widget.TextView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -21,6 +24,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.ByteArrayInputStream
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 
 /**
@@ -92,6 +96,25 @@ import kotlin.coroutines.resume
  * for the same reason: a jar poisoned by a failed challenge loop makes
  * the next WebView trip start from the losing state instead of clean.
  *
+ * v1.2.11: the wallpapersden.com lesson. That zone's bot management
+ * challenges even the engine — an INTERACTIVE Turnstile checkbox, not
+ * an auto-settling shell — so the user's part in the bargain became the
+ * whole game, and the app played it badly on three counts, all fixed
+ * here. First, the dialog was unexplained: a full-screen Cloudflare page
+ * with a checkbox the user had no idea they should tap, so the challenge
+ * just sat there; the visible dialogs now carry a slim header strip that
+ * says what is happening and what to do, and the clearance it earns is
+ * remembered, so the ask is once per cookie lifetime. Second, the dialog
+ * was inescapable: a stuck challenge trapped the user for a full minute
+ * with no way out; the visible dialogs are now back-cancelable, and a
+ * dismissal fails that rung within one poll beat. Third, the ladder
+ * marched the user through the SAME page twice: a solve that never
+ * settled (60 s) escalated into a second visible fetch dialog (65 s)
+ * showing the very challenge that just refused to settle — over two
+ * minutes of Groundhog Day before the honest failure. A zone whose
+ * attached attempt just failed now gets one detached best-effort trip
+ * for the fetch rung instead, and the error surfaces a minute sooner.
+ *
  * Everything runs on the main dispatcher: WebView demands a Looper thread,
  * and the main thread is the one that always has one. The poll loop below
  * is `delay`-based, so the caller's timeout (see [CloudflareBypasser])
@@ -132,9 +155,17 @@ internal class WebViewCloudflareSolver(
                     solveDetached(url, host)
                 } else {
                     // Showing over an activity that dies mid-handoff throws —
-                    // the detached WebView is the fallback, not a null.
-                    runCatching { solveAttached(activity, url, host) }.getOrNull()
-                        ?: solveDetached(url, host)
+                    // the detached WebView is the fallback, not a null. A
+                    // failure HERE means the user watched a dialog and it
+                    // didn't settle — remembered, so the fetch rung below
+                    // does not make them watch the same page twice.
+                    val solved = runCatching { solveAttached(activity, url, host) }.getOrNull()
+                    if (solved == null) {
+                        recordAttachedFailure(host)
+                        solveDetached(url, host)
+                    } else {
+                        solved
+                    }
                 }
             }
         }
@@ -164,17 +195,28 @@ internal class WebViewCloudflareSolver(
                 // their checks, while the user still sees nothing at all.
                 // Only when no window exists does the trip fall back to
                 // the truly detached WebView.
+                //
+                // v1.2.11: an attached attempt that failed RECENTLY for
+                // this zone means the user just watched this challenge
+                // not settle — escalating straight back into another
+                // visible dialog is the same page for another minute.
+                // One quiet detached trip instead, then the honest null.
                 if (hasClearanceFor(host)) {
                     fetchQuiet(url, host)?.let { return@withContext it }
                     clearCookiesFor(host)
                 }
                 val activity =
                     foregroundActivity()?.takeUnless { it.isFinishing || it.isDestroyed }
-                if (activity == null) {
+                return@withContext if (activity == null || recentlyFailedAttached(host)) {
                     fetchDetached(url, host)
                 } else {
-                    runCatching { fetchAttached(activity, url, host) }.getOrNull()
-                        ?: fetchDetached(url, host)
+                    val page = runCatching { fetchAttached(activity, url, host) }.getOrNull()
+                    if (page == null) {
+                        recordAttachedFailure(host)
+                        fetchDetached(url, host)
+                    } else {
+                        page
+                    }
                 }
             }
         }
@@ -206,12 +248,43 @@ internal class WebViewCloudflareSolver(
     }
 
     /**
+     * Marks that a VISIBLE challenge trip for [host]'s zone just failed —
+     * the user watched the dialog and the challenge did not settle
+     * (timeout, rejection, or their own back-cancel). Keyed by zone, like
+     * every Cloudflare state since v1.2.11: the site and its image CDN
+     * share one zone, and one watched failure is one too many for both.
+     */
+    private fun recordAttachedFailure(host: String) {
+        attachedFailureAt[cloudflareZoneOf(host)] = System.currentTimeMillis()
+    }
+
+    /**
+     * Whether a visible trip failed recently for [host]'s zone — the
+     * signal that suppresses the fetch rung's second dialog. The window
+     * outlasts one ladder walk (solve fail → fetch attempt) comfortably
+     * while leaving a manual Retry a few seconds later its fresh, honest
+     * walk — the user who wants to try again gets the dialog again.
+     */
+    private fun recentlyFailedAttached(host: String): Boolean {
+        val failedAt = attachedFailureAt[cloudflareZoneOf(host)] ?: return false
+        return System.currentTimeMillis() - failedAt < ATTACHED_FAILURE_COOLDOWN_MS
+    }
+
+    /**
      * The foreground path: the challenge runs in a full-screen borderless
      * dialog over the resumed activity. The user briefly sees Cloudflare's
      * own "Just a moment…" page — the honest UI for what is happening —
      * and can complete an interactive challenge with a tap if one appears.
      * Dismissal in `finally` guarantees the dialog never outlives the
      * solve, whatever its outcome.
+     *
+     * v1.2.11: the dialog is no longer a riddle. A slim header strip
+     * names the host and tells the user to tap the checkbox when one
+     * appears — wallpapersden.com's zone challenges the ENGINE with an
+     * interactive Turnstile, and a checkbox nobody knows to tap is a
+     * source that never loads. The dialog is also back-cancelable now:
+     * a stuck challenge is an exit the user deserves, not a minute-long
+     * trap, and a dismissal fails the rung within one poll beat.
      */
     private suspend fun solveAttached(
         activity: Activity,
@@ -220,30 +293,11 @@ internal class WebViewCloudflareSolver(
     ): CloudflareBypass? {
         val client = ChallengeClient()
         val webView = createWebView(client)
-        val dialog =
-            Dialog(activity).apply {
-                requestWindowFeature(Window.FEATURE_NO_TITLE)
-                setCancelable(false)
-                setCanceledOnTouchOutside(false)
-                setContentView(
-                    webView,
-                    ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    ),
-                )
-                window?.apply {
-                    setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-                    setLayout(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    )
-                }
-            }
+        val dialog = challengeDialog(activity, webView, host, visible = true)
         return try {
             dialog.show()
             webView.loadUrl(url)
-            waitForClearance(client, webView, host, url)
+            waitForClearance(client, webView, host, url) { dialog.isShowing }
         } finally {
             runCatching { dialog.dismiss() }
             runCatching { webView.stopLoading() }
@@ -299,13 +353,14 @@ internal class WebViewCloudflareSolver(
     /**
      * One document-fetch trip in a dialog window over [activity]: visible
      * when [visible], fully transparent otherwise. The dialog discipline —
-     * non-cancelable, dismissed in `finally`, WebView torn down with it —
-     * is identical for both; only the window's compositing differs, and
-     * with it the interstitial policy: a VISIBLE dialog is where a
-     * challenge settles in front of the user (fail-fast off — the page
-     * that arrives after the settle is the fetch's answer), while an
-     * INVISIBLE one the user cannot interact with treats the interstitial
-     * as a dead end and escalates (fail-fast on).
+     * dismissed in `finally`, WebView torn down with it — is identical for
+     * both; only the window's compositing (and, with it, the interstitial
+     * policy) differs: a VISIBLE dialog is where a challenge settles in
+     * front of the user (fail-fast off — the page that arrives after the
+     * settle is the fetch's answer, and v1.2.11 gives it the same explainer
+     * strip and back-cancel as the solve dialog), while an INVISIBLE one
+     * the user cannot interact with treats the interstitial as a dead end
+     * and escalates (fail-fast on).
      */
     private suspend fun fetchInDialog(
         activity: Activity,
@@ -315,36 +370,7 @@ internal class WebViewCloudflareSolver(
     ): WebViewPage? {
         val client = ChallengeClient()
         val webView = createWebView(client)
-        val dialog =
-            Dialog(activity).apply {
-                requestWindowFeature(Window.FEATURE_NO_TITLE)
-                setCancelable(false)
-                setCanceledOnTouchOutside(false)
-                setContentView(
-                    webView,
-                    ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    ),
-                )
-                window?.apply {
-                    setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-                    setLayout(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    )
-                    if (!visible) {
-                        // Zero alpha, zero dim: the window attaches and lays
-                        // out — the page runs as a real, visible document —
-                        // while the compositor draws nothing over the app.
-                        attributes =
-                            attributes.apply {
-                                alpha = 0f
-                                dimAmount = 0f
-                            }
-                    }
-                }
-            }
+        val dialog = challengeDialog(activity, webView, host, visible)
         return try {
             dialog.show()
             webView.loadUrl(url)
@@ -355,6 +381,7 @@ internal class WebViewCloudflareSolver(
                 url,
                 FETCH_DEADLINE_MS,
                 failFastOnInterstitial = !visible,
+                dismissed = { dialog.isShowing },
             )
         } finally {
             runCatching { dialog.dismiss() }
@@ -378,6 +405,88 @@ internal class WebViewCloudflareSolver(
             runCatching { webView.destroy() }
         }
     }
+
+    /**
+     * The dialog a challenge runs in (v1.2.11): full-screen and borderless
+     * as always, but VISIBLE trips now stack a slim explainer strip above
+     * the WebView — the host under check and the one instruction that
+     * matters (tap the checkbox; the app remembers the pass) — and are
+     * cancelable with the back key, so a challenge that will not settle
+     * is a dead end the user can walk out of instead of a trap. Invisible
+     * trips keep the plain zero-alpha window and stay non-cancelable:
+     * nothing is on screen, so no back-press is ever aimed at them.
+     */
+    private fun challengeDialog(
+        activity: Activity,
+        webView: WebView,
+        host: String,
+        visible: Boolean,
+    ): Dialog =
+        Dialog(activity).apply {
+            requestWindowFeature(Window.FEATURE_NO_TITLE)
+            setCancelable(visible)
+            setCanceledOnTouchOutside(false)
+            setContentView(
+                if (visible) challengeContent(activity, webView, host) else webView,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            window?.apply {
+                setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                setLayout(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                if (!visible) {
+                    // Zero alpha, zero dim: the window attaches and lays
+                    // out — the page runs as a real, visible document —
+                    // while the compositor draws nothing over the app.
+                    attributes =
+                        attributes.apply {
+                            alpha = 0f
+                            dimAmount = 0f
+                        }
+                }
+            }
+        }
+
+    /**
+     * The visible trip's content: the explainer strip over the challenge
+     * page itself. Densities are honored (px paddings scaled by the
+     * display density), the strip's dark surface reads as app chrome
+     * above whatever Cloudflare's page looks like, and the WebView takes
+     * every remaining pixel so the challenge loses nothing it had.
+     */
+    private fun challengeContent(
+        activity: Context,
+        webView: WebView,
+        host: String,
+    ): View =
+        LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(HINT_BACKGROUND)
+            val density = resources.displayMetrics.density
+            fun dp(value: Int): Int = (value * density).toInt()
+            addView(
+                TextView(activity).apply {
+                    text = HINT_FORMAT.format(host)
+                    textSize = HINT_TEXT_SIZE_SP
+                    setTextColor(HINT_TEXT_COLOR)
+                    setLineSpacing(dp(2).toFloat(), 1f)
+                    setPadding(dp(20), dp(14), dp(20), dp(14))
+                },
+            )
+            addView(
+                webView,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f,
+                ),
+            )
+        }
 
     /**
      * A WebView configured to look and behave like the browser the zone
@@ -436,6 +545,7 @@ internal class WebViewCloudflareSolver(
         webView: WebView,
         host: String,
         url: String,
+        dismissed: () -> Boolean = { false },
     ): CloudflareBypass? {
         // Read once: the identity this solve binds its cookies to. A device
         // that cannot report a default agent cannot earn an honest pair.
@@ -443,6 +553,13 @@ internal class WebViewCloudflareSolver(
         val deadline = System.currentTimeMillis() + SOLVE_DEADLINE_MS
         var contentCheckedForFinish = -1
         while (System.currentTimeMillis() < deadline) {
+            if (dismissed()) {
+                // v1.2.11: the user backed out of the challenge — this trip
+                // earned nothing, and the jar keeps the same clean-slate
+                // discipline a timed-out trip gets.
+                clearCookiesFor(host)
+                return null
+            }
             delay(POLL_INTERVAL_MS)
             val cookies =
                 cookieManager.getCookie(url)
@@ -510,10 +627,17 @@ internal class WebViewCloudflareSolver(
         url: String,
         deadlineMs: Long,
         failFastOnInterstitial: Boolean,
+        dismissed: () -> Boolean = { false },
     ): WebViewPage? {
         val deadline = System.currentTimeMillis() + deadlineMs
         var extractedForFinish = -1
         while (System.currentTimeMillis() < deadline) {
+            if (dismissed()) {
+                // v1.2.11: the user backed out of the visible fetch dialog —
+                // no document is coming from a window they closed.
+                clearCookiesFor(host)
+                return null
+            }
             delay(POLL_INTERVAL_MS)
             val finishedAt = client.lastFinishedAt
             val settled = finishedAt > 0 && System.currentTimeMillis() - finishedAt >= SETTLE_AFTER_FINISH_MS
@@ -814,5 +938,33 @@ internal class WebViewCloudflareSolver(
          * the HTTP client re-downloads seconds later (v1.2.7).
          */
         val ORIGINAL_IMAGE_HOST = Regex("""^r\d+\.wallpaperflare\.com$""")
+
+        /**
+         * How long a failed VISIBLE trip suppresses the next one — long
+         * enough to cover the ladder walk that watched the failure (the
+         * fetch rung immediately after the solve), short enough that a
+         * deliberate Retry a little later earns its fresh dialog (v1.2.11).
+         */
+        const val ATTACHED_FAILURE_COOLDOWN_MS = 30_000L
+
+        /** The explainer strip's surface — dark app chrome over the page. */
+        const val HINT_BACKGROUND = 0xFF101418.toInt()
+
+        /** The strip's copy color — quiet white, not headline white. */
+        const val HINT_TEXT_COLOR = 0xFFE6EAF0.toInt()
+
+        /** The strip's text size — small print for a one-line instruction. */
+        const val HINT_TEXT_SIZE_SP = 13f
+
+        /**
+         * The strip's copy: what is happening, the ONE thing to do, and
+         * the promise that it is not asked often — the three facts a
+         * full-screen Cloudflare page never tells the user itself.
+         */
+        const val HINT_FORMAT =
+            "%s is checking your browser. Tap the checkbox if the page shows one — done once, the app remembers it."
     }
+
+    /** When a visible challenge trip last failed, per zone — see [recentlyFailedAttached]. */
+    private val attachedFailureAt = ConcurrentHashMap<String, Long>()
 }

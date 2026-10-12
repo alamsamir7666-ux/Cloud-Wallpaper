@@ -232,6 +232,51 @@ object CloudflareChallenge {
 }
 
 /**
+ * The zone a host's Cloudflare state belongs to: the registrable domain
+ * (the eTLD+1 a `cf_clearance` cookie is issued for), approximated
+ * without shipping a full Public Suffix List.
+ *
+ * v1.2.11 exists because of this function. wallpapersden.com keeps its
+ * site AND its image CDN (`images.wallpapersden.com`) inside one
+ * Cloudflare zone, so a clearance the site's challenge earned is the
+ * image host's clearance too — but the engine keyed every clearance by
+ * the exact hostname that earned it, and the app's image pipeline (Coil,
+ * which never rides the document ladder) asked `images.` for a cookie it
+ * had every right to and got nothing. Keying by zone instead lets the
+ * sibling hosts share one earned identity: the site's solve covers the
+ * CDN's thumbnails, and one challenge per zone — not one per hostname —
+ * is what the user experiences.
+ *
+ * The approximation is "last two labels", except where those two labels
+ * are themselves a public suffix (`co.uk`, `com.au`, …) — then the zone
+ * is the last three. IP literals and single-label hosts return as-is;
+ * they never earn clearances anyway. Hosts under a suffix deeper than
+ * three labels (none in this app's world) degrade to the last three —
+ * a wider zone key that can only over-share a clearance that was issued
+ * zone-wide in the first place, never under-share one.
+ */
+internal fun cloudflareZoneOf(host: String): String {
+    val labels = host.split('.').filter { it.isNotBlank() }
+    if (labels.size <= 2) return host
+    val lastTwo = labels.takeLast(2).joinToString(".")
+    return if (lastTwo in ZONE_SUFFIX_GUARD) labels.takeLast(3).joinToString(".") else lastTwo
+}
+
+/**
+ * Two-label public suffixes worth guarding against — the common
+ * country-code second-level domains, not the whole PSL. A wrong entry
+ * here merges (or splits) zones for hosts this app never visits; the
+ * ones listed are the suffixes a wallpaper source could plausibly live
+ * under.
+ */
+private val ZONE_SUFFIX_GUARD =
+    setOf(
+        "co.uk", "org.uk", "gov.uk", "ac.uk", "edu.au", "com.au", "net.au", "org.au", "gov.au",
+        "co.jp", "or.jp", "ne.jp", "co.in", "co.nz", "co.za", "com.bd", "com.br", "com.cn",
+        "com.hk", "com.mx", "com.pk", "com.sg", "com.tr", "com.tw", "com.ar",
+    )
+
+/**
  * The machinery behind [CloudflareBypasser] — in production, a headless
  * Android WebView that runs the challenge for real. Split out as an
  * interface so the state machine around it (locking, cooldowns, warm
