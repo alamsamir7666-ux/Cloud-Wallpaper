@@ -5,7 +5,8 @@
 **A CloudStream-inspired wallpaper app for Android.** The app is an engine; the
 content is plugins. Cloudimage ships as a clean, fast Material 3 client and
 gets its wallpaper sources from user-added extension repositories — with
-official providers (Wallhaven, Unsplash, Pexels, Pixabay, WallpaperCave)
+official providers (Wallhaven, Unsplash, Pexels, Pixabay, WallpaperCave,
+HDQWalls, WallpaperFlare, WallpapersDen)
 published in the official repo from day one.
 
 > **Status:** `v1.0.0` — feature complete (8/8 parts). See [PLAN.md](PLAN.md).
@@ -53,7 +54,7 @@ Single-activity Jetpack Compose app, unidirectional data flow, feature modules.
 | `:core:muzei` | Muzei source provider — the app as a Muzei artwork source |
 | `:core:testing` | Test doubles (fake repositories, dispatcher rule) |
 | `:extensions:core` | Plugin engine — install, verify, load, repos |
-| `:providers:*` | Official plugins — wallhaven (bundled), unsplash, pexels, pixabay, wallpapercave (scraped) |
+| `:providers:*` | Official plugins — wallhaven (bundled), unsplash, pexels, pixabay, wallpapercave, hdqwalls, wallpaperflare, wallpapersden (scraped) |
 | `:feature:browse` | Home grid, search |
 | `:feature:detail` | Preview & apply |
 | `:feature:extensions` | Plugin/repo manager |
