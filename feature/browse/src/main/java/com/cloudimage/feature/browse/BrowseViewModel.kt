@@ -17,6 +17,7 @@ import com.cloudimage.core.model.Page
 import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.core.model.WallpaperQuery
 import com.cloudimage.core.model.WallpaperSorting
+import com.cloudimage.core.network.CloudflareBypasser
 import com.cloudimage.core.network.NetworkError
 import com.cloudimage.core.network.onFailure
 import com.cloudimage.core.network.onSuccess
@@ -311,6 +312,7 @@ class BrowseViewModel
         private val sources: WallpaperSources,
         private val userPreferencesRepository: UserPreferencesRepository,
         private val historyRepository: HistoryRepository,
+        private val cloudflareBypasser: CloudflareBypasser,
     ) : ViewModel() {
         private val _state = MutableStateFlow(BrowseUiState())
         val state: StateFlow<BrowseUiState> = _state.asStateFlow()
@@ -659,6 +661,10 @@ class BrowseViewModel
 
         /** The failure chip's retry: re-runs the merged search under the committed query. */
         fun onRetrySearch() {
+            // The user asked for another attempt — the Cloudflare cooldowns
+            // that swallowed the walk that just failed must not swallow this
+            // one too (v1.2.12: the dead Retry was the 403's last insult).
+            cloudflareBypasser.forgiveFailures()
             restartFeed()
         }
 
@@ -800,6 +806,13 @@ class BrowseViewModel
 
         /** Retry from wherever the feed died: empty restarts, tail appends. */
         fun onRetry() {
+            // v1.2.12: a Retry press is the user's explicit, human-paced
+            // request for another attempt at the zone — forgive the failure
+            // cooldowns so the ladder gets its fresh visible walk (and the
+            // challenge dialog its fresh chance) instead of answering with
+            // the instant 403 a cooling zone gave. Earned clearances ride
+            // along untouched; only failure state is forgotten.
+            cloudflareBypasser.forgiveFailures()
             val current = _state.value
             when {
                 current.mode == BrowseMode.ALBUMS -> retryAlbumContent()

@@ -162,6 +162,23 @@ object CloudflareChallenge {
     /** The `<title>` element, whatever case the page spells it in. */
     private val TITLE_REGEX = Regex("""<title[^>]*>(.*?)</title>""", RegexOption.IGNORE_CASE)
 
+    /**
+     * The `<title>` markers of Cloudflare's BLOCK pages — the titles the
+     * hard-block document check ([isHardBlockDocument]) reads. Kept apart
+     * from [TITLE_MARKERS] because the two document checks answer
+     * different questions: an interstitial title means "keep waiting (or
+     * tap)", a block title means "leave now, nothing is coming".
+     */
+    private val BLOCK_TITLE_MARKERS =
+        listOf(
+            // The IP-block / WAF-block page title, every variant.
+            "Attention Required",
+            // The plain "blocked" variant's title.
+            "Sorry, you have been blocked",
+            // The access-denied (1020 / country rule) title.
+            "Access denied",
+        )
+
     /** Whether a completed exchange [payload] is a Cloudflare challenge page. */
     fun isChallenge(payload: HttpPayload): Boolean = isChallenge(payload.statusCode, payload.headers, payload.bodyText)
 
@@ -196,6 +213,32 @@ object CloudflareChallenge {
                 .orEmpty()
         if (TITLE_MARKERS.any { title.contains(it, ignoreCase = true) }) return true
         return FORM_MARKERS.any(html::contains)
+    }
+
+    /**
+     * Whether a WebView-rendered [html] document is Cloudflare's BLOCK
+     * page — "Attention Required!", "Sorry, you have been blocked", the
+     * access-denied variants — rather than a challenge shell or site
+     * content. The distinction the visible challenge rungs need (v1.2.12):
+     * a challenge shell settles (or waits for the user's tap on an
+     * interactive one), while a BLOCK page is the zone refusing the
+     * ENGINE itself — no checkbox is ever coming, and parking the dialog
+     * on one for the full solve window with a hint strip that promises a
+     * tap is a minute-long lie. Title-led like [isInterstitialDocument]
+     * (Cloudflare's own pages announce themselves in their `<title>`;
+     * content pages never share these titles), with the block body copy
+     * as the fallback for title-less edge responses.
+     */
+    fun isHardBlockDocument(html: String): Boolean {
+        if (html.isEmpty()) return false
+        val title =
+            TITLE_REGEX
+                .find(html)
+                ?.groupValues
+                ?.getOrNull(1)
+                .orEmpty()
+        if (BLOCK_TITLE_MARKERS.any { title.contains(it, ignoreCase = true) }) return true
+        return BLOCK_MARKERS.any(html::contains)
     }
 
     /**
@@ -337,4 +380,16 @@ interface CloudflareSolver {
      * replay path first.
      */
     suspend fun fetch(url: String): WebViewPage? = null
+
+    /**
+     * Forgets the solver's own failure memory — the record of VISIBLE
+     * trips that failed recently, which otherwise suppresses the next
+     * visible one for the zone (v1.2.11's no-second-dialog rule). Called
+     * by [CloudflareBypasser.forgiveFailures] when the USER explicitly
+     * asks for another attempt — a Retry button — as opposed to the
+     * automatic stampede of a screen load, which the cooldowns exist to
+     * absorb. Default no-op: JVM doubles and solvers with no failure
+     * memory have nothing to forget.
+     */
+    fun resetFailureMemory() {}
 }

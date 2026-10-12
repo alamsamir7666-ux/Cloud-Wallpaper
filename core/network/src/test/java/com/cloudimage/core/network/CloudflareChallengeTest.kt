@@ -318,4 +318,57 @@ class CloudflareChallengeTest {
 
         assertFalse(CloudflareChallenge.isInterstitialDocument(html))
     }
+
+    @Test
+    fun hardBlockDocumentsAreRecognizedAsDeadEnds() {
+        // v1.2.12: the zone refusing the ENGINE — every title variant of
+        // Cloudflare's block pages, which the visible challenge rungs must
+        // treat as "leave now" rather than "keep waiting for a tap".
+        assertTrue(
+            CloudflareChallenge.isHardBlockDocument(
+                "<html><head><title>Attention Required! | Cloudflare</title></head><body>ray-id</body></html>",
+            ),
+        )
+        assertTrue(
+            CloudflareChallenge.isHardBlockDocument(
+                "<html><head><title>Sorry, you have been blocked</title></head></html>",
+            ),
+        )
+        assertTrue(
+            CloudflareChallenge.isHardBlockDocument(
+                "<html><head><title>Access denied | wallpapersden.com</title></head></html>",
+            ),
+        )
+    }
+
+    @Test
+    fun challengeShellsAndContentAreNotHardBlocks() {
+        // A challenge shell still deserves its window (or the user's tap),
+        // and honest content is never collateral.
+        assertFalse(
+            CloudflareChallenge.isHardBlockDocument(
+                "<html><head><title>Just a moment...</title></head></html>",
+            ),
+        )
+        assertFalse(
+            CloudflareChallenge.isHardBlockDocument(
+                "<html><head><title>Best 4K Wallpapers - WallpapersDen</title></head></html>",
+            ),
+        )
+        assertFalse(CloudflareChallenge.isHardBlockDocument(""))
+    }
+
+    @Test
+    fun aHardBlockIsAlsoInterstitialButNotViceVersa() {
+        // The block page IS Cloudflare furniture — the fail-fast lanes keep
+        // their existing dead-end verdict on it — while isHardBlockDocument
+        // is the narrower verdict the VISIBLE lanes key their exit on.
+        val block = "<html><head><title>Attention Required! | Cloudflare</title></head></html>"
+        val challenge = "<html><head><title>Just a moment...</title></head></html>"
+
+        assertTrue(CloudflareChallenge.isInterstitialDocument(block))
+        assertTrue(CloudflareChallenge.isHardBlockDocument(block))
+        assertTrue(CloudflareChallenge.isInterstitialDocument(challenge))
+        assertFalse(CloudflareChallenge.isHardBlockDocument(challenge))
+    }
 }

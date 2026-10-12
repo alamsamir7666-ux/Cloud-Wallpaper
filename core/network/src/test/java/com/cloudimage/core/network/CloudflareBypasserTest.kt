@@ -52,6 +52,7 @@ class CloudflareBypasserTest {
         var persisted: CloudflareBypass? = null
         var next: CloudflareBypass? = CloudflareBypass(cookieHeader = "cf_clearance=fresh", userAgent = "SolverAgent/1")
         var nextPage: WebViewPage? = null
+        var failureMemoryResets = 0
 
         override suspend fun persistedStateFor(host: String): CloudflareBypass? {
             persistedHosts += host
@@ -66,6 +67,10 @@ class CloudflareBypasserTest {
         override suspend fun fetch(url: String): WebViewPage? {
             fetchedUrls += url
             return nextPage
+        }
+
+        override fun resetFailureMemory() {
+            failureMemoryResets += 1
         }
     }
 
@@ -478,6 +483,50 @@ class CloudflareBypasserTest {
             // failed, and no sibling spawns its own dialog inside the window.
             now = CloudflareBypasser.FAILURE_COOLDOWN_MS / 2
             assertNull(bypasser.solve("https://images.wallpapersden.com/image/ws-x_1.jpg"))
+            assertEquals(1, solver.solvedUrls.size)
+        }
+
+    @Test
+    fun forgivenFailuresLetTheSolverRunAgainImmediately() =
+        runTest {
+            // v1.2.12: the Retry button's contract. A zone that just failed
+            // swallows the next automatic request (the stampede the cooldown
+            // exists for), but forgiveFailures — the user's explicit ask —
+            // hands the very next solve its fresh, honest attempt, solver
+            // failure memory included.
+            val solver =
+                ScriptedSolver().apply {
+                    next = null // the zone refuses
+                }
+            val bypasser = CloudflareBypasser(solver)
+
+            assertNull(bypasser.solve("https://wallpapersden.com/popular-wallpapers/"))
+            assertNull(bypasser.solve("https://wallpapersden.com/latest-wallpapers/"))
+            assertEquals(1, solver.solvedUrls.size)
+            assertEquals(0, solver.failureMemoryResets)
+
+            bypasser.forgiveFailures()
+
+            assertNull(bypasser.solve("https://wallpapersden.com/latest-wallpapers/"))
+            assertEquals(2, solver.solvedUrls.size)
+            assertEquals(1, solver.failureMemoryResets)
+        }
+
+    @Test
+    fun forgivenessNeverCostsAnEarnedClearance() =
+        runTest {
+            // Forgetting failure state must not forget an identity the
+            // user's tap already earned — a cleared zone stays cleared, and
+            // no later request wakes the solver for it again.
+            val solver = ScriptedSolver()
+            val bypasser = CloudflareBypasser(solver)
+
+            assertNotNull(bypasser.solve("https://wallpapersden.com/popular-wallpapers/"))
+
+            bypasser.forgiveFailures()
+
+            val state = bypasser.bypassStateFor("https://images.wallpapersden.com/image/ws-x_1.jpg")
+            assertEquals("cf_clearance=fresh", state?.cookieHeader)
             assertEquals(1, solver.solvedUrls.size)
         }
 }

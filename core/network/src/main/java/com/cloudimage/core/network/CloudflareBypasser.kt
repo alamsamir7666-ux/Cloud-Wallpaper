@@ -127,6 +127,29 @@ class CloudflareBypasser(
     fun currentBypassFor(host: String): CloudflareBypass? = cleared[cloudflareZoneOf(host)]
 
     /**
+     * Clears every FAILURE cooldown — the solve and fetch quiet-downs and
+     * the solver's memory of recently-failed VISIBLE trips — without
+     * touching a single earned clearance (v1.2.12).
+     *
+     * The cooldowns exist to absorb the automatic stampede of one screen
+     * load: the grid fires a dozen rows at the challenged zone, the lock
+     * serializes them, and after the first failure the rest must fail
+     * fast instead of stacking WebView trips. But the USER's Retry is the
+     * opposite signal — an explicit, human-paced request to try the zone
+     * again — and within the 15s/30s windows it was being swallowed
+     * exactly like a stamped row: an instant 403, no dialog, nothing to
+     * tap, which reads as "the app is dead" rather than "the ladder is
+     * cooling". The v1.2.11 field report ended at precisely that dead
+     * Retry. Failure state is what forgiveness clears; an earned identity
+     * is never collateral — a zone the user already cleared stays cleared.
+     */
+    fun forgiveFailures() {
+        solveFailedAt.clear()
+        fetchFailedAt.clear()
+        runCatching { solver.resetFailureMemory() }
+    }
+
+    /**
      * Solves a challenge for the host of [url] and returns the fresh
      * clearance, or null when none could be earned.
      *

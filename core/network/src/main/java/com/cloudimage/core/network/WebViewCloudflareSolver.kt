@@ -159,13 +159,25 @@ internal class WebViewCloudflareSolver(
                     // failure HERE means the user watched a dialog and it
                     // didn't settle — remembered, so the fetch rung below
                     // does not make them watch the same page twice.
-                    val solved = runCatching { solveAttached(activity, url, host) }.getOrNull()
-                    if (solved == null) {
-                        recordAttachedFailure(host)
-                        solveDetached(url, host)
-                    } else {
-                        solved
-                    }
+                    //
+                    // v1.2.12: an attached trip that RAN and answered null
+                    // settled on something a hidden retry cannot clear — the
+                    // user backed out, the zone hard-blocked the engine, or
+                    // the page was content with no clearance to earn (the
+                    // fetch rung's own quiet trip serves that shape). The old
+                    // solveDetached fallback here spun a hidden WebView for
+                    // the rest of the solve window anyway — up to a minute of
+                    // dead air the user could neither see nor win, which is
+                    // exactly how the v1.2.11 field report read: back out of
+                    // the dialog, the app goes silent, then the 403. Only an
+                    // attached trip that died with an EXCEPTION (the activity
+                    // finished under the dialog) keeps the detached
+                    // best-effort: that was no honest failure, the window
+                    // simply vanished mid-settle.
+                    val attached = runCatching { solveAttached(activity, url, host) }
+                    attached.getOrNull()?.let { return@withContext it }
+                    recordAttachedFailure(host)
+                    if (attached.exceptionOrNull() != null) solveDetached(url, host) else null
                 }
             }
         }
@@ -578,11 +590,22 @@ internal class WebViewCloudflareSolver(
             // clearance check runs first so a settle-and-swap navigation
             // (cookie lands, then content replaces the shell) returns the
             // earned state rather than bailing.
+            //
+            // v1.2.12 adds the hard-block exit above it: a page that settled
+            // on "Attention Required!" is the zone refusing the ENGINE —
+            // no cookie is coming and no tap exists to give. Without this
+            // the dialog parked on the block page for the full window with
+            // a hint strip promising a checkbox that never appears, and
+            // the detached solve spun the same dead page out of sight.
             val finishedAt = client.lastFinishedAt
             val settled = finishedAt > 0 && System.currentTimeMillis() - finishedAt >= SETTLE_AFTER_FINISH_MS
             if (settled && client.finished != contentCheckedForFinish) {
                 contentCheckedForFinish = client.finished
                 val html = webView.extractHtml() ?: continue
+                if (CloudflareChallenge.isHardBlockDocument(html)) {
+                    clearCookiesFor(host)
+                    return null
+                }
                 if (!CloudflareChallenge.isInterstitialDocument(html)) return null
             }
         }
@@ -646,7 +669,13 @@ internal class WebViewCloudflareSolver(
                 extractedForFinish = client.finished
                 val html = webView.extractHtml() ?: continue
                 if (CloudflareChallenge.isInterstitialDocument(html)) {
-                    if (failFastOnInterstitial) return null
+                    // v1.2.12: a settled HARD BLOCK is a dead end in every
+                    // lane — the fail-fast discipline the hidden trips
+                    // already had, extended to the visible one, so a dialog
+                    // parked on "Attention Required!" exits immediately
+                    // instead of outlasting its welcome with a hint that
+                    // promises a checkbox the page will never show.
+                    if (failFastOnInterstitial || CloudflareChallenge.isHardBlockDocument(html)) return null
                     continue
                 }
                 // Site content — but its JavaScript may still be writing the
@@ -968,4 +997,15 @@ internal class WebViewCloudflareSolver(
 
     /** When a visible challenge trip last failed, per zone — see [recentlyFailedAttached]. */
     private val attachedFailureAt = ConcurrentHashMap<String, Long>()
+
+    /**
+     * The user asked to try again — the Retry button's signal that the
+     * next attempt is human-paced, not another row of the stampede the
+     * cooldown exists to absorb. The record of visible failures is what
+     * suppresses the fetch rung's dialog; forgetting it hands the next
+     * walk its fresh, honest visible attempt (v1.2.12).
+     */
+    override fun resetFailureMemory() {
+        attachedFailureAt.clear()
+    }
 }

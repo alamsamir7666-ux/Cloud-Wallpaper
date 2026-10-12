@@ -15,6 +15,7 @@ import com.cloudimage.core.model.HistoryEntry
 import com.cloudimage.core.model.Page
 import com.cloudimage.core.model.WallpaperQuery
 import com.cloudimage.core.model.WallpaperSorting
+import com.cloudimage.core.network.CloudflareBypasser
 import com.cloudimage.core.network.NetworkError
 import com.cloudimage.core.network.NetworkResult
 import com.cloudimage.core.testing.FakeHistoryRepository
@@ -207,6 +208,7 @@ class BrowseViewModelTest {
                     sources = fake,
                     userPreferencesRepository = preferences,
                     historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
                 )
             viewModel.state.first { !it.isFirstLoading }
 
@@ -243,6 +245,7 @@ class BrowseViewModelTest {
                     sources = fake,
                     userPreferencesRepository = preferences,
                     historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
                 )
             viewModel.state.first { !it.isFirstLoading }
             preferences.setSfwOnly(false)
@@ -452,7 +455,13 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
             val preferences = newPreferences()
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
             viewModel.state.first { it.sourceBar.isNotEmpty() && !it.isFirstLoading }
 
             fake.enqueueSearch(page(ids = listOf("px1"), nextPage = null))
@@ -479,7 +488,13 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("p1"), nextPage = null))
 
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
 
             val state = viewModel.state.first { !it.isFirstLoading }
             assertEquals("pexels", state.selectedSourceId)
@@ -497,7 +512,13 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
             val preferences = newPreferences()
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
             viewModel.state.first { !it.isFirstLoading }
 
             viewModel.onSourceSelected("unsplash")
@@ -527,7 +548,13 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
             val preferences = newPreferences()
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
             viewModel.state.first { !it.isFirstLoading }
 
             fake.enqueueSearch(page(ids = listOf("p1"), nextPage = null))
@@ -952,7 +979,13 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("w1"), nextPage = null))
             val preferences = newPreferences()
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
             viewModel.state.first {
                 it.sections.isNotEmpty() &&
                     it.sections
@@ -1004,7 +1037,13 @@ class BrowseViewModelTest {
             )
             fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
             val preferences = newPreferences()
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
             viewModel.state.first {
                 it.sections
                     .singleOrNull()
@@ -1259,7 +1298,13 @@ class BrowseViewModelTest {
             preferences.addSearchQuery("nature")
             preferences.addSearchQuery("space")
             fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
             viewModel.state.first { it.history == listOf("space", "nature") }
 
             fake.enqueueSearch(page(ids = listOf("s1"), nextPage = null))
@@ -1278,7 +1323,13 @@ class BrowseViewModelTest {
             val preferences = newPreferences()
             preferences.addSearchQuery("nature")
             fake.enqueueSearch(page(ids = listOf("a"), nextPage = null))
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
             viewModel.state.first { it.history.isNotEmpty() }
 
             viewModel.onSearchFocusChange(true)
@@ -1327,7 +1378,13 @@ class BrowseViewModelTest {
             val preferences = newPreferences()
             preferences.setBrowseSourceId("cloudimage.a")
             fake.enqueueSearch(page(ids = emptyList(), nextPage = null))
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
 
             val state = viewModel.state.first { !it.isFirstLoading }
 
@@ -1381,7 +1438,13 @@ class BrowseViewModelTest {
             fake.scriptedHomeAlbums = NetworkResult.Success(listOf(sourceAlbum("attack-on-titan", count = 70)))
             val preferences = newPreferences()
             preferences.setBrowseSourceId("cloudimage.wallpaperaccess")
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
 
             val state =
                 viewModel.state.first {
@@ -1422,7 +1485,13 @@ class BrowseViewModelTest {
                 NetworkResult.Success(listOf(fakeWallpaper("w1"), fakeWallpaper("w2")))
             val preferences = newPreferences()
             preferences.setBrowseSourceId("cloudimage.wallpaperaccess")
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
             viewModel.state.first { it.mode == BrowseMode.ALBUMS && !it.albumContent.isLoading }
 
             val anime = albumCategory("anime")
@@ -1477,7 +1546,13 @@ class BrowseViewModelTest {
             fake.scriptedSearchAlbums = NetworkResult.Success(listOf(sourceAlbum("naruto"), sourceAlbum("naruto-shippuden")))
             val preferences = newPreferences()
             preferences.setBrowseSourceId("cloudimage.wallpaperaccess")
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
             viewModel.state.first { it.mode == BrowseMode.ALBUMS && !it.albumContent.isLoading }
 
             viewModel.onSearchTextChange("naruto")
@@ -1518,7 +1593,13 @@ class BrowseViewModelTest {
                 NetworkResult.Success(listOf(fakeWallpaper("w1"), fakeWallpaper("w2")))
             val preferences = newPreferences()
             preferences.setBrowseSourceId("cloudimage.wallpaperaccess")
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
             viewModel.state.first { it.mode == BrowseMode.ALBUMS && !it.albumContent.isLoading }
 
             viewModel.onSearchTextChange("naruto")
@@ -1576,7 +1657,13 @@ class BrowseViewModelTest {
                 NetworkResult.Failure(NetworkError.Source("wallpaperaccess is having a moment"))
             val preferences = newPreferences()
             preferences.setBrowseSourceId("cloudimage.wallpaperaccess")
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
             val failed =
                 viewModel.state.first { it.mode == BrowseMode.ALBUMS && !it.isFirstLoading && it.albumContent.error != null }
 
@@ -1606,7 +1693,13 @@ class BrowseViewModelTest {
             fake.scriptedHomeAlbums = NetworkResult.Success(listOf(sourceAlbum("attack-on-titan")))
             val preferences = newPreferences()
             preferences.setBrowseSourceId("cloudimage.wallpaperaccess")
-            val viewModel = BrowseViewModel(sources = fake, userPreferencesRepository = preferences, historyRepository = history)
+            val viewModel =
+                BrowseViewModel(
+                    sources = fake,
+                    userPreferencesRepository = preferences,
+                    historyRepository = history,
+                    cloudflareBypasser = CloudflareBypasser.DISABLED,
+                )
             viewModel.state.first { it.mode == BrowseMode.ALBUMS && !it.albumContent.isLoading }
 
             fake.enqueueSearch(page(ids = listOf("m1"), nextPage = null))
@@ -1627,7 +1720,12 @@ class BrowseViewModelTest {
                     tmpFolder.newFile("preferences_${System.nanoTime()}.preferences_pb")
                 },
             )
-        return BrowseViewModel(sources = sources, userPreferencesRepository = preferences, historyRepository = history)
+        return BrowseViewModel(
+            sources = sources,
+            userPreferencesRepository = preferences,
+            historyRepository = history,
+            cloudflareBypasser = CloudflareBypasser.DISABLED,
+        )
     }
 
     /** A [WallpaperSources] whose suggestions answer only after a delay — RTT simulation (v1.0.19). */
