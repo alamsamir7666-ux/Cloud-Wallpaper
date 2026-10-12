@@ -843,15 +843,30 @@ private fun SearchVariantName.label(): String =
     )
 
 /**
- * "1024 × 640 · ~320 KB · Server-resized JPEG" — the size, the honest
- * estimate (dropped when unknowable), and where those pixels come from.
+ * "1024 × 640 · ~320 KB · Server-resized JPEG" — the size, the size claim
+ * the app can honestly make, and where those pixels come from.
+ *
+ * The Original's claim is the file's OWN Content-Length once a HEAD has
+ * confirmed it (v1.2.10 — "86 KB", no tilde: the download's progress
+ * label states this exact figure); until then it is the same honest
+ * estimate the scaled tiers always carry ("~320 KB"), dropped when
+ * unknowable.
  */
 @Composable
 private fun SearchSizeVariant.subtitle(): String {
+    // A local binding: smart casts cannot cross module boundaries onto the
+    // public val, and the claim must render from one stable value.
+    val exact = exactBytes
+    val sizeClaim =
+        when {
+            exact != null -> formatFileSize(exact)
+            estKb > 0 -> stringResource(R.string.detail_size_estimate, formatEstimateKb(estKb))
+            else -> null
+        }
     val parts =
         buildList {
             add("$width × $height")
-            if (estKb > 0) add(stringResource(R.string.detail_size_estimate, formatEstimateKb(estKb)))
+            if (sizeClaim != null) add(sizeClaim)
             add(
                 stringResource(
                     if (isOriginal) R.string.detail_size_original_hint else R.string.detail_size_scaled_hint,

@@ -21,6 +21,7 @@ import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.core.model.WallpaperDetails
 import com.cloudimage.core.model.WallpaperQuery
 import com.cloudimage.core.model.savedMimeType
+import com.cloudimage.core.network.FileSizeProber
 import com.cloudimage.core.network.NetworkResult
 import com.cloudimage.core.search.SearchBackendConfig
 import com.cloudimage.core.search.SearchSizeVariant
@@ -190,6 +191,7 @@ class DetailViewModel
         private val applier: WallpaperApplier,
         private val saver: WallpaperSaver,
         private val backendConfig: SearchBackendConfig,
+        private val sizeProber: FileSizeProber,
         private val favoritesRepository: FavoritesRepository,
         private val historyRepository: HistoryRepository,
         private val downloadsRepository: DownloadsRepository,
@@ -203,6 +205,14 @@ class DetailViewModel
 
         /** The per-wallpaper loads (recommendations, details), cancelled on every page. */
         private var loadsJob: Job? = null
+
+        /**
+         * The in-flight true-size HEAD for the current wallpaper's Original
+         * row (v1.2.10) — cancelled by the next page's [loadSizeVariants]
+         * run, so a swiped-away image's answer can never land on the one
+         * that replaced it (the update guard below backstops the race).
+         */
+        private var originalSizeJob: Job? = null
 
         private val _state =
             MutableStateFlow(
@@ -521,8 +531,21 @@ class DetailViewModel
          * before that lands, the download button simply proceeds at the
          * original size until the variants arrive. Non-search wallpapers
          * expose nothing — their sources serve exactly one file.
+         *
+         * v1.2.10: the sheet's Original row used to state a pixel-derived
+         * estimate as the file's size, and CDNs that compress leaner than
+         * the q90-calibrated guess (Pinterest's originals run ~0.06
+         * bytes/pixel) made the download's honest progress label look like
+         * a downgrade — "~768 KB" promised, 86 KB delivered. The estimate
+         * still leads (the HEAD needs a round trip), but a background
+         * [FileSizeProber.contentLength] replaces it with the file's OWN
+         * answer as soon as the host states one.
          */
         private suspend fun loadSizeVariants(wallpaper: Wallpaper) {
+            // First on every run: a departed page's HEAD must never answer
+            // onto this one — including the swipe to a non-search wallpaper
+            // below, which clears the variants and has no row to fill.
+            originalSizeJob?.cancel()
             if (!wallpaper.isGlobalSearchResult()) return
             val baseUrl = backendConfig.baseUrl()
             // The config fetch is a blocking call a page swap cannot
@@ -531,6 +554,44 @@ class DetailViewModel
             val current = _state.value.wallpaper
             if (current?.providerId != wallpaper.providerId || current.id != wallpaper.id) return
             _state.update { it.copy(sizeVariants = buildSizeVariants(wallpaper, baseUrl)) }
+            // The true-size HEAD runs beside the recommendations and details
+            // loads, not ahead of them: a slow host must never delay the
+            // info the screen actually renders first.
+            originalSizeJob = viewModelScope.launch { resolveOriginalSize(wallpaper) }
+        }
+
+        /**
+         * Asks the Original's own server how big it is and swaps the
+         * estimate for the truth. Every failure mode keeps the estimate —
+         * a refused HEAD, a host that states no length, a transport error:
+         * the "~" prefix is the sheet's contract for a guess, and only the
+         * file's own Content-Length earns its removal.
+         */
+        private suspend fun resolveOriginalSize(wallpaper: Wallpaper) {
+            if (wallpaper.fullUrl.isBlank()) return
+            val exact =
+                when (val answer = sizeProber.contentLength(wallpaper.fullUrl)) {
+                    is NetworkResult.Failure -> return
+                    is NetworkResult.Success -> answer.value ?: return
+                }
+            _state.update { state ->
+                val current = state.wallpaper
+                if (current?.providerId != wallpaper.providerId || current.id != wallpaper.id) {
+                    // The page moved while the HEAD flew; nothing to fill.
+                    state
+                } else {
+                    state.copy(
+                        sizeVariants =
+                            state.sizeVariants.map { variant ->
+                                if (variant.isOriginal && variant.exactBytes == null) {
+                                    variant.copy(exactBytes = exact)
+                                } else {
+                                    variant
+                                }
+                            },
+                    )
+                }
+            }
         }
 
         /**

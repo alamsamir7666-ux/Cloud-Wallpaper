@@ -16,6 +16,7 @@ import com.cloudimage.core.model.HistoryAction
 import com.cloudimage.core.model.Page
 import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.core.model.WallpaperDetails
+import com.cloudimage.core.network.FileSizeProber
 import com.cloudimage.core.network.NetworkError
 import com.cloudimage.core.network.NetworkResult
 import com.cloudimage.core.search.GLOBAL_SEARCH_PROVIDER_ID
@@ -58,6 +59,9 @@ class DetailViewModelTest {
     private val downloads = FakeDownloadsRepository()
     private val sources = FakeWallpaperSources()
     private val viewerSession = ViewerSession()
+
+    /** The size-probe seam's stand-in: answers exactly what the test stages. */
+    private val prober = FakeFileSizeProber()
 
     /** The backend config as tests need it: the remote fetch refuses instantly, the default stands. */
     private val backendConfig =
@@ -111,6 +115,7 @@ class DetailViewModelTest {
             applier = applier,
             saver = saver,
             backendConfig = backendConfig,
+            sizeProber = prober,
             favoritesRepository = favorites,
             historyRepository = history,
             downloadsRepository = downloads,
@@ -806,4 +811,116 @@ class DetailViewModelTest {
                 assertEquals(DetailEvent.ActionFailed(DetailAction.SHARE, DetailError.STORAGE), awaitItem())
             }
         }
+
+    // --- the Original's true size (v1.2.10) ------------------------------
+
+    @Test
+    fun theOriginalVariantCarriesTheProbedTrueSize() =
+        runTest {
+            prober.answers[searchResult.fullUrl] = NetworkResult.Success(88210L)
+
+            val viewModel = createViewModel(DetailDestination.encode(searchResult))
+            advanceUntilIdle()
+
+            // One HEAD to the file's own host, and only the Original earned
+            // its answer — the scaled tiers' bytes are minted server-side at
+            // download time, so no honest pre-answer exists for them.
+            assertEquals(listOf(searchResult.fullUrl), prober.calls)
+            val variants = viewModel.state.value.sizeVariants
+            assertEquals(88210L, variants.last().exactBytes)
+            assertTrue(variants.dropLast(1).all { it.exactBytes == null })
+            // The estimate still backs the sheet while nothing truer is known.
+            assertTrue(variants.all { it.estKb > 0 })
+        }
+
+    @Test
+    fun aRefusedProbeLeavesTheEstimateStandingOnEveryTier() =
+        runTest {
+            val viewModel = createViewModel(DetailDestination.encode(searchResult))
+            advanceUntilIdle()
+
+            assertEquals(listOf(searchResult.fullUrl), prober.calls)
+            assertTrue(
+                viewModel.state.value.sizeVariants
+                    .all { it.exactBytes == null },
+            )
+        }
+
+    @Test
+    fun aHostThatStatesNoLengthKeepsTheEstimate() =
+        runTest {
+            prober.answers[searchResult.fullUrl] = NetworkResult.Success(null)
+
+            val viewModel = createViewModel(DetailDestination.encode(searchResult))
+            advanceUntilIdle()
+
+            assertTrue(
+                viewModel.state.value.sizeVariants
+                    .all { it.exactBytes == null },
+            )
+        }
+
+    @Test
+    fun aSwipedAwayPagesProbeNeverLandsOnThePageThatReplacedIt() =
+        runTest {
+            val neighbor =
+                searchResult.copy(
+                    id = "gs:https://z-cdn.example.com/neighbor.jpg",
+                    thumbUrl = "https://z-cdn.example.com/neighbor.jpg",
+                    fullUrl = "https://z-cdn.example.com/neighbor.jpg",
+                )
+            val session = ViewerSession()
+            session.open(listOf(searchResult, neighbor), index = 0)
+            // The first page's HEAD parks on the gate; the neighbor's own
+            // probe answers instantly with a DIFFERENT size so a landing
+            // mistake is distinguishable from the truth.
+            val gate = CompletableDeferred<Unit>()
+            prober.parkNextAnswerBehind(gate)
+            prober.answers[searchResult.fullUrl] = NetworkResult.Success(999L)
+            prober.answers[neighbor.fullUrl] = NetworkResult.Success(88210L)
+
+            val viewModel = createViewModel(DetailDestination.encode(searchResult), session)
+            advanceUntilIdle()
+            assertEquals(listOf(searchResult.fullUrl), prober.calls)
+
+            // The pager settles on the neighbor: the parked HEAD is
+            // cancelled and the neighbor's own probe answers in its place.
+            viewModel.onPageSettled(1)
+            advanceUntilIdle()
+            assertEquals(neighbor, viewModel.state.value.wallpaper)
+            assertEquals(listOf(searchResult.fullUrl, neighbor.fullUrl), prober.calls)
+
+            // The cancelled answer arrives late — it must change nothing.
+            gate.complete(Unit)
+            advanceUntilIdle()
+
+            val variants = viewModel.state.value.sizeVariants
+            assertEquals(88210L, variants.last().exactBytes)
+            assertEquals(listOf(searchResult.fullUrl, neighbor.fullUrl), prober.calls)
+        }
+}
+
+/**
+ * The [FileSizeProber] seam's test stand-in: per-URL staged answers, a call
+ * ledger, and an optional one-shot gate that parks the next HEAD the way a
+ * slow host parks a real one.
+ */
+private class FakeFileSizeProber : FileSizeProber {
+    val calls = mutableListOf<String>()
+    val answers = mutableMapOf<String, NetworkResult<Long?>>()
+    private var gate: CompletableDeferred<Unit>? = null
+
+    /** Parks the NEXT [contentLength] call behind `gate` (one-shot). */
+    fun parkNextAnswerBehind(gate: CompletableDeferred<Unit>) {
+        this.gate = gate
+    }
+
+    override suspend fun contentLength(url: String): NetworkResult<Long?> {
+        calls += url
+        gate?.let {
+            gate = null
+            it.await()
+        }
+        return answers[url] ?: NetworkResult.Failure(NetworkError.Http(403, url))
+    }
 }

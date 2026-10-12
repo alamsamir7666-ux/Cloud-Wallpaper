@@ -20,7 +20,11 @@ enum class SearchVariantName {
  * Every tier but [SearchVariantName.ORIGINAL] is served by the backend's
  * image proxy, which fetches the original once and resizes it server-side —
  * the phone never pays for pixels it will not show. [estKb] is the same
- * rough JPEG estimate the backend computes (0 when unknowable).
+ * rough JPEG estimate the backend computes (0 when unknowable): the
+ * ~0.5-bytes-per-pixel guess a q90 encode would land near, which CDNs
+ * that compress leaner (Pinterest's originals run ~0.06) can miss by an
+ * order of magnitude — which is exactly why the ORIGINAL tier also
+ * carries [exactBytes] once a HEAD has asked the file's own server.
  */
 data class SearchSizeVariant(
     val name: SearchVariantName,
@@ -29,6 +33,14 @@ data class SearchSizeVariant(
     val downloadUrl: String,
     val isOriginal: Boolean,
     val estKb: Int,
+    /**
+     * The Original's TRUE Content-Length once a HEAD has confirmed it
+     * (v1.2.10); null while only the estimate is known — the HEAD is in
+     * flight, the host stated no length, or it refused to answer. The
+     * scaled tiers stay estimate-only: their bytes are minted server-side
+     * at download time, so no honest pre-answer exists.
+     */
+    val exactBytes: Long? = null,
 )
 
 /** True for the wallpapers the global search mints. */

@@ -630,4 +630,67 @@ class CloudimageHttpClientTest {
             assertEquals(2, solver.fetchCalls)
             assertEquals(2, server.requestCount) // the degraded fallback request
         }
+
+    // --- contentLength: the size sheet's honesty seam (v1.2.10) ---------
+
+    @Test
+    fun contentLengthHeadsTheFileAndReportsItsStatedLength() =
+        runTest {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Length", 88210L),
+            )
+
+            val result = client.contentLength(server.url("/pin.jpg").toString())
+
+            assertEquals(NetworkResult.Success(88210L), result)
+            // A HEAD, not a GET — the probe must never pay for the body it
+            // is only measuring, and it travels branded like every other
+            // request so hosts with UA policies answer it.
+            val recorded = server.takeRequest()
+            assertEquals("HEAD", recorded.method)
+            assertEquals(CloudimageHttpClient.USER_AGENT, recorded.getHeader("User-Agent"))
+        }
+
+    @Test
+    fun contentLengthDegradesToNullWhenTheHostStatesNoLength() =
+        runTest {
+            // Chunked responses (the bridge proxy's own) carry no
+            // Content-Length — a Success with null, never a guess.
+            server.enqueue(MockResponse().setResponseCode(200).setChunkedBody(okio.Buffer().writeUtf8("stream"), 8))
+
+            val result = client.contentLength(server.url("/proxy").toString())
+
+            assertEquals(NetworkResult.Success(null), result)
+        }
+
+    @Test
+    fun contentLengthMapsHttpErrorsToTypedFailures() =
+        runTest {
+            val url = server.url("/forbidden.jpg").toString()
+            server.enqueue(MockResponse().setResponseCode(403))
+
+            val result = client.contentLength(url)
+
+            assertEquals(NetworkResult.Failure(NetworkError.Http(code = 403, url = url)), result)
+        }
+
+    @Test
+    fun contentLengthRefusesABlankUrlWithoutCrashing() =
+        runTest {
+            val result = client.contentLength("")
+
+            assertTrue(result is NetworkResult.Failure && result.error is NetworkError.Http)
+        }
+
+    @Test
+    fun contentLengthMapsAMalformedUrlToTypedFailure() =
+        runTest {
+            val result = client.contentLength("not a url")
+
+            // The synthesized status the blank-URL guard family uses — the
+            // caller's estimate stands either way.
+            assertEquals(NetworkResult.Failure(NetworkError.Http(code = 400, url = "not a url")), result)
+        }
 }

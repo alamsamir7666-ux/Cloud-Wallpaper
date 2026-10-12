@@ -21,6 +21,31 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /**
+ * The download-size sheet's honesty seam (v1.2.10): the TRUE
+ * Content-Length of a file, straight from its host.
+ *
+ * The size sheet used to state a pixel-derived ESTIMATE as the Original's
+ * size — `pixels x 0.5 bytes`, calibrated for q90 JPEGs — and CDNs that
+ * compress far leaner made it read as a lie: Pinterest originals run
+ * ~0.06 bytes/pixel, so an 1122 x 1402 pin showed "~768 KB" and then
+ * downloaded its honest 86 KB self. This seam is the cure: the sheet asks
+ * the file's own server how big it is before the user commits.
+ *
+ * An interface (implemented by [CloudimageHttpClient]) so the preview
+ * screen's ViewModel stays fake-able in unit tests — the same seam pattern
+ * the saver and applier already ride.
+ */
+interface FileSizeProber {
+    /**
+     * HEADs `url` and reports its stated Content-Length. [Success] with a
+     * null value means the host answered but stated no usable length —
+     * callers keep their estimate rather than guess. Any failure is the
+     * usual typed [NetworkResult.Failure].
+     */
+    suspend fun contentLength(url: String): NetworkResult<Long?>
+}
+
+/**
  * A completed HTTP exchange: status code, response headers and raw body
  * bytes. Carried by [CloudimageHttpClient.getRaw] — the seam the extension
  * engine adapts into the plugin-facing HTTP facade.
@@ -58,7 +83,7 @@ class CloudimageHttpClient
         private val okHttpClient: OkHttpClient,
         private val json: Json,
         private val cloudflare: CloudflareBypasser = CloudflareBypasser.DISABLED,
-    ) {
+    ) : FileSizeProber {
         /**
          * Performs a GET and returns the full raw exchange — status, headers
          * and body — whatever the status code is. This is the seam behind the
@@ -333,6 +358,52 @@ class CloudimageHttpClient
                 }
             }
 
+        /**
+         * HEADs the file and reports its stated Content-Length — the true
+         * size the download-size sheet states for the Original (v1.2.10),
+         * replacing the pixel-derived estimate that CDNs like Pinterest's
+         * (≈0.06 bytes/pixel) made read as a nine-fold lie.
+         *
+         * Deliberately NOT the Cloudflare ladder: hosts that challenge a
+         * plain HEAD would only challenge it harder from a background
+         * coroutine, and the sheet degrades to its estimate anyway — the
+         * download itself still rides the full ladder. A HEAD that answers
+         * 2xx without a usable Content-Length (chunked responses, the
+         * bridge proxy's own) is a Success carrying null: the caller keeps
+         * the estimate rather than trade it for a different guess.
+         */
+        override suspend fun contentLength(url: String): NetworkResult<Long?> =
+            withContext(Dispatchers.IO) {
+                if (url.isBlank()) {
+                    return@withContext Failure(NetworkError.Http(404, url))
+                }
+                try {
+                    val request =
+                        Request
+                            .Builder()
+                            .url(url)
+                            .head()
+                            .header(HEADER_USER_AGENT, USER_AGENT)
+                            .build()
+                    okHttpClient.newCall(request).await().use { response ->
+                        if (!response.isSuccessful) {
+                            Failure(NetworkError.Http(response.code, url))
+                        } else {
+                            val length = response.headers[HEADER_CONTENT_LENGTH]?.toLongOrNull()?.takeIf { it > 0 }
+                            Success(length)
+                        }
+                    }
+                } catch (e: SocketTimeoutException) {
+                    Failure(NetworkError.Timeout)
+                } catch (e: IOException) {
+                    Failure(NetworkError.Io(e))
+                } catch (e: IllegalArgumentException) {
+                    // Request.Builder rejects malformed URLs before any
+                    // exchange; the callers' estimate stands.
+                    Failure(NetworkError.Http(400, url))
+                }
+            }
+
         /** Performs a GET and decodes the JSON body into [T]. */
         suspend fun <T> getJson(
             url: String,
@@ -352,6 +423,9 @@ class CloudimageHttpClient
 
         companion object {
             private const val HEADER_USER_AGENT = "User-Agent"
+
+            /** Where a HEAD reads the file's true size from. */
+            private const val HEADER_CONTENT_LENGTH = "Content-Length"
 
             private const val HEADER_COOKIE = "Cookie"
 

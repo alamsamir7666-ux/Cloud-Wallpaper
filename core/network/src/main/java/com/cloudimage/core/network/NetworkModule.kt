@@ -87,4 +87,9 @@ internal object NetworkModule {
             json = json,
             cloudflare = cloudflare,
         )
+
+    /** The size sheet's honesty seam, served by the one shared client. */
+    @Provides
+    @Singleton
+    fun provideFileSizeProber(client: CloudimageHttpClient): FileSizeProber = client
 }
