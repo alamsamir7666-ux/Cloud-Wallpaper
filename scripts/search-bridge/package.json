@@ -1,12 +1,12 @@
 {
   "name": "cloudimage-search-bridge",
-  "version": "1.1.0",
-  "description": "HTTP bridge exposing pluggable global image search (z-ai CLI / Google Programmable Search) to the Cloud-Wallpaper Android app",
+  "version": "1.2.0",
+  "description": "HTTP bridge exposing pluggable global image search (SearXNG metasearch + Pinterest deep paging / z-ai CLI / Google Programmable Search) to the Cloud-Wallpaper Android app",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "node test-wikimedia.mjs && node test-searxng.mjs && node test-cse.mjs"
+    "test": "node test-wikimedia.mjs && node test-pinterest.mjs && node test-searxng.mjs && node test-cse.mjs"
   },
   "engines": {
     "node": ">=18"

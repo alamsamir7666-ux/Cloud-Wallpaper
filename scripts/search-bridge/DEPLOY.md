@@ -20,6 +20,13 @@ engine, bundled into the same Docker container as the bridge itself:
   Wikimedia, Google-CSE scrape, …). When one engine blocks or breaks,
   the rest still answer — the instance observed 118 results on a query
   where three engines were simultaneously failing.
+- **Deep Pinterest paging, built in** — the metasearch `pageno` protocol
+  can't go past an engine's first batch (SearXNG's pinterest engine needs
+  a client-driven bookmark the JSON API never sends), so the bridge also
+  drives Pinterest's own search API directly with server-side bookmark
+  chains: image queries reach ~300 unique results instead of stalling at
+  ~20. Keyless, on by default, env-tunable (`PINTEREST_ENGINE=0` to
+  disable; see the bridge README).
 - **One container, one URL** — SearXNG listens only on the container
   loopback (:8080); the bridge is the public surface and speaks the exact
   same JSON the app already parses. No app update is ever needed.

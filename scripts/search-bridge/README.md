@@ -10,7 +10,11 @@ The search behind `/api/search` is provider-pluggable:
   (`Dockerfile.searxng`) on the container loopback. No API keys, no
   quotas, no limits: it aggregates Bing, DuckDuckGo, Qwant, Openverse,
   Wikimedia, ... in parallel and degrades gracefully when one engine
-  misbehaves. See [DEPLOY.md](DEPLOY.md).
+  misbehaves. On top of the metasearch pages, the bridge drives
+  **Pinterest's own search API directly** (bookmark continuation, kept
+  in a small per-query state) so image queries go ~300 results deep
+  instead of stalling on SearXNG's duplicate `pageno` batches — see
+  “The Pinterest deep-paging engine” below. See [DEPLOY.md](DEPLOY.md).
 - **`zaicli`** — the z-ai image-search CLI. Zero-config inside the
   sandbox (it authenticates with chat-scoped session credentials), but
   those credentials die with the sandbox — not deployable elsewhere.
@@ -25,13 +29,17 @@ forced with `SEARCH_PROVIDER=zaicli|searxng|googlecse`.
 ## Routes
 
 - `POST /api/search` — body `{"query","count","page","gl"}` → JSON
-  `{"success","query","count","page","hasMore","results":[…]}`. Page > 1
-  appends a query modifier (`hd`, `high resolution`, `wallpaper`, `4k`…)
-  to surface a fresh batch; the caller deduplicates by URL.
+  `{"success","query","count","page","hasMore","results":[…]}`. Pages are
+  windows into one merged per-query stream (SearXNG's broad pages + the
+  deep Pinterest stream); windows are disjoint by URL, and `hasMore` is
+  only true while a live source remains.
 - `GET  /api/proxy-image?url=&w=&q=&fmt=` — proxies the image with strong
-  caching headers. Bandwidth optimization only; the OSS originals are
-  already right-sized for most thumbnail contexts.
-- `GET  /health` — returns `{"ok":true,"service":…,"provider":"zaicli|googlecse"}`.
+  caching headers. Bandwidth optimization only: Wikimedia originals are
+  rewritten to their own standard-width thumb renders, Pinterest
+  originals to the `/736x/` render (both with fallback to the untouched
+  original); everything else passes through as-is.
+- `GET  /health` — returns `{"ok":true,"service":…,"provider":…,
+  "pinterestEngine":…}`.
 
 ## Run (sandbox / z-ai provider)
 
@@ -55,8 +63,30 @@ no credit card, recommended) and `fly.toml` (Fly.io, faster wake) are
 all in place. The whole deploy needs **no secrets, no API keys**.
 
 The bridge listens on `$PORT` (default 3000) on all interfaces. Tests:
-`npm test` (stubs both the SearXNG and Google APIs — no credentials,
-no running engine needed).
+`npm test` (stubs the SearXNG, Pinterest and Google APIs — no
+credentials, no running engine needed).
+
+## The Pinterest deep-paging engine
+
+The app's search protocol is stateless (`{query,count,page}`), but
+Pinterest's search API paginates with an opaque `bookmark` continuation
+token, and SearXNG's own pinterest engine never receives one through the
+JSON API — which is why “load more” used to serve the same 18 images
+forever. The bridge now keeps a small per-query state (bookmark chain +
+URL ledger + pending buffer; LRU-capped, TTL'd, reset by any page-1
+request) and serves `count`-sized windows of one merged stream: the
+SearXNG first page keeps the opening screen broad, and the Pinterest
+stream supplies the depth — up to `PINTEREST_MAX_PAGES` (12) pages of
+`PINTEREST_PAGE_SIZE` (25) pins, ~300 images per query.
+
+A mid-scroll service restart (free-tier sleep) is absorbed by a bounded
+rebuild: the fill loop replays the chain from page 1 within a per-request
+round budget. If Pinterest blocks the host outright, the engine marks
+itself done and the search degrades to the SearXNG-only behavior.
+
+Env knobs (all default-on): `PINTEREST_ENGINE` (`0` disables),
+`PINTEREST_BASE`, `PINTEREST_PAGE_SIZE`, `PINTEREST_MAX_PAGES`,
+`PINTEREST_TIMEOUT_MS`, `PINTEREST_USER_AGENT`.
 
 ## Repointing the app
 

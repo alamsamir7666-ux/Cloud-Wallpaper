@@ -17,7 +17,11 @@
 //                Qwant, Openverse, Wikimedia, ... in parallel and
 //                degrades gracefully when one engine misbehaves.
 //                THE provider for a permanent free deployment — see
-//                DEPLOY.md.
+//                DEPLOY.md. On top of the metasearch pages, the bridge
+//                drives Pinterest's own search API directly (bookmark
+//                continuation, server-side state) so image queries go
+//                hundreds of results deep instead of stalling on
+//                SearXNG's duplicate pageno batches.
 //   googlecse  — the Google Programmable Search JSON API with image
 //                search enabled, driven by your own API key. Free tier
 //                is capped at 100 queries/day — kept as an option, not
@@ -54,6 +58,39 @@ const SEARXNG_MAX_PAGE = parseInt(process.env.SEARXNG_MAX_PAGE || '10', 10);
 // gl (ISO country) -> SearXNG language. Anything unmapped falls back to
 // the instance default; pass-through for already-qualified codes.
 const GL_TO_LANGUAGE = { us: 'en-US', gb: 'en-GB', au: 'en-AU', ca: 'en-CA', in: 'en-IN', bd: 'bn' };
+
+// --- Pinterest deep-paging engine -------------------------------------------
+//
+// Why this exists (live-verified on production, v1.2.9): SearXNG's own
+// pinterest engine answers our /search?pageno=N calls with the SAME first
+// batch every time, because its pagination is client-driven — the engine
+// returns a `bookmark` continuation token that must ride the NEXT request
+// (engine_data), and the bare JSON API never sends it. Result: the app's
+// "load more" walked into a wall of duplicates — 18 unique pinimg images
+// total for a query like "Modhumita Sarker" where the web shows hundreds.
+//
+// So the bridge drives Pinterest's BaseSearchResource API itself, keeping
+// the per-query bookmark chain server-side, and merges that deep stream
+// with SearXNG's broad first page. The request shape below mirrors
+// SearXNG's engine module exactly (searx/engines/pinterest.py) — the same
+// headers that engine rides from Render's datacenter IP today.
+const PINTEREST_BASE =
+  (process.env.PINTEREST_BASE || 'https://www.pinterest.com').trim().replace(/\/+$/, '');
+const PINTEREST_ENGINE = !['0', 'false', 'off'].includes(
+  (process.env.PINTEREST_ENGINE || '1').trim().toLowerCase(),
+);
+const PINTEREST_TIMEOUT_MS = parseInt(process.env.PINTEREST_TIMEOUT_MS || '12000', 10);
+// Pinterest's resource API honors page_size; 25 is the engine-proven
+// default (what the SearXNG engine and the site's own grid ride).
+const PINTEREST_PAGE_SIZE = parseInt(process.env.PINTEREST_PAGE_SIZE || '25', 10);
+// 12 pages x ~25 pins ≈ 300 images per query — the "hundreds" the web
+// shows, before the stream is declared exhausted.
+const PINTEREST_MAX_PAGES = parseInt(process.env.PINTEREST_MAX_PAGES || '12', 10);
+// SearXNG rides its default browser UA for engine traffic; this matches
+// that family (a plain desktop Firefox), env-overridable for tuning.
+const PINTEREST_USER_AGENT =
+  process.env.PINTEREST_USER_AGENT ||
+  'Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0';
 
 // Upstream image hosts are picky about clients, each in its own way
 // (verified live against Wikimedia, the largest wallpaper source in the
@@ -320,10 +357,14 @@ function cseItemsToResults(items) {
 // Permanent-host provider: a self-hosted SearXNG metasearch. No keys,
 // no quotas — the instance aggregates many image engines in parallel
 // (bing, duckduckgo, qwant, openverse, wikimedia, google-cse-scrape, ...)
-// and answers even when some of them fail. Pagination rides the engines'
-// own `pageno` support, so every page surfaces a fresh batch (the caller
-// dedupes by URL).
-async function searchViaSearXng({ query, count, page, gl }) {
+// and answers even when some of them fail.
+//
+// The page-based protocol the app speaks is stateless, but Pinterest's
+// deep stream is bookmark-continuous, so the provider keeps a small
+// per-query state (see QUERY_STATES) and serves count-sized windows of
+// one merged virtual stream: SearXNG's broad pages interleaved with the
+// Pinterest pages that actually go deep. See runMergedSearch below.
+async function fetchSearxngPage({ query, page, gl }) {
   if (!SEARXNG_BASE) {
     throw new SearxngConfigError(
       'searxng provider selected but SEARXNG_BASE is not set — point it at ' +
@@ -340,12 +381,12 @@ async function searchViaSearXng({ query, count, page, gl }) {
   const language = glToLanguage(gl);
   if (language) params.set('language', language);
 
-  let body;
   const resp = await fetch(`${SEARXNG_BASE}/search?${params}`, {
     headers: { accept: 'application/json' },
     signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
   });
   const bodyText = await resp.text();
+  let body;
   try {
     body = JSON.parse(bodyText);
   } catch {
@@ -367,11 +408,296 @@ async function searchViaSearXng({ query, count, page, gl }) {
   }
 
   const items = Array.isArray(body.results) ? body.results : [];
-  const results = searxngItemsToResults(items);
-  return {
-    results: results.slice(0, count),
-    hasMore: page < SEARXNG_MAX_PAGE && results.length > 0,
+  return searxngItemsToResults(items);
+}
+
+// One page of Pinterest's search stream. `bookmark` is the continuation
+// token the previous page returned ('' for the first page); the response
+// carries the token for the NEXT page in resource_response.bookmark —
+// '-end-' (or an empty/null token) means the stream is exhausted.
+// Request shape mirrors SearXNG's engine module (searx/engines/
+// pinterest.py): same URL, same data envelope, same X-Pinterest headers.
+async function fetchPinterestPage(query, bookmark) {
+  const envelope = {
+    options: {
+      query,
+      bookmarks: [bookmark || ''],
+      page_size: PINTEREST_PAGE_SIZE,
+    },
+    context: {},
   };
+  const url =
+    `${PINTEREST_BASE}/resource/BaseSearchResource/get/?data=` +
+    encodeURIComponent(JSON.stringify(envelope));
+  const resp = await fetch(url, {
+    headers: {
+      accept: 'application/json, text/javascript, */*, q=0.01',
+      'accept-language': 'en-US,en;q=0.9',
+      'user-agent': PINTEREST_USER_AGENT,
+      'x-requested-with': 'XMLHttpRequest',
+      'x-pinterest-appstate': 'active',
+      'x-pinterest-source-url': '/ideas/',
+      'x-pinterest-pws-handler': 'www/ideas.js',
+    },
+    signal: AbortSignal.timeout(PINTEREST_TIMEOUT_MS),
+  });
+  if (!resp.ok) {
+    throw new Error(`Pinterest answered HTTP ${resp.status}`);
+  }
+  const body = await resp.json();
+  const items = body?.resource_response?.data?.results;
+  const nextBookmark = body?.resource_response?.bookmark ?? null;
+  return {
+    results: Array.isArray(items) ? pinterestItemsToResults(items) : [],
+    bookmark: typeof nextBookmark === 'string' ? nextBookmark : null,
+  };
+}
+
+// Map Pinterest pin items onto the response DTO the app parses. Shapes
+// verified against SearXNG's engine parser: images.orig is the original
+// (i.pinimg.com/originals/...) with numeric width/height, the title
+// falls back through the same chain the engine uses, and anything that
+// is not a real pin (stories, boards, promoted slots, pinless items)
+// is dropped.
+function pinterestItemsToResults(items) {
+  const results = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.type === 'story') continue; // the engine's own skip
+    if (item.is_ad || item.promoted_is_removable) continue;
+    const orig = item.images && item.images.orig;
+    const link = orig && orig.url ? String(orig.url) : '';
+    if (!/^https?:\/\//i.test(link)) continue;
+    const title =
+      item.title || item.grid_title ||
+      (item.pin_join && item.pin_join.visual_annotation &&
+        item.pin_join.visual_annotation[0]) ||
+      item.name || item.auto_alt_text || '';
+    results.push({
+      id: link,
+      original_url: link,
+      caption: title ? String(title) : null,
+      source:
+        (item.rich_summary && item.rich_summary.site_name) || hostnameOf(link) || null,
+      original_width: Number(orig.width) > 0 ? Number(orig.width) : null,
+      original_height: Number(orig.height) > 0 ? Number(orig.height) : null,
+    });
+  }
+  return results;
+}
+
+// --- per-query stream state ---------------------------------------------------
+//
+// The app's protocol is {query, count, page} with no cursor, but the deep
+// Pinterest stream needs one. State per (query, gl): the bookmark for the
+// next Pinterest page, the next SearXNG pageno, a pending buffer of
+// fetched-but-unemitted results, and the set of URLs already served (the
+// cross-page dedupe — SearXNG's pageno results repeat heavily, so its
+// later pages contribute only what the first page missed).
+//
+// A page-1 request onto an existing state is treated as a fresh search
+// (the app's SearchViewModel always restarts at page 1), so the chain
+// resets and the first window is served again.
+const QUERY_STATES = new Map();
+const QUERY_STATE_MAX = 64; // bounded: ~300 URLs per entry ≈ 1-2 MB worst case
+const QUERY_STATE_TTL_MS = 45 * 60 * 1000;
+// Fill rounds per request — a mid-scroll wake-from-sleep rebuilds the
+// chain from page 1; 8 rounds reaches deep pages without stalling the
+// request on a pathological rebuild.
+const MERGE_MAX_ROUNDS_PER_REQUEST = 8;
+// SearXNG pages that contribute nothing new (the duplicate-page reality
+// behind most of its image engines) before we stop asking it.
+const SEARXNG_BARREN_LIMIT = 2;
+
+function queryStateKey(query, gl) {
+  return `${query.trim().toLowerCase()}|${String(gl || 'us').toLowerCase()}`;
+}
+
+function getQueryState(query, gl) {
+  const key = queryStateKey(query, gl);
+  let state = QUERY_STATES.get(key);
+  if (state && Date.now() - state.updatedAt > QUERY_STATE_TTL_MS) {
+    // Stale chain — its bookmarks may outlive Pinterest's patience;
+    // start over rather than serve from a dead cursor.
+    QUERY_STATES.delete(key);
+    state = undefined;
+  }
+  if (state) {
+    // LRU refresh: re-insert so Map order tracks recency.
+    QUERY_STATES.delete(key);
+    QUERY_STATES.set(key, state);
+    state.updatedAt = Date.now();
+  } else {
+    state = {
+      key,
+      updatedAt: Date.now(),
+      emitted: new Set(),
+      emittedCount: 0,
+      pending: [],
+      searxngPage: 1,
+      searxngBarren: 0,
+      searxngDone: false,
+      pinterestBookmark: '',
+      pinterestPages: 0,
+      pinterestDone: !PINTEREST_ENGINE,
+    };
+    QUERY_STATES.set(key, state);
+  }
+  // Entry cap — oldest-inserted first (Map preserves insertion order).
+  while (QUERY_STATES.size > QUERY_STATE_MAX) {
+    const oldest = QUERY_STATES.keys().next().value;
+    QUERY_STATES.delete(oldest);
+  }
+  return state;
+}
+
+/** True when a fill round could still fetch something from either stream. */
+function mergeSourcesAlive(state) {
+  const searxngAlive =
+    !state.searxngDone && state.searxngPage <= SEARXNG_MAX_PAGE;
+  const pinterestAlive =
+    !state.pinterestDone && state.pinterestPages < PINTEREST_MAX_PAGES;
+  return searxngAlive || pinterestAlive;
+}
+
+/**
+ * Serves window `page` of the merged stream for `query`.
+ *
+ * The virtual stream is built in lockstep rounds — SearXNG page k then
+ * Pinterest page k — so the first screen stays the broad metasearch mix
+ * the app shows today, and every later window is dominated by the deep
+ * Pinterest pages. `emitted` keeps the windows disjoint across requests;
+ * `pending` carries the unemitted tail between requests.
+ */
+async function runMergedSearch({ query, count, page, gl }) {
+  const state = getQueryState(query, gl);
+  // A page-1 request over a live state is a fresh search — reset.
+  if (page === 1 && (state.emittedCount > 0 || state.pending.length > 0)) {
+    QUERY_STATES.delete(state.key);
+    return runMergedSearch({ query, count, page, gl });
+  }
+
+  const target = page * count; // absolute end of this window in the stream
+  let rounds = 0;
+  // A config-level SearXNG failure (JSON API disabled, instance down) is
+  // a deployment problem, not engine degradation: remembered here and
+  // rethrown at the end — but only when the merged stream could not serve
+  // anything anyway, so a Pinterest-served search still succeeds.
+  let searxngConfigError = null;
+  while (
+    state.emittedCount + state.pending.length < target &&
+    mergeSourcesAlive(state) &&
+    rounds < MERGE_MAX_ROUNDS_PER_REQUEST
+  ) {
+    rounds++;
+    const jobs = [];
+    const before = state.pending.length;
+
+    if (!state.searxngDone && state.searxngPage <= SEARXNG_MAX_PAGE) {
+      const pageNo = state.searxngPage;
+      jobs.push(
+        fetchSearxngPage({ query, page: pageNo, gl })
+          .then((results) => ({ kind: 'searxng', pageNo, results }))
+          .catch((err) => {
+            console.warn(
+              `[search] searxng page ${pageNo} failed for "${query}": ${err.message}`,
+            );
+            if (err instanceof SearxngConfigError) searxngConfigError ??= err;
+            return { kind: 'searxng', pageNo, results: null };
+          }),
+      );
+    }
+    if (!state.pinterestDone && state.pinterestPages < PINTEREST_MAX_PAGES) {
+      jobs.push(
+        fetchPinterestPage(query, state.pinterestBookmark)
+          .then((page_) => ({ kind: 'pinterest', results: page_.results, bookmark: page_.bookmark }))
+          .catch((err) => {
+            console.warn(
+              `[search] pinterest page ${state.pinterestPages + 1} failed for ` +
+                `"${query}": ${err.message}`,
+            );
+            return { kind: 'pinterest', results: null, bookmark: null };
+          }),
+      );
+    }
+    if (jobs.length === 0) break;
+    const batches = await Promise.all(jobs);
+
+    let searxngAdded = 0;
+    for (const batch of batches) {
+      if (batch.kind === 'searxng') {
+        state.searxngPage = batch.pageNo + 1;
+        if (batch.results === null) {
+          // Hard failure — SearXNG is the broad backbone, but a search
+          // still functions without it when Pinterest answers (the config
+          // error is rethrown below only if nothing was served).
+          state.searxngBarren++;
+          if (state.searxngBarren >= SEARXNG_BARREN_LIMIT) state.searxngDone = true;
+          continue;
+        }
+        for (const r of batch.results) {
+          if (state.emitted.has(r.original_url)) continue;
+          state.emitted.add(r.original_url);
+          state.pending.push(r);
+          searxngAdded++;
+        }
+        if (searxngAdded === 0) {
+          state.searxngBarren++;
+          if (state.searxngBarren >= SEARXNG_BARREN_LIMIT) state.searxngDone = true;
+        } else {
+          state.searxngBarren = 0;
+        }
+      } else {
+        if (batch.results === null) {
+          // Pinterest hard-failed (blocked, timeout) — degrade to the
+          // SearXNG-only behavior rather than failing the search.
+          state.pinterestDone = true;
+          continue;
+        }
+        state.pinterestPages++;
+        let pinterestAdded = 0;
+        for (const r of batch.results) {
+          if (state.emitted.has(r.original_url)) continue;
+          state.emitted.add(r.original_url);
+          state.pending.push(r);
+          pinterestAdded++;
+        }
+        // '-end-' is Pinterest's end-of-stream marker; a missing token, an
+        // empty page, or a page of pure repeats (broken cursor) all mean
+        // the stream is finished.
+        if (
+          !batch.bookmark ||
+          batch.bookmark === '-end-' ||
+          batch.results.length === 0 ||
+          pinterestAdded === 0
+        ) {
+          state.pinterestDone = true;
+        } else {
+          state.pinterestBookmark = batch.bookmark;
+        }
+      }
+    }
+    // No forward progress at all — both streams empty against a live
+    // target. Stop instead of spinning the budget away.
+    if (state.pending.length === before && !mergeSourcesAlive(state)) break;
+  }
+
+  const need = Math.max(target - state.emittedCount, 0);
+  const window = state.pending.splice(0, need);
+  state.emittedCount += window.length;
+  if (window.length === 0 && searxngConfigError) {
+    // Nothing was served AND the backbone is misconfigured — surface the
+    // deployment problem as a hard 502 instead of a silent empty page.
+    throw searxngConfigError;
+  }
+  const hasMore =
+    state.pending.length > 0 ||
+    (mergeSourcesAlive(state) && rounds < MERGE_MAX_ROUNDS_PER_REQUEST);
+  return { results: window, hasMore };
+}
+
+async function searchViaSearXng(params) {
+  return runMergedSearch(params);
 }
 
 function glToLanguage(gl) {
@@ -512,7 +838,8 @@ async function handleProxyImage(req, res) {
   // locally (would need sharp/jimp). Wikimedia gets the special path:
   // their own thumbnail renders ARE the resize, so a wikimedia original
   // at card width is rewritten to the standard-size thumb and fetched
-  // from their CDN at a few hundred KB instead of ~11 MB. Every other
+  // from their CDN at a few hundred KB instead of ~11 MB. Pinterest
+  // originals get the same treatment via their /736x/ render. Every other
   // host passes through as before with strong caching headers.
   const cacheKey = `${target}|${width}|${fmt}`;
   const cached = proxyCache.get(cacheKey);
@@ -522,15 +849,16 @@ async function handleProxyImage(req, res) {
     return;
   }
 
-  const thumbTarget = wikimediaThumbFor(target, width);
+  const thumbTarget = wikimediaThumbFor(target, width) || pinimgThumbFor(target, width);
   let upstream;
   try {
     upstream = await fetchImage(thumbTarget || target);
   } catch (err) {
     if (!thumbTarget) throw err;
     // The thumb render can miss (an upscale of a smaller original, an odd
-    // file type); the untouched original is still worth serving.
-    console.warn(`[proxy] wikimedia thumb miss (${err.message}); serving the original`);
+    // file type, a pin without that render); the untouched original is
+    // still worth serving.
+    console.warn(`[proxy] thumbnail miss (${err.message}); serving the original`);
     upstream = await fetchImage(target);
   }
   try {
@@ -573,6 +901,31 @@ function wikimediaThumbFor(target, wantedWidth) {
 const WIKIMEDIA_STANDARD_WIDTHS = [250, 330, 500, 960, 1280, 1920, 3840];
 const WIKIMEDIA_ORIGINAL_PATH =
   /^https:\/\/upload\.wikimedia\.org\/(wikipedia\/[a-z-]+)\/([0-9a-f])\/([0-9a-f]{2})\/([^/?#]+)$/i;
+
+/**
+ * Pinterest's CDN renders every pin at standard widths — /736x/ is the
+ * rung the site's own grid rides — and i.pinimg.com serves them to any
+ * client (verified live: the same shard path under /736x/ answers 200 at
+ * a fraction of the original's bytes). The deep Pinterest stream the
+ * search engine now surfaces means hundreds of pinimg tiles, so card-
+ * width asks stop paying full-original bytes: an /originals/ URL is
+ * rewritten to /736x/, with the fetch-fallback above covering pins whose
+ * 736x render is missing. Returns null for anything that should keep the
+ * pass-through path (non-pinimg host, already-a-variant URL, an ask
+ * wider than the rung can serve).
+ */
+function pinimgThumbFor(target, wantedWidth) {
+  if (wantedWidth > PINIMG_RENDER_WIDTH) return null;
+  const m = PINIMG_ORIGINAL_PATH.exec(target);
+  if (!m) return null;
+  return `https://i.pinimg.com/${PINIMG_RENDER_WIDTH}x/${m[1]}/${m[2]}/${m[3]}/${m[4]}.${m[5]}`;
+}
+
+const PINIMG_RENDER_WIDTH = 736;
+// i.pinimg.com paths are /<variant>/<shard1>/<shard2>/<shard3>/<filename> —
+// three two-hex shards (verified live: .../originals/23/5b/8e/235b8e02....jpg).
+const PINIMG_ORIGINAL_PATH =
+  /^https:\/\/i\.pinimg\.com\/originals\/([0-9a-f]{2})\/([0-9a-f]{2})\/([0-9a-f]{2})\/([0-9a-f]+)\.(jpe?g|png|webp|gif)$/i;
 
 function fetchImage(targetUrl, redirectsLeft = 4) {
   return new Promise((resolve, reject) => {
@@ -657,6 +1010,7 @@ const server = http.createServer(async (req, res) => {
         service: 'cloudimage-search-bridge',
         provider: PROVIDER,
         searxngConfigured: Boolean(SEARXNG_BASE),
+        pinterestEngine: PROVIDER === 'searxng' && PINTEREST_ENGINE,
         googleCseConfigured: Boolean(process.env.GOOGLE_CSE_KEY && process.env.GOOGLE_CSE_CX),
       });
     } else {
@@ -677,6 +1031,12 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[cloudimage-search-bridge] listening on :${PORT}`);
     console.log(`  search provider: ${PROVIDER}${PROVIDER === 'searxng' ? ` (${SEARXNG_BASE})` : ''}`);
+    if (PROVIDER === 'searxng') {
+      console.log(
+        `  pinterest engine: ${PINTEREST_ENGINE ? 'on (deep bookmark paging)' : 'OFF'} ` +
+          `— up to ${PINTEREST_MAX_PAGES} pages x ${PINTEREST_PAGE_SIZE} pins per query`,
+      );
+    }
     if (PROVIDER === 'none') {
       console.log('  (!) no provider configured — searches will 502 until one is available:');
       console.log('      SEARXNG_BASE (bundled metasearch, recommended) or SEARCH_PROVIDER=googlecse');
@@ -693,4 +1053,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   });
 }
 
-export { wikimediaThumbFor };
+export { wikimediaThumbFor, pinimgThumbFor, pinterestItemsToResults };

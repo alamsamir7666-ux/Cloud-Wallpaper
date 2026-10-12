@@ -26,3 +26,9 @@ services:
         value: searxng
       - key: PROXY_CACHE_BUDGET_MB
         value: "80"
+      # Pinterest deep-paging engine (on by default; listed for
+      # discoverability). 12 pages x 25 pins ≈ 300 images per query.
+      - key: PINTEREST_ENGINE
+        value: "1"
+      - key: PINTEREST_MAX_PAGES
+        value: "12"

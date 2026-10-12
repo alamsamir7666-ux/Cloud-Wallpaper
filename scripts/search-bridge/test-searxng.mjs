@@ -29,6 +29,7 @@ function check(name, cond, extra = '') {
 // --- stub SearXNG upstream ---------------------------------------------------
 let mode = 'ok'; // 'ok' | 'disabled'
 let lastQuery = null;
+const seenQueries = [];
 const CANNED = {
   query: 'mountain wallpaper',
   results: [
@@ -80,6 +81,7 @@ const CANNED = {
 const stub = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://stub');
   lastQuery = url;
+  seenQueries.push(url);
   if (mode === 'disabled') {
     res.writeHead(403, { 'content-type': 'text/html' });
     res.end('The requested format is disabled');
@@ -98,6 +100,9 @@ const bridge = spawn(process.execPath, ['server.js'], {
     SEARCH_PROVIDER: 'searxng',
     SEARXNG_BASE: `http://127.0.0.1:${STUB_PORT}`,
     SEARXNG_MAX_PAGE: '10',
+    // This suite exercises the SearXNG layer alone; the Pinterest deep-
+    // paging engine has its own suite (test-pinterest.mjs).
+    PINTEREST_ENGINE: '0',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -137,10 +142,14 @@ try {
   });
   check('search answers 200', search.status === 200, `got ${search.status}`);
   check('search success:true', search.body.success === true);
-  check('pageno forwarded to instance', lastQuery?.searchParams.get('pageno') === '1');
-  check('gl=us mapped to language en-US', lastQuery?.searchParams.get('language') === 'en-US');
-  check('format=json requested', lastQuery?.searchParams.get('format') === 'json');
-  check('categories=images requested', lastQuery?.searchParams.get('categories') === 'images');
+  // The merged engine may walk several SearXNG pages inside one request
+  // (barren-page detection); what matters is that paging STARTS at 1 and
+  // the request shape is intact on every call.
+  check('pageno 1 forwarded to instance', seenQueries.some((u) => u.searchParams.get('pageno') === '1'));
+  check('every call carries the query', seenQueries.every((u) => u.searchParams.get('q') === 'mountain wallpaper'));
+  check('gl=us mapped to language en-US', seenQueries.every((u) => u.searchParams.get('language') === 'en-US'));
+  check('format=json requested', seenQueries.every((u) => u.searchParams.get('format') === 'json'));
+  check('categories=images requested', seenQueries.every((u) => u.searchParams.get('categories') === 'images'));
 
   const results = search.body.results || [];
   check('svg results filtered out', !results.some((r) => r.original_url.endsWith('.svg')));
@@ -166,7 +175,12 @@ try {
   const e = results.find((r) => r.original_url === 'https://img.example.com/e.jpg');
   check('missing resolution stays null', e?.original_width === null && e?.original_height === null);
   check('count field matches results length', search.body.count === results.length);
-  check('hasMore true while under the page cap', search.body.hasMore === true);
+  // Under the merged engine a hasMore=true promise must be backed by a
+  // live source: this stub answers every pageno with the same 3 results
+  // (the live duplicate-page reality), so the stream is exhausted and
+  // hasMore is honestly false — the old pageno-based "true while under
+  // the page cap" was exactly the production bug (pages of repeats).
+  check('hasMore false once the (repeating) stream is exhausted', search.body.hasMore === false);
 
   mode = 'disabled';
   const disabled = await getJson('/api/search', {
