@@ -42,6 +42,7 @@ jobs:
             :providers:pixabay:packageExtension \
             :providers:wallpapercave:packageExtension \
             :providers:hdqwalls:packageExtension \
+            :providers:wallpapersden:packageExtension \
             :providers:wallpaperflare:packageExtension \
             --no-daemon
 
