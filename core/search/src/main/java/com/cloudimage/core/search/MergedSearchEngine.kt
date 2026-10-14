@@ -87,9 +87,6 @@ class MergedSearchEngine(
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
-            // TEMPORARY DIAGNOSTIC: the CI-only test failures swallow the
-            // real lane exception here. Remove once root-caused.
-            t.printStackTrace()
             null
         }
 
