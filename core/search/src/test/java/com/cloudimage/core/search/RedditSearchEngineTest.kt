@@ -251,8 +251,15 @@ class RedditSearchEngineTest {
             val outcome = engine.search("mountain", 1, fhd)
 
             val page = (outcome as Success).page
-            // 1920x1080 passes FHD; nothing else on the fixture does.
-            assertEquals(listOf("gs:https://i.redd.it/mountain.jpg"), page.results.map { it.id })
+            // Both image posts clear FHD: 1920x1080 and 2560x1440 (its
+            // short side, 1440, is above the tier's 1080 floor).
+            assertEquals(
+                listOf(
+                    "gs:https://i.redd.it/mountain.jpg",
+                    "gs:https://i.redd.it/amoled.png",
+                ),
+                page.results.map { it.id },
+            )
         }
 
     @Test

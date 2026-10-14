@@ -22,6 +22,18 @@ import org.junit.Test
 class MergedSearchEngineTest {
     private val filters = GlobalSearchFilters()
 
+    @org.junit.Before
+    fun printCoroutineClasspath() {
+        // DIAGNOSTIC (temporary): the resolved coroutines artifacts behind
+        // these tests, and the full trace of any lane exception.
+        runCatching {
+            val core = Class.forName("kotlinx.coroutines.Job")
+            println("[diag] coroutines-core: ${core.protectionDomain.codeSource.location}")
+            val test = Class.forName("kotlinx.coroutines.test.TestScope")
+            println("[diag] coroutines-test: ${test.protectionDomain.codeSource.location}")
+        }
+    }
+
     /** An engine scriptable per call: what to answer, and how slowly. */
     private class FakeEngine(
         override val name: String,
@@ -78,7 +90,14 @@ class MergedSearchEngineTest {
                 )
             val merged = MergedSearchEngine(primary, secondary, secondaryTimeoutMs = 1_000)
 
-            val outcome = merged.search("mountain", 1, filters)
+            val outcome =
+                try {
+                    merged.search("mountain", 1, filters)
+                } catch (t: Throwable) {
+                    t.printStackTrace()
+                    throw t
+                }
+            println("[diag] interleave outcome=${outcome::class.simpleName}")
 
             val page = (outcome as Success).page
             assertEquals(listOf("a", "x", "b", "a", "c", "y").distinct(), page.results.map { it.id })
