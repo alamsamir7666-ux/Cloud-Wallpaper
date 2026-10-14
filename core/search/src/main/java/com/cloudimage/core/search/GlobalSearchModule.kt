@@ -9,7 +9,9 @@ import okhttp3.OkHttpClient
 import javax.inject.Singleton
 
 /**
- * Binds the global image search to the Browser repo system's backend.
+ * Binds the global image search to its merged engine (v1.2.14): the
+ * Browser repo system's bridge as the primary lane, and Reddit's public
+ * listing API — called directly from the device — as the secondary.
  *
  * The engine and its [SearchBackendConfig] are constructed here (not via
  * @Inject) because their inputs are deployment wiring: which client they
@@ -33,9 +35,8 @@ internal object GlobalSearchModule {
         okHttpClient: OkHttpClient,
         json: Json,
     ): ImageSearchEngine =
-        BrowserSearchEngine(
-            config = config,
-            baseClient = okHttpClient,
-            json = json,
+        MergedSearchEngine(
+            primary = BrowserSearchEngine(config = config, baseClient = okHttpClient, json = json),
+            secondary = RedditSearchEngine(baseClient = okHttpClient, json = json),
         )
 }
