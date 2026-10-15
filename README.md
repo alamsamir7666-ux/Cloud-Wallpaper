@@ -3,11 +3,12 @@
 [![build](https://github.com/alamsamir7666-ux/Cloud-Wallpaper/actions/workflows/build.yml/badge.svg)](https://github.com/alamsamir7666-ux/Cloud-Wallpaper/actions/workflows/build.yml)
 
 **A CloudStream-inspired wallpaper app for Android.** The app is an engine; the
-content is plugins. Cloudimage ships as a clean, fast Material 3 client and
-gets its wallpaper sources from user-added extension repositories — with
-official providers (Wallhaven, Unsplash, Pexels, Pixabay, WallpaperCave,
-HDQWalls, WallpaperFlare, WallpapersDen)
-published in the official repo from day one.
+content is plugins. Cloudimage ships as a clean, fast Material 3 client with
+**Wallhaven built in** (bundled into the APK, works out of the box) and gets
+every other wallpaper source from user-added extension repositories — the
+curated [Cloud-wallpaper-Bundles](https://github.com/alamsamir7666-ux/Cloud-wallpaper-Bundles)
+repository carries WallpaperFlare, WallpapersDen, WallHere, Unsplash, Pexels,
+Pixabay, WallpaperCave and HDQWalls.
 
 > **Status:** `v1.0.0` — feature complete (8/8 parts). See [PLAN.md](PLAN.md).
 
@@ -15,10 +16,10 @@ published in the official repo from day one.
 
 Grab the latest signed APK from
 [Releases](https://github.com/alamsamir7666-ux/Cloud-Wallpaper/releases/latest) —
-or update straight from the app's Settings → Updates card. The official
-extension repository ships with the app, so Wallhaven works out of the box;
-Unsplash, Pexels and Pixabay install from the same place with your own API
-keys, and WallpaperCave (scraped, keyless) installs from there too.
+or update straight from the app's Settings → Updates card. Wallhaven is built
+into the app and works out of the box; every other source installs from the
+[Bundles repository](https://github.com/alamsamir7666-ux/Cloud-wallpaper-Bundles)
+(Extensions → Add repository).
 
 ## What you get
 
@@ -54,7 +55,7 @@ Single-activity Jetpack Compose app, unidirectional data flow, feature modules.
 | `:core:muzei` | Muzei source provider — the app as a Muzei artwork source |
 | `:core:testing` | Test doubles (fake repositories, dispatcher rule) |
 | `:extensions:core` | Plugin engine — install, verify, load, repos |
-| `:providers:*` | Official plugins — wallhaven (bundled), unsplash, pexels, pixabay, wallpapercave, hdqwalls, wallpaperflare, wallpapersden (scraped) |
+| `:providers:wallhaven` | The built-in wallpaper source — bundled into the APK as a bundled extension |
 | `:feature:browse` | Home grid, search |
 | `:feature:detail` | Preview & apply |
 | `:feature:extensions` | Plugin/repo manager |
