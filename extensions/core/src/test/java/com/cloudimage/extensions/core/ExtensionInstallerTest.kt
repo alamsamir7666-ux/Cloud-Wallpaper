@@ -139,4 +139,53 @@ class ExtensionInstallerTest {
     fun uninstallOfUnknownExtensionIsFalse() {
         assertFalse(installer.uninstall("cloudimage.nope"))
     }
+
+    @Test
+    fun installMarksPackageReadOnlyForAndroid14DexRule() {
+        val source = TestPackages.packageExtension(tempDir.root)
+
+        installer.install(source)
+
+        val packageFile = dirs.packageFile("cloudimage.demo.zip")
+        assertTrue(packageFile.isFile)
+        assertFalse(packageFile.canWrite())
+        // The checksum gate still verifies a read-only package.
+        assertEquals(ExtensionStatus.READY, scanner.scan().single().status)
+    }
+
+    @Test
+    fun reinstallOverReadOnlyPackageReplacesItAndStaysReadOnly() {
+        installer.install(
+            TestPackages.packageExtension(tempDir.root, manifest = TestPackages.manifestJson(versionName = "1.0.0")),
+        )
+
+        val result =
+            installer.install(
+                TestPackages.packageExtension(
+                    tempDir.root,
+                    manifest = TestPackages.manifestJson(versionName = "2.0.0", versionCode = 2),
+                    fileName = "v2.zip",
+                ),
+            )
+
+        assertTrue(result is InstallResult.Installed)
+        val packageFile = dirs.packageFile("cloudimage.demo.zip")
+        assertFalse(packageFile.canWrite())
+        val row = scanner.scan().single()
+        assertEquals(ExtensionStatus.READY, row.status)
+        assertEquals("2.0.0", row.manifest!!.versionName)
+    }
+
+    @Test
+    fun uninstallRemovesReadOnlyPackage() {
+        // v1.2.16 lands packages read-only; deletion only needs a writable
+        // parent, which packages/ is - the removal path must not regress.
+        installer.install(TestPackages.packageExtension(tempDir.root))
+
+        val removed = installer.uninstall("cloudimage.demo")
+
+        assertTrue(removed)
+        assertFalse(dirs.packageFile("cloudimage.demo.zip").exists())
+        assertTrue(index.read().isEmpty())
+    }
 }

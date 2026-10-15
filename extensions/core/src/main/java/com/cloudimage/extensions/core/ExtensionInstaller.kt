@@ -63,11 +63,18 @@ class ExtensionInstaller(
             val staging = File(target.parentFile, target.name + "." + System.nanoTime() + ".tmp")
             source.copyTo(staging, overwrite = true)
             if (target.exists()) {
+                // Read-only since v1.2.16 (Android 14+ dex-loading rule): the
+                // delete only needs a writable PARENT, which packages/ is, so
+                // replacing a previously-marked read-only package keeps working.
                 target.delete()
             }
             if (!staging.renameTo(target)) {
                 throw IOException("could not move ${staging.path} into place")
             }
+            // Android 14+ (host targetSdk 34+) refuses DexClassLoader on a
+            // writable dex container; the package is immutable from the moment
+            // it lands. Best-effort - the loader heals stragglers at open time.
+            target.setWritable(false)
             index.write(index.read() + (manifest.id to ExtensionIndexEntry(fileName = target.name, sha256 = actual)))
             InstallResult.Installed(manifest = manifest, sha256 = actual)
         } catch (e: IOException) {
