@@ -48,6 +48,10 @@ class ExtensionScannerTest {
     fun tamperedPackageIsCorrupted() {
         val source = TestPackages.packageExtension(tempDir.root)
         installer.install(source)
+        // Since v1.2.16 installed packages are read-only (the Android 14+
+        // dex-loading rule); this tamper fixture simulates a writer that
+        // already owns the file, so it re-enables write before mutating.
+        dirs.packageFile("cloudimage.demo.zip").setWritable(true)
         dirs.packageFile("cloudimage.demo.zip").appendBytes(byteArrayOf(0x63, 0x6f, 0x72, 0x72, 0x75, 0x70, 0x74))
 
         val row = scanner.scan().single()

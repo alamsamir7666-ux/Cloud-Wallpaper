@@ -94,6 +94,10 @@ class ExtensionRepositoryTest {
     fun providerForRefusesCorruptedRows() =
         runTest {
             repository.install(TestPackages.packageExtension(tempDir.root))
+            // Since v1.2.16 installed packages are read-only (the Android 14+
+            // dex-loading rule); this tamper fixture simulates a writer that
+            // already owns the file, so it re-enables write before mutating.
+            dirs.packageFile("cloudimage.demo.zip").setWritable(true)
             dirs.packageFile("cloudimage.demo.zip").appendBytes(byteArrayOf(0x74, 0x61, 0x6d, 0x70, 0x65, 0x72))
             repository.refresh()
             val corrupted = repository.installed.value!!.single()
