@@ -512,13 +512,25 @@ internal class WebViewCloudflareSolver(
      * A WebView configured to look and behave like the browser the zone
      * wants to see: JavaScript on (the challenge IS JavaScript — no JS,
      * no clearance) and DOM storage on (Turnstile reads it like any real
-     * page). Nothing else is touched — v1.2.4: the User-Agent stays the
-     * WebView default (CloudStream's CloudflareKiller passes `null` for
-     * exactly this reason — "setting user agent will make cloudflare
-     * break"), and network images load freely (CloudStream removed its
-     * own image blocking because suppressing the challenge page's
-     * resources broke the captcha). Every deviation from a plain browser
-     * is a signal Turnstile can score; the fewer, the better.
+     * page). Nothing else is touched but one surgical exception (v1.2.17):
+     * the User-Agent is the device default with its two embedded-only
+     * markers — the parenthetical's `; wv` and the fossil `Version/4.0`
+     * WebKit token — removed via [chromeCoherentUserAgent], leaving the
+     * string exactly what the phone's own Chrome sends: same engine,
+     * same true Chrome version, same device profile.
+     *
+     * Why this is not the reverted v1.2.3 experiment: that one CLAIMED a
+     * Chrome version the engine was not, and CloudStream's warning —
+     * "setting user agent will make cloudflare break" — is about exactly
+     * that UA-versus-engine lie. Here every number stays the engine's own
+     * truth; only the two tokens that mark the browser as embedded go,
+     * because an aggressive zone (wallpapersden.com, in the wild, on two
+     * different devices) can key its WAF rules and Browser Integrity
+     * checks on them while serving the identical engine presenting as
+     * Chrome — verified through a clean-browser vantage that gets the
+     * real content. Network images still load freely (CloudStream removed
+     * its own image blocking because suppressing the challenge page's
+     * resources broke the captcha).
      */
     private fun createWebView(client: ChallengeClient): WebView {
         val cookies = cookieManager
@@ -527,6 +539,9 @@ internal class WebViewCloudflareSolver(
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
+            // The identity every clearance this trip earns is bound to —
+            // the Chrome-coherent form of the device's default agent.
+            userAgentString = defaultUserAgent()
         }
         cookies.setAcceptThirdPartyCookies(webView, true)
         // The counting client keeps the challenge's redirects inside this
@@ -898,22 +913,35 @@ internal class WebViewCloudflareSolver(
     private val json = Json
 
     /**
-     * The device's true default WebView User-Agent, read once and cached —
-     * the identity every solver WebView wears and every clearance is bound
-     * to (v1.2.4). `WebSettings.getDefaultUserAgent` needs no WebView
+     * The Chrome-coherent form of the device's default WebView User-Agent,
+     * read once and cached — the identity every solver WebView wears and
+     * every clearance is bound to (v1.2.4 introduced the default-agent
+     * binding; v1.2.17 cleans it via [chromeCoherentUserAgent], so the
+     * (cookies, agent) pair always matches what a trip actually wore —
+     * the WebView is configured with this same string in
+     * [createWebView], the replay and the persisted warm start read it
+     * back here). `WebSettings.getDefaultUserAgent` needs no WebView
      * instance and is stable for a given device + WebView version, so the
      * cache never goes stale mid-launch. Failures fall back to the UA of a
      * throwaway WebView, and only if even that fails to null — which makes
      * the callers decline rather than guess an agent the cookies were
      * never earned under.
+     *
+     * Warm-start note for upgrades: a clearance persisted by an older
+     * version of the app was earned under the RAW default agent, so its
+     * first replay under the cleaned form fails the (IP, User-Agent) bind
+     * — the zone answers a challenge, the ladder re-solves under the
+     * cleaned identity, and the state heals on its own. Only zones that
+     * HAD a working clearance pay one extra solve, once.
      */
     private fun defaultUserAgent(): String? {
         defaultUserAgentCached?.let { return it }
         val agent =
             runCatching { WebSettings.getDefaultUserAgent(context) }.getOrNull()
                 ?: runCatching { WebView(context).settings.userAgentString }.getOrNull()
-        defaultUserAgentCached = agent
-        return agent
+        val challengeAgent = agent?.let(::chromeCoherentUserAgent)
+        defaultUserAgentCached = challengeAgent
+        return challengeAgent
     }
 
     @Volatile

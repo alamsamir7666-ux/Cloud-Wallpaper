@@ -275,6 +275,60 @@ object CloudflareChallenge {
 }
 
 /**
+ * The default WebView agent with its two embedded-only tokens surgically
+ * removed — the challenge identity (v1.2.17).
+ *
+ * An Android WebView's default User-Agent announces itself as embedded in
+ * exactly two places a real Chrome never does:
+ * - the `; wv` token inside the device parenthetical —
+ *   `(Linux; Android 14; SM-A536B; wv)` where Chrome sends
+ *   `(Linux; Android 14; SM-A536B)`;
+ * - the fossil `Version/4.0` WebKit token before the Chrome version —
+ *   `Gecko) Version/4.0 Chrome/126` where Chrome sends `Gecko) Chrome/126`.
+ *
+ * Both are static, UA-level markers an aggressive Cloudflare zone can score
+ * against an embedded browser with a WAF rule or the Browser Integrity
+ * Check while the very same engine presenting as Chrome sails through —
+ * the wallpapersden.com field report is the case in the wild: the zone
+ * hard-blocks the HTTP client's TLS fingerprint, serves a REAL browser
+ * (verified through a clean-browser vantage) real content, and re-loops
+ * its interactive challenge against the app's WebView on two different
+ * devices, the one fingerprint difference between that WebView and the
+ * phones' own Chrome being these two tokens.
+ *
+ * This is deliberately NOT the reverted v1.2.3 experiment, which claimed a
+ * hand-picked Chrome version the engine was not — a UA-versus-engine lie
+ * Turnstile's consistency checks punish. Here the engine's TRUE Chrome
+ * version, platform and device profile all survive verbatim; only the two
+ * embedded markers go, which leaves the string exactly what the device's
+ * own Chrome would send — an identity the engine can honor in full because
+ * it IS that Chromium build. A zone that still refuses this identity is
+ * refusing the phone's browser too, and no client-side change can help.
+ *
+ * Surgical by construction: a `wv` outside the parenthetical (a build
+ * label, say) is untouched, an agent with neither token returns unchanged,
+ * and any whitespace the removals disturb is renormalized. Pairing stays
+ * coherent because every clearance is earned and replayed under the
+ * cleaned form — [WebViewCloudflareSolver] applies this to its challenge
+ * WebViews and reads it back for the (cookies, User-Agent) pair.
+ */
+internal fun chromeCoherentUserAgent(agent: String): String =
+    agent
+        .replace(EMBEDDED_WEBVIEW_TOKEN, "")
+        .replace(LEGACY_WEBKIT_VERSION_TOKEN, "")
+        .replace(RUNS_OF_SPACES, " ")
+        .trim()
+
+/** The `; wv` embedded-WebView marker inside the device parenthetical. */
+private val EMBEDDED_WEBVIEW_TOKEN = Regex("""\s*;\s*wv(?=\s*\))""")
+
+/** The fossil `Version/4.0` token a real Chrome never sends. */
+private val LEGACY_WEBKIT_VERSION_TOKEN = Regex("""\s*Version/4\.0(?=\s)""")
+
+/** Whitespace renormalization after a token removal. */
+private val RUNS_OF_SPACES = Regex("""\s{2,}""")
+
+/**
  * The zone a host's Cloudflare state belongs to: the registrable domain
  * (the eTLD+1 a `cf_clearance` cookie is issued for), approximated
  * without shipping a full Public Suffix List.
