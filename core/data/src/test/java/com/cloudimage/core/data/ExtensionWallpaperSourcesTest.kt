@@ -33,6 +33,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -1478,7 +1479,7 @@ class ExtensionWallpaperSourcesTest {
             engine.publish(extension("cloudimage.ghost"))
             val sources = sources(engine)
 
-            val available = sources.sources.first { it != null }
+            val available = sources.sources.filterNotNull().first()
             assertTrue(available.isEmpty())
             val failures = sources.loadFailures.first { it.isNotEmpty() }
             assertEquals(listOf("cloudimage.ghost"), failures.keys.toList())
