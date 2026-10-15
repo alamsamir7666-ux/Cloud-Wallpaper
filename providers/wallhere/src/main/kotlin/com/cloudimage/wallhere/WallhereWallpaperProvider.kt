@@ -261,7 +261,7 @@ class WallhereWallpaperProvider : WallpaperProvider {
         page: Int,
     ): Page {
         if (page < 1 || page > MAX_PAGES) return Page(emptyList(), nextPage = null)
-        val response = get("$BASE_URL$pagedPath(path, page)")
+        val response = get("$BASE_URL${pagedPath(path, page)}")
         if (!response.isSuccessful) {
             throw httpError(response.statusCode)
         }
