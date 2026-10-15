@@ -73,6 +73,21 @@ class ExtensionWallpaperSources
         /** The disabled source ids, kept current from DataStore (v1.0.9 Part 3). */
         private val disabled = MutableStateFlow<Set<String>>(emptySet())
 
+        /**
+         * Serializes the refresh passes (v1.2.15): the installed collector,
+         * the disabled collector and AppBootstrapper's startup call can now
+         * fire close together, and their state writes must not interleave.
+         * Never re-entered — refresh() does not call itself.
+         *
+         * Declared BEFORE the init block on purpose: the collectors launch on
+         * the app scope, and an Unconfined-dispatched scope (the test harness
+         * uses one) runs the first refresh inline inside the constructor — a
+         * field declared after init is still null at that moment. Kotlin runs
+         * initializers and init blocks in declaration order; this ordering is
+         * load-bearing, not stylistic.
+         */
+        private val refreshMutex = Mutex()
+
         init {
             // v1.2.15: the installed set itself drives the refreshes. Install,
             // uninstall and the bundled reconcile all mutate `installed`, and
@@ -97,14 +112,6 @@ class ExtensionWallpaperSources
                 }
             }
         }
-
-        /**
-         * Serializes the refresh passes (v1.2.15): the installed collector,
-         * the disabled collector and AppBootstrapper's startup call can now
-         * fire close together, and their state writes must not interleave.
-         * Never re-entered — refresh() does not call itself.
-         */
-        private val refreshMutex = Mutex()
 
         override suspend fun refresh() {
             refreshMutex.withLock {
