@@ -210,6 +210,13 @@ data class BrowseUiState(
     val searchFocused: Boolean = false,
     /** Sources that failed the last merged grid search (v1.0.9). */
     val sourceFailures: List<FailedSource> = emptyList(),
+    /**
+     * Load-failure reasons by extension id, from the engine (v1.2.15):
+     * when extensions are installed but NONE could be loaded, the
+     * no-sources panel uses these to point at the Extensions tab instead
+     * of the misleading "install a provider" advice.
+     */
+    val loadFailures: Map<String, String> = emptyMap(),
     /** The album paradigm's categories (v1.1.0): the pinned source's own
      * list, for the sidebar; empty until it loads. */
     val categories: List<SourceCategory> = emptyList(),
@@ -405,6 +412,9 @@ class BrowseViewModel
                 }.launchIn(viewModelScope)
 
             var sourcesSeen: List<SourceInfo>? = null
+            sources.loadFailures
+                .onEach { failures -> _state.update { it.copy(loadFailures = failures) } }
+                .launchIn(viewModelScope)
             sources.sources
                 .onEach { available ->
                     _state.update { it.copy(sources = available) }

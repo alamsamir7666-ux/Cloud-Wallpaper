@@ -1390,4 +1390,97 @@ class ExtensionWallpaperSourcesTest {
             assertTrue(error.reason.contains("Cloudflare protection refused this connection"))
             assertTrue(error.reason.contains("Retry"))
         }
+
+    @Test
+    fun `installing an extension updates sources without a manual refresh`() =
+        runTest {
+            val provider =
+                RecordingProvider(
+                    meta = meta("cloudimage.wallhaven"),
+                    capabilities = setOf(Capability.POPULAR),
+                )
+            val engine = FakeEngine(provider)
+            val sources = sources(engine)
+
+            // What repository.install produces on success: a fresh scan
+            // emitted through `installed`. The v1.2.14 bug: this emission
+            // never reached `sources` — a freshly installed provider stayed
+            // invisible to Browse until the next process start.
+            engine.publish(extension("cloudimage.wallhaven"))
+
+            val ids =
+                sources.sources
+                    .first { list -> list.orEmpty().isNotEmpty() }
+                    .orEmpty()
+                    .map { it.id }
+            assertEquals(listOf("cloudimage.wallhaven"), ids)
+        }
+
+    @Test
+    fun `a later install adds its source while installed ones stay`() =
+        runTest {
+            val a =
+                RecordingProvider(
+                    meta = meta("cloudimage.a"),
+                    capabilities = setOf(Capability.POPULAR),
+                )
+            val b =
+                RecordingProvider(
+                    meta = meta("cloudimage.b"),
+                    capabilities = setOf(Capability.POPULAR),
+                )
+            val engine = FakeEngine(a, b)
+            engine.publish(extension("cloudimage.a"))
+            val sources = sources(engine)
+
+            engine.publish(extension("cloudimage.a"), extension("cloudimage.b"))
+
+            val ids =
+                sources.sources
+                    .first { list -> list.orEmpty().size == 2 }
+                    .orEmpty()
+                    .map { it.id }
+            assertEquals(setOf("cloudimage.a", "cloudimage.b"), ids.toSet())
+        }
+
+    @Test
+    fun `uninstalling drops its source from the live list`() =
+        runTest {
+            val a =
+                RecordingProvider(
+                    meta = meta("cloudimage.a"),
+                    capabilities = setOf(Capability.POPULAR),
+                )
+            val b =
+                RecordingProvider(
+                    meta = meta("cloudimage.b"),
+                    capabilities = setOf(Capability.POPULAR),
+                )
+            val engine = FakeEngine(a, b)
+            engine.publish(extension("cloudimage.a"), extension("cloudimage.b"))
+            val sources = sources(engine)
+
+            engine.publish(extension("cloudimage.a"))
+
+            val ids =
+                sources.sources
+                    .first { list -> list.orEmpty().size == 1 }
+                    .orEmpty()
+                    .map { it.id }
+            assertEquals(listOf("cloudimage.a"), ids)
+        }
+
+    @Test
+    fun `an extension that cannot be loaded surfaces in loadFailures`() =
+        runTest {
+            // No provider registered: every providerFor call fails.
+            val engine = FakeEngine()
+            engine.publish(extension("cloudimage.ghost"))
+            val sources = sources(engine)
+
+            val available = sources.sources.first { it != null }
+            assertTrue(available.isEmpty())
+            val failures = sources.loadFailures.first { it.isNotEmpty() }
+            assertEquals(listOf("cloudimage.ghost"), failures.keys.toList())
+        }
 }

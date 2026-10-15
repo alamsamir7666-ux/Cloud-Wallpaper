@@ -40,6 +40,12 @@
     <string name="browse_empty_results_body">Try a different search or loosen the filters.</string>
     <string name="browse_no_sources_title">No wallpaper sources</string>
     <string name="browse_no_sources_body">Install a provider from the Extensions tab to start browsing.</string>
+    <!-- v1.2.15: the honest variant — extensions ARE installed, but none of
+         them could be loaded on this device; the per-source reasons are on
+         the Extensions tab. -->
+    <string name="browse_no_sources_failed_title">Sources failed to load</string>
+    <string name="browse_no_sources_failed_body">The installed extensions could not be loaded on this device. The reason for each is on the Extensions tab.</string>
+    <string name="browse_no_sources_open_extensions">Open Extensions</string>
     <string name="browse_source_all">All sources</string>
     <string name="browse_source_manage">Manage extensions</string>
     <string name="browse_source_needs_key">This source needs an API key — add it in the Extensions tab</string>

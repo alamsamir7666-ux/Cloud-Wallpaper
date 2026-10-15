@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerializationException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -72,7 +74,19 @@ class ExtensionWallpaperSources
         private val disabled = MutableStateFlow<Set<String>>(emptySet())
 
         init {
-            appScope.launch { refresh() }
+            // v1.2.15: the installed set itself drives the refreshes. Install,
+            // uninstall and the bundled reconcile all mutate `installed`, and
+            // each change must ripple into `sources` immediately — the
+            // v1.2.14-and-older bug left a freshly installed provider
+            // invisible to Browse until the next process start, because
+            // nothing called refresh() after an install. Collecting the flow
+            // also replaces the old one-shot startup refresh: the first
+            // emission (null until the engine's first scan) triggers one.
+            appScope.launch {
+                extensions.installed.collect {
+                    refresh()
+                }
+            }
             // Toggling a source must ripple into `sources` and every later
             // query without anyone remembering to refresh — so the disabled
             // set itself triggers one. refresh() is idempotent and cheap.
@@ -84,37 +98,47 @@ class ExtensionWallpaperSources
             }
         }
 
+        /**
+         * Serializes the refresh passes (v1.2.15): the installed collector,
+         * the disabled collector and AppBootstrapper's startup call can now
+         * fire close together, and their state writes must not interleave.
+         * Never re-entered — refresh() does not call itself.
+         */
+        private val refreshMutex = Mutex()
+
         override suspend fun refresh() {
-            extensions.refresh()
-            // Authoritative at refresh time — the collector may not have
-            // run yet, and a stale set would briefly resurrect a disabled
-            // source in the switcher.
-            disabled.value = preferences.disabledSources.first()
-            val disabledNow = disabled.value
-            val newFailures = mutableMapOf<String, String>()
-            state.value =
-                (extensions.installed.value.orEmpty())
-                    .filter { it.status == ExtensionStatus.READY }
-                    .mapNotNull { extension ->
-                        val manifest = extension.manifest ?: return@mapNotNull null
-                        if (manifest.id in disabledNow) return@mapNotNull null
-                        when (val loaded = extensions.providerFor(extension)) {
-                            is LoadResult.Loaded ->
-                                SourceInfo(
-                                    id = manifest.id,
-                                    name =
-                                        loaded.provider.meta.name
-                                            .ifBlank { manifest.name },
-                                    requiresApiKey = loaded.provider.meta.requiresApiKey,
-                                    capabilities = loaded.provider.capabilities.toSourceCapabilities(),
-                                )
-                            is LoadResult.Failed -> {
-                                newFailures[manifest.id] = loaded.error.reason
-                                null
+            refreshMutex.withLock {
+                extensions.refresh()
+                // Authoritative at refresh time — the collector may not have
+                // run yet, and a stale set would briefly resurrect a disabled
+                // source in the switcher.
+                disabled.value = preferences.disabledSources.first()
+                val disabledNow = disabled.value
+                val newFailures = mutableMapOf<String, String>()
+                state.value =
+                    (extensions.installed.value.orEmpty())
+                        .filter { it.status == ExtensionStatus.READY }
+                        .mapNotNull { extension ->
+                            val manifest = extension.manifest ?: return@mapNotNull null
+                            if (manifest.id in disabledNow) return@mapNotNull null
+                            when (val loaded = extensions.providerFor(extension)) {
+                                is LoadResult.Loaded ->
+                                    SourceInfo(
+                                        id = manifest.id,
+                                        name =
+                                            loaded.provider.meta.name
+                                                .ifBlank { manifest.name },
+                                        requiresApiKey = loaded.provider.meta.requiresApiKey,
+                                        capabilities = loaded.provider.capabilities.toSourceCapabilities(),
+                                    )
+                                is LoadResult.Failed -> {
+                                    newFailures[manifest.id] = loaded.error.reason
+                                    null
+                                }
                             }
                         }
-                    }
-            failures.value = newFailures
+                failures.value = newFailures
+            }
         }
 
         override suspend fun search(

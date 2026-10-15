@@ -205,7 +205,11 @@ fun BrowseScreen(
                         onOpenExtensions = onOpenExtensions,
                     )
 
-                state.showNoSources -> NoSources()
+                state.showNoSources ->
+                    NoSources(
+                        hasLoadFailures = state.loadFailures.isNotEmpty(),
+                        onOpenExtensions = onOpenExtensions,
+                    )
 
                 state.mode == BrowseMode.ALBUMS ->
                     AlbumsHome(
@@ -1055,7 +1059,11 @@ private fun EmptyResults(
 }
 
 @Composable
-private fun NoSources(modifier: Modifier = Modifier) {
+private fun NoSources(
+    hasLoadFailures: Boolean,
+    onOpenExtensions: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1067,16 +1075,35 @@ private fun NoSources(modifier: Modifier = Modifier) {
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(56.dp),
         )
-        Text(
-            text = stringResource(R.string.browse_no_sources_title),
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Text(
-            text = stringResource(R.string.browse_no_sources_body),
-            style = MaterialTheme.typography.bodyMedium,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (hasLoadFailures) {
+            // v1.2.15: extensions ARE installed but none could be loaded on
+            // this device — the honest message points at the per-source
+            // reasons instead of advising an install that already happened.
+            Text(
+                text = stringResource(R.string.browse_no_sources_failed_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.browse_no_sources_failed_body),
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FilledTonalButton(onClick = onOpenExtensions) {
+                Text(stringResource(R.string.browse_no_sources_open_extensions))
+            }
+        } else {
+            Text(
+                text = stringResource(R.string.browse_no_sources_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.browse_no_sources_body),
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
