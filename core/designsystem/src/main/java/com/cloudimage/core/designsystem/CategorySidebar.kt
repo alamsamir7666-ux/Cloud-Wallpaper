@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -151,6 +152,14 @@ private fun CategorySidebarItem(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier =
             modifier
+                // Fill the row so every circle sits at ONE fixed x — an
+                // item that wraps its content centers the circle within
+                // its own widest child instead, and a long label then
+                // pushes that row's circle sideways (measured on a real
+                // screenshot: up to 10dp between "Games" and "Drawn
+                // wallpapers"), which reads as broken vertical rhythm.
+                // The full-width row is also the honest touch target.
+                .fillMaxWidth()
                 .clickable(onClick = onClick)
                 .semantics { contentDescription = description },
     ) {
@@ -187,7 +196,13 @@ private fun CategorySidebarItem(
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp),
+            // Full width so TextAlign.Center is actually in effect and a
+            // truncated label ellipsizes against the row, not its own
+            // wrapped width.
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp, start = 2.dp, end = 2.dp),
         )
     }
 }
