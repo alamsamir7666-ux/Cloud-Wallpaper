@@ -14,6 +14,8 @@ import androidx.navigation.navArgument
 import com.cloudimage.core.data.viewer.ViewerSession
 import com.cloudimage.core.model.Wallpaper
 import com.cloudimage.feature.browse.BrowseScreen
+import com.cloudimage.feature.browser.BrowserDestination
+import com.cloudimage.feature.browser.BrowserScreen
 import com.cloudimage.feature.detail.DetailDestination
 import com.cloudimage.feature.detail.DetailScreen
 import com.cloudimage.feature.extensions.BundleDetailScreen
@@ -67,6 +69,12 @@ fun CloudimageNavHost(
                         launchSingleTop = true
                         restoreState = true
                     }
+                },
+                // The escape hatch's destination: a failed source's
+                // Cloudflare story carries the site URL (v1.2.19), and
+                // the in-app browser is where the user clears it by hand.
+                onOpenSite = { url ->
+                    navController.navigate(BrowserDestination.createRoute(url))
                 },
             )
         }
@@ -124,6 +132,25 @@ fun CloudimageNavHost(
         }
         composable(ExtensionsDestination.installedRoute) {
             InstalledExtensionsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(
+            route = BrowserDestination.route,
+            arguments =
+                listOf(
+                    navArgument(BrowserDestination.urlArg) { type = NavType.StringType },
+                ),
+        ) { backStackEntry ->
+            val url =
+                BrowserDestination.decodeUrl(
+                    backStackEntry.arguments?.getString(BrowserDestination.urlArg).orEmpty(),
+                )
+            // Pop-only exit: the browser's ViewModel teardown is what
+            // forgives the ladder's cooldowns and warm-read latch, so every
+            // exit path (X, system back, process death) funnels through it.
+            BrowserScreen(
+                url = url,
+                onClosed = { navController.popBackStack() },
+            )
         }
         composable(TopLevelDestination.SETTINGS.route) {
             SettingsScreen(

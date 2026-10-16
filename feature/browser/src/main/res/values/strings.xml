@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The status strip's two honest states: what to do, then that it worked. -->
+    <string name="browser_verify_hint">If a verification box appears, tap it — this app remembers the pass.</string>
+    <string name="browser_verified">Verification passed — you can close this page.</string>
+
+    <!-- App bar affordances. -->
+    <string name="browser_reload">Reload page</string>
+    <string name="browser_close">Close browser</string>
+    <string name="browser_navigate_back">Go back one page</string>
+</resources>

@@ -68,6 +68,7 @@ internal fun SectionsHome(
     activeGridState: MutableState<LazyStaggeredGridState?>,
     onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
     onLoadMoreSection: (String) -> Unit,
+    onOpenSite: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (tabs.isEmpty()) return
@@ -130,6 +131,7 @@ internal fun SectionsHome(
                     activeGridState = activeGridState,
                     onWallpaperClick = onWallpaperClick,
                     onLoadMore = { onLoadMoreSection(section.key) },
+                    onOpenSite = onOpenSite,
                 )
             }
         }
@@ -173,6 +175,7 @@ private fun SectionTabGrid(
     activeGridState: MutableState<LazyStaggeredGridState?>,
     onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
     onLoadMore: () -> Unit,
+    onOpenSite: (String) -> Unit,
 ) {
     val gridState = rememberSaveable(saver = LazyStaggeredGridState.Saver) { LazyStaggeredGridState() }
     LaunchedEffect(isCurrentPage) {
@@ -214,7 +217,9 @@ private fun SectionTabGrid(
                         isLoadingMore = section.isLoadingMore,
                         error = section.error,
                         errorDetail = section.errorDetail,
+                        challengeUrl = section.errorChallengeUrl,
                         onRetry = onLoadMore,
+                        onOpenSite = onOpenSite,
                     )
                 }
             }
@@ -292,7 +297,9 @@ private fun SectionGridFooter(
     isLoadingMore: Boolean,
     error: BrowseError?,
     errorDetail: String?,
+    challengeUrl: String?,
     onRetry: () -> Unit,
+    onOpenSite: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when {
@@ -324,6 +331,7 @@ private fun SectionGridFooter(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
                         )
                     }
+                    OpenSiteAction(challengeUrl = challengeUrl, onOpenSite = onOpenSite)
                     TextButton(onClick = onRetry) {
                         Text(stringResource(R.string.browse_retry))
                     }

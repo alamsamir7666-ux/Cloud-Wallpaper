@@ -142,12 +142,29 @@ class CloudflareBypasser(
      * cooling". The v1.2.11 field report ended at precisely that dead
      * Retry. Failure state is what forgiveness clears; an earned identity
      * is never collateral — a zone the user already cleared stays cleared.
+     *
+     * v1.2.19 adds the warm-read latch to what forgiveness clears: the
+     * one-persisted-look-per-launch guard would otherwise keep a zone
+     * that already failed from EVER re-reading the jar this launch, so a
+     * clearance the user then earned BY HAND in the in-app browser —
+     * written to the same system jar — stays invisible until an app
+     * restart. One fresh look costs one cheap `persistedStateFor` read;
+     * a skipped one wastes the entire escape hatch.
      */
     fun forgiveFailures() {
         solveFailedAt.clear()
         fetchFailedAt.clear()
+        warmChecked.clear()
         runCatching { solver.resetFailureMemory() }
     }
+
+    /**
+     * The User-Agent identity clearances are bound to (v1.2.19) — see
+     * [CloudflareSolver.challengeUserAgent]. The in-app browser consults
+     * this so a hand-earned clearance matches what [currentBypassFor]
+     * and the warm-start read will replay.
+     */
+    fun challengeUserAgent(): String? = solver.challengeUserAgent()
 
     /**
      * Solves a challenge for the host of [url] and returns the fresh

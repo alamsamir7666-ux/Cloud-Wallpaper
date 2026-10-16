@@ -53,6 +53,9 @@ class CloudflareBypasserTest {
         var next: CloudflareBypass? = CloudflareBypass(cookieHeader = "cf_clearance=fresh", userAgent = "SolverAgent/1")
         var nextPage: WebViewPage? = null
         var failureMemoryResets = 0
+        var agent: String? = null
+
+        override fun challengeUserAgent(): String? = agent
 
         override suspend fun persistedStateFor(host: String): CloudflareBypass? {
             persistedHosts += host
@@ -528,5 +531,61 @@ class CloudflareBypasserTest {
             val state = bypasser.bypassStateFor("https://images.wallpapersden.com/image/ws-x_1.jpg")
             assertEquals("cf_clearance=fresh", state?.cookieHeader)
             assertEquals(1, solver.solvedUrls.size)
+        }
+
+    @Test
+    fun forgivenessReReadsThePersistedJarAfterAHandEarnedClearance() =
+        runTest {
+            // v1.2.19: the in-app browser's contract. The zone already
+            // failed this launch (warm latch set, cooldown set), and then
+            // the user cleared the challenge BY HAND — the jar now holds
+            // a clearance. Without forgiveness the one-warm-look-per-launch
+            // latch would keep that clearance invisible until an app
+            // restart; the browser's teardown forgiveness must re-open the
+            // warm read so the very next request replays under it.
+            val solver =
+                ScriptedSolver().apply {
+                    next = null // the automated solve fails
+                    persisted = null // and the jar starts empty
+                }
+            val bypasser = CloudflareBypasser(solver)
+
+            assertNull(bypasser.bypassStateFor("https://www.wallpaperflare.com/search?wallpaper=nature"))
+            assertNull(bypasser.solve("https://www.wallpaperflare.com/search?wallpaper=nature"))
+            assertEquals(1, solver.solvedUrls.size)
+
+            // The user opens the site in the in-app browser and taps the
+            // checkbox: the system jar — the one persistedStateFor reads —
+            // now holds a hand-earned clearance.
+            solver.persisted = CloudflareBypass(cookieHeader = "cf_clearance=hand-earned", userAgent = "SolverAgent/1")
+
+            // Still invisible: the zone was already warm-checked and its
+            // solve lane is cooling down.
+            assertNull(bypasser.bypassStateFor("https://www.wallpaperflare.com/search?wallpaper=nature"))
+
+            // The browser closes — teardown forgiveness.
+            bypasser.forgiveFailures()
+
+            val state = bypasser.bypassStateFor("https://www.wallpaperflare.com/search?wallpaper=nature")
+            assertNotNull(state)
+            assertEquals("cf_clearance=hand-earned", state?.cookieHeader)
+            // The clearance was READ, not re-solved — the hand-earned pass
+            // is the one that stuck.
+            assertEquals(1, solver.solvedUrls.size)
+        }
+
+    @Test
+    fun theChallengeUserAgentIsTheSolversIdentity() =
+        runTest {
+            // v1.2.19: the in-app browser wears whatever the ladder binds
+            // its clearances to — one identity everywhere, so a hand-earned
+            // (cookies, agent) pair is exactly what the replay expects.
+            val solver =
+                ScriptedSolver().apply {
+                    agent = "ChromeCoherent/1 (the solver's pinned identity)"
+                }
+            val bypasser = CloudflareBypasser(solver)
+
+            assertEquals("ChromeCoherent/1 (the solver's pinned identity)", bypasser.challengeUserAgent())
         }
 }

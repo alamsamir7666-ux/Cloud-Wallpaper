@@ -446,4 +446,18 @@ interface CloudflareSolver {
      * memory have nothing to forget.
      */
     fun resetFailureMemory() {}
+
+    /**
+     * The User-Agent identity every clearance this solver earns is bound
+     * to — the Chrome-coherent form of the device's default WebView agent
+     * (v1.2.17). The in-app browser (v1.2.19) wears the SAME string, so a
+     * clearance the user earns by hand binds to the exact identity
+     * [persistedStateFor] reconstructs and the ladder replays under: one
+     * identity everywhere, no UA-versus-jar mismatch on the handoff.
+     *
+     * Null when the device cannot report an agent (no WebView); the
+     * caller then declines to pin one and the browser wears its own
+     * default — a degraded but honest fallback.
+     */
+    fun challengeUserAgent(): String? = null
 }

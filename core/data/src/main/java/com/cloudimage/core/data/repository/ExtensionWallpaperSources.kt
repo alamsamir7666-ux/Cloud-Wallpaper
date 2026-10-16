@@ -13,6 +13,7 @@ import com.cloudimage.core.network.NetworkResult
 import com.cloudimage.extensions.core.ExtensionRepository
 import com.cloudimage.extensions.core.ExtensionStatus
 import com.cloudimage.extensions.core.LoadResult
+import com.cloudimage.extensions.core.ProviderCloudflareException
 import com.cloudimage.extensions.core.ProviderTransportException
 import com.cloudimage.extensions.core.reason
 import com.cloudimage.provider.api.Capability
@@ -465,6 +466,15 @@ class ExtensionWallpaperSources
                     NetworkError.Source(
                         "source failed to bind its classes (${javaClass.simpleName}: $message) — " +
                             "update the app or reinstall the source",
+                    )
+                // The ladder's honest dead end carries the site the user can
+                // clear by hand (v1.2.19): the challenge URL rides along so
+                // the browse error surfaces can offer the in-app browser —
+                // the escape hatch Retry alone could never be.
+                is ProviderCloudflareException ->
+                    NetworkError.Source(
+                        reason = "source failed: $message",
+                        challengeUrl = "https://$host/",
                     )
                 is ProviderHttpException -> NetworkError.Source("source failed: $message")
                 else -> NetworkError.Source("source failed: ${message ?: javaClass.simpleName}")

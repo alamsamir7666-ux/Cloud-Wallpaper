@@ -106,6 +106,8 @@ data class AlbumContentState(
     val error: BrowseError? = null,
     /** The source's own failure reason, shown under the error (v1.0.14 style). */
     val errorDetail: String? = null,
+    /** The site the user can open to clear a Cloudflare refusal (v1.2.19). */
+    val errorChallengeUrl: String? = null,
 )
 
 /** One source that failed the last merged search, for the summary chip (v1.0.9). */
@@ -155,6 +157,8 @@ data class BrowseSectionState(
     val error: BrowseError? = null,
     /** The source's own failure reason, shown under the banner (v1.0.14). */
     val errorDetail: String? = null,
+    /** The site the user can open to clear a Cloudflare refusal (v1.2.19). */
+    val errorChallengeUrl: String? = null,
 )
 
 /** Immutable snapshot of everything the browse screen renders. */
@@ -192,6 +196,8 @@ data class BrowseUiState(
     val error: BrowseError? = null,
     /** The failing source's own reason, shown under the banner (v1.0.14). */
     val errorDetail: String? = null,
+    /** The site the user can open to clear a Cloudflare refusal (v1.2.19). */
+    val errorChallengeUrl: String? = null,
     /** The usable sources, or null while they are being discovered. */
     val sources: List<SourceInfo>? = null,
     /** The source the feed is pinned to; null means the merged feed of all sources. */
@@ -719,7 +725,12 @@ class BrowseViewModel
                             }
                         }.onFailure { error ->
                             _state.update {
-                                it.copy(isLoadingMore = false, error = error.toBrowseError(), errorDetail = error.failureDetail())
+                                it.copy(
+                                    isLoadingMore = false,
+                                    error = error.toBrowseError(),
+                                    errorDetail = error.failureDetail(),
+                                    errorChallengeUrl = error.challengeUrl(),
+                                )
                             }
                         }
                 }
@@ -752,11 +763,17 @@ class BrowseViewModel
                                     endReached = !result.page.hasNext,
                                     error = null,
                                     errorDetail = null,
+                                    errorChallengeUrl = null,
                                 )
                             }
                         }.onFailure { error ->
                             updateSection(key) {
-                                it.copy(isLoadingMore = false, error = error.toBrowseError(), errorDetail = error.failureDetail())
+                                it.copy(
+                                    isLoadingMore = false,
+                                    error = error.toBrowseError(),
+                                    errorDetail = error.failureDetail(),
+                                    errorChallengeUrl = error.challengeUrl(),
+                                )
                             }
                         }
                 }
@@ -807,6 +824,7 @@ class BrowseViewModel
                     endReached = false,
                     error = null,
                     errorDetail = null,
+                    errorChallengeUrl = null,
                     suggestions = emptyList(),
                     suggestLoading = false,
                     sourceFailures = emptyList(),
@@ -887,6 +905,7 @@ class BrowseViewModel
                     endReached = false,
                     error = null,
                     errorDetail = null,
+                    errorChallengeUrl = null,
                     showApiKeyPrompt = needsKey,
                     suggestions = emptyList(),
                     suggestLoading = false,
@@ -916,13 +935,19 @@ class BrowseViewModel
                                         isFirstLoading = false,
                                         error = null,
                                         errorDetail = null,
+                                        errorChallengeUrl = null,
                                     )
                                 }
                                 rows.forEach { loadSectionFirstPage(it) }
                             }
                         }.onFailure { error ->
                             _state.update {
-                                it.copy(isFirstLoading = false, error = error.toBrowseError(), errorDetail = error.failureDetail())
+                                it.copy(
+                                    isFirstLoading = false,
+                                    error = error.toBrowseError(),
+                                    errorDetail = error.failureDetail(),
+                                    errorChallengeUrl = error.challengeUrl(),
+                                )
                             }
                         }
                 }
@@ -933,7 +958,9 @@ class BrowseViewModel
             sectionPages[section.key] = 1
             sectionJobs[section.key] =
                 viewModelScope.launch {
-                    updateSection(section.key) { it.copy(isFirstLoading = true, error = null, errorDetail = null) }
+                    updateSection(section.key) {
+                        it.copy(isFirstLoading = true, error = null, errorDetail = null, errorChallengeUrl = null)
+                    }
                     sources
                         .search(
                             effectiveSectionQuery(section),
@@ -947,11 +974,17 @@ class BrowseViewModel
                                     endReached = !result.page.hasNext,
                                     error = null,
                                     errorDetail = null,
+                                    errorChallengeUrl = null,
                                 )
                             }
                         }.onFailure { error ->
                             updateSection(section.key) {
-                                it.copy(isFirstLoading = false, error = error.toBrowseError(), errorDetail = error.failureDetail())
+                                it.copy(
+                                    isFirstLoading = false,
+                                    error = error.toBrowseError(),
+                                    errorDetail = error.failureDetail(),
+                                    errorChallengeUrl = error.challengeUrl(),
+                                )
                             }
                         }
                 }
@@ -1008,6 +1041,7 @@ class BrowseViewModel
                     endReached = false,
                     error = null,
                     errorDetail = null,
+                    errorChallengeUrl = null,
                     showApiKeyPrompt = needsKey,
                     sourceFailures = emptyList(),
                     suggestions = emptyList(),
@@ -1062,6 +1096,7 @@ class BrowseViewModel
                                             isLoading = false,
                                             error = error.toBrowseError(),
                                             errorDetail = error.failureDetail(),
+                                            errorChallengeUrl = error.challengeUrl(),
                                         ),
                                     isFirstLoading = false,
                                 )
@@ -1108,6 +1143,7 @@ class BrowseViewModel
                                             isLoading = false,
                                             error = error.toBrowseError(),
                                             errorDetail = error.failureDetail(),
+                                            errorChallengeUrl = error.challengeUrl(),
                                         ),
                                 )
                             }
@@ -1161,6 +1197,7 @@ class BrowseViewModel
                                             isLoading = false,
                                             error = error.toBrowseError(),
                                             errorDetail = error.failureDetail(),
+                                            errorChallengeUrl = error.challengeUrl(),
                                         ),
                                 )
                             }
@@ -1202,6 +1239,7 @@ class BrowseViewModel
                                             isLoading = false,
                                             error = error.toBrowseError(),
                                             errorDetail = error.failureDetail(),
+                                            errorChallengeUrl = error.challengeUrl(),
                                         ),
                                 )
                             }
@@ -1319,6 +1357,7 @@ class BrowseViewModel
                     endReached = false,
                     error = null,
                     errorDetail = null,
+                    errorChallengeUrl = null,
                     showApiKeyPrompt = needsKey,
                     sourceFailures = emptyList(),
                 )
@@ -1337,12 +1376,18 @@ class BrowseViewModel
                                     endReached = !result.page.hasNext,
                                     error = null,
                                     errorDetail = null,
+                                    errorChallengeUrl = null,
                                     sourceFailures = result.sourceFailures.map { it.toFailedSource() },
                                 )
                             }
                         }.onFailure { error ->
                             _state.update {
-                                it.copy(isFirstLoading = false, error = error.toBrowseError(), errorDetail = error.failureDetail())
+                                it.copy(
+                                    isFirstLoading = false,
+                                    error = error.toBrowseError(),
+                                    errorDetail = error.failureDetail(),
+                                    errorChallengeUrl = error.challengeUrl(),
+                                )
                             }
                         }
                 }
@@ -1459,6 +1504,7 @@ class BrowseViewModel
                 endReached = !page.hasNext,
                 error = null,
                 errorDetail = null,
+                errorChallengeUrl = null,
             )
 
         private fun SourceFailure.toFailedSource(): FailedSource =
@@ -1490,6 +1536,9 @@ class BrowseViewModel
  * back up (v1.0.14).
  */
 private fun NetworkError.failureDetail(): String? = (this as? NetworkError.Source)?.reason
+
+/** The site whose Cloudflare refusal the user can clear by hand (v1.2.19). */
+private fun NetworkError.challengeUrl(): String? = (this as? NetworkError.Source)?.challengeUrl
 
 private fun NetworkError.toBrowseError(): BrowseError =
     when (this) {

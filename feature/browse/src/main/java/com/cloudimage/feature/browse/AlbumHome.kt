@@ -72,6 +72,7 @@ internal fun AlbumsHome(
     onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
     onBack: () -> Unit,
     onRetry: () -> Unit,
+    onOpenSite: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val stateHolder = rememberSaveableStateHolder()
@@ -98,6 +99,7 @@ internal fun AlbumsHome(
                     content = content,
                     onWallpaperClick = onWallpaperClick,
                     onRetry = onRetry,
+                    onOpenSite = onOpenSite,
                 )
             }
         } else {
@@ -107,6 +109,7 @@ internal fun AlbumsHome(
                     gridColumns = gridColumns,
                     onAlbumClick = onAlbumClick,
                     onRetry = onRetry,
+                    onOpenSite = onOpenSite,
                 )
             }
         }
@@ -200,6 +203,7 @@ private fun AlbumGrid(
     gridColumns: Int,
     onAlbumClick: (SourceAlbum) -> Unit,
     onRetry: () -> Unit,
+    onOpenSite: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyVerticalGrid(
@@ -231,7 +235,9 @@ private fun AlbumGrid(
                     AlbumGridFooter(
                         error = content.error,
                         errorDetail = content.errorDetail,
+                        challengeUrl = content.errorChallengeUrl,
                         onRetry = onRetry,
+                        onOpenSite = onOpenSite,
                     )
                 }
             }
@@ -263,6 +269,7 @@ private fun AlbumWallpaperGrid(
     content: AlbumContentState,
     onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
     onRetry: () -> Unit,
+    onOpenSite: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyVerticalStaggeredGrid(
@@ -297,7 +304,9 @@ private fun AlbumWallpaperGrid(
                     AlbumGridFooter(
                         error = content.error,
                         errorDetail = content.errorDetail,
+                        challengeUrl = content.errorChallengeUrl,
                         onRetry = onRetry,
+                        onOpenSite = onOpenSite,
                     )
                 }
             }
@@ -328,7 +337,9 @@ private fun AlbumWallpaperGrid(
 private fun AlbumGridFooter(
     error: BrowseError,
     errorDetail: String?,
+    challengeUrl: String?,
     onRetry: () -> Unit,
+    onOpenSite: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -351,6 +362,7 @@ private fun AlbumGridFooter(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
                 )
             }
+            OpenSiteAction(challengeUrl = challengeUrl, onOpenSite = onOpenSite)
             TextButton(onClick = onRetry) {
                 Text(stringResource(R.string.browse_retry))
             }

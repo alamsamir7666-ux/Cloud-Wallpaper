@@ -109,6 +109,7 @@ import com.cloudimage.core.model.Wallpaper
 fun BrowseScreen(
     onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
     onOpenExtensions: () -> Unit,
+    onOpenSite: (String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: BrowseViewModel = hiltViewModel(),
 ) {
@@ -220,6 +221,7 @@ fun BrowseScreen(
                         onWallpaperClick = onWallpaperClick,
                         onBack = { viewModel.onAlbumBack() },
                         onRetry = viewModel::onRetry,
+                        onOpenSite = onOpenSite,
                     )
 
                 state.mode == BrowseMode.SECTIONS && state.sections.isNotEmpty() ->
@@ -232,10 +234,17 @@ fun BrowseScreen(
                         activeGridState = homeGridState,
                         onWallpaperClick = onWallpaperClick,
                         onLoadMoreSection = viewModel::loadMoreSection,
+                        onOpenSite = onOpenSite,
                     )
 
                 state.showFullscreenError ->
-                    FullScreenError(error = state.error!!, errorDetail = state.errorDetail, onRetry = viewModel::onRetry)
+                    FullScreenError(
+                        error = state.error!!,
+                        errorDetail = state.errorDetail,
+                        challengeUrl = state.errorChallengeUrl,
+                        onRetry = viewModel::onRetry,
+                        onOpenSite = onOpenSite,
+                    )
 
                 state.wallpapers.isEmpty() ->
                     EmptyResults(
@@ -253,6 +262,7 @@ fun BrowseScreen(
                         gridState = gridState,
                         onWallpaperClick = onWallpaperClick,
                         onLoadMore = viewModel::loadMore,
+                        onOpenSite = onOpenSite,
                     )
             }
         }
@@ -855,6 +865,7 @@ private fun BrowseGrid(
     gridState: LazyStaggeredGridState,
     onWallpaperClick: (wallpapers: List<Wallpaper>, index: Int) -> Unit,
     onLoadMore: () -> Unit,
+    onOpenSite: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // True once the user scrolls within eight items of the end. Reading
@@ -917,7 +928,9 @@ private fun BrowseGrid(
                     isLoadingMore = state.isLoadingMore,
                     error = state.error,
                     errorDetail = state.errorDetail,
+                    challengeUrl = state.errorChallengeUrl,
                     onRetry = onLoadMore,
+                    onOpenSite = onOpenSite,
                 )
             }
         }
@@ -929,7 +942,9 @@ private fun BrowseGridFooter(
     isLoadingMore: Boolean,
     error: BrowseError?,
     errorDetail: String?,
+    challengeUrl: String?,
     onRetry: () -> Unit,
+    onOpenSite: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when {
@@ -964,6 +979,7 @@ private fun BrowseGridFooter(
                         )
                     }
                 }
+                OpenSiteAction(challengeUrl = challengeUrl, onOpenSite = onOpenSite)
                 TextButton(onClick = onRetry) {
                     Text(stringResource(R.string.browse_retry))
                 }
@@ -982,7 +998,9 @@ private fun FullScreenLoading(modifier: Modifier = Modifier) {
 private fun FullScreenError(
     error: BrowseError,
     errorDetail: String?,
+    challengeUrl: String?,
     onRetry: () -> Unit,
+    onOpenSite: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1013,6 +1031,10 @@ private fun FullScreenError(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // The Cloudflare dead end's exit (v1.2.19): the story above says
+        // the verification could not be completed — this is the one
+        // action that can complete it.
+        OpenSiteAction(challengeUrl = challengeUrl, onOpenSite = onOpenSite)
         TextButton(onClick = onRetry) {
             Text(stringResource(R.string.browse_retry))
         }

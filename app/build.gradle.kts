@@ -21,8 +21,8 @@ android {
 
     defaultConfig {
         applicationId = "com.cloudimage.app"
-        versionCode = 52
-        versionName = "1.2.18"
+        versionCode = 53
+        versionName = "1.2.19"
     }
 
     buildFeatures {
@@ -100,6 +100,7 @@ dependencies {
     implementation(project(":core:muzei"))
     implementation(project(":extensions:core"))
     implementation(project(":feature:browse"))
+    implementation(project(":feature:browser"))
     implementation(project(":feature:detail"))
     implementation(project(":feature:extensions"))
     implementation(project(":feature:library"))

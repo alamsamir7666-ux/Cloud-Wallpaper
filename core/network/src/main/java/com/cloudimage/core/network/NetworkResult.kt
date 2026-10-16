@@ -37,6 +37,15 @@ sealed interface NetworkError {
      */
     data class Source(
         val reason: String,
+        /**
+         * The site the user can open BY HAND to clear the failure, when the
+         * reason is Cloudflare's challenge refusing every automated rung
+         * (v1.2.19). Null for every other source failure — the URL exists
+         * precisely so the UI can offer the in-app browser escape hatch
+         * instead of parsing it back out of [reason], which no string
+         * parsing could do honestly.
+         */
+        val challengeUrl: String? = null,
     ) : NetworkError
 }
 

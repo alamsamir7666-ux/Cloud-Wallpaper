@@ -1390,6 +1390,10 @@ class ExtensionWallpaperSourcesTest {
             assertTrue(error.reason.contains("wallpapersden.com"))
             assertTrue(error.reason.contains("Cloudflare protection refused this connection"))
             assertTrue(error.reason.contains("Retry"))
+            // v1.2.19: the failure also carries the site to OPEN — the
+            // in-app browser escape hatch's address, not a string to
+            // parse back out of the reason.
+            assertEquals("https://wallpapersden.com/", error.challengeUrl)
         }
 
     @Test

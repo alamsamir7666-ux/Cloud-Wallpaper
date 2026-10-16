@@ -1092,4 +1092,12 @@ internal class WebViewCloudflareSolver(
     override fun resetFailureMemory() {
         attachedFailureAt.clear()
     }
+
+    /**
+     * The identity [createWebView] pins and [persistedStateFor]
+     * reconstructs — exposed for the in-app browser (v1.2.19) so a
+     * hand-earned clearance binds to the same (cookies, agent) pair every
+     * automated rung replays under. See the interface KDoc.
+     */
+    override fun challengeUserAgent(): String? = defaultUserAgent()
 }

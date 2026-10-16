@@ -355,6 +355,38 @@ class BrowseViewModelTest {
         }
 
     @Test
+    fun cloudflareFailuresCarryTheSiteToOpenAndRecoveryClearsIt() =
+        runTest {
+            val fake = FakeWallpaperSources()
+            // v1.2.19: the escape hatch's plumbing. A Cloudflare dead end
+            // rides the failure taxonomy with the site URL attached, so
+            // the error surfaces can offer "Open site to verify" — and a
+            // recovery (the user cleared it by hand, then Retry worked)
+            // must clear the URL with the rest of the error state, or a
+            // stale button would outlive the failure it belonged to.
+            fake.enqueueSearch(
+                NetworkResult.Failure(
+                    NetworkError.Source(
+                        reason = "source failed: www.wallpaperflare.com's Cloudflare protection refused this connection (HTTP 403)",
+                        challengeUrl = "https://www.wallpaperflare.com/",
+                    ),
+                ),
+            )
+            val viewModel = newViewModel(fake, backgroundScope)
+            val failed = viewModel.state.first { !it.isFirstLoading }
+
+            assertEquals(BrowseError.SOURCE, failed.error)
+            assertEquals("https://www.wallpaperflare.com/", failed.errorChallengeUrl)
+
+            fake.enqueueSearch(page(ids = listOf("fixed"), nextPage = null))
+            viewModel.onRetry()
+            val recovered = viewModel.state.first { it.wallpapers.isNotEmpty() }
+
+            assertNull(recovered.error)
+            assertNull(recovered.errorChallengeUrl)
+        }
+
+    @Test
     fun sectionSourceFailureCarriesItsReasonAndRetryClearsIt() =
         runTest {
             val fake = FakeWallpaperSources()
