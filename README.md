@@ -4,12 +4,14 @@
 
 **A CloudStream-inspired wallpaper app for Android.** The app is an engine; the
 content is plugins. Cloudimage ships as a clean, fast Material 3 client with
-**Wallhaven and WallHere built in** (bundled into the APK, works out of the
-box — WallHere since v1.2.21, which also taught the bundler to respect
-versionCodes so a repo update is never rolled back) and gets every other
-wallpaper source from user-added extension repositories — the curated
+**Wallhaven built in** (bundled into the APK, works out of the box; the
+bundler respects versionCodes so a repo update is never rolled back, and
+v1.2.22 taught it to retire ids — WallHere, bundled in v1.2.21 and retired
+after four unfixable field revisions, is uninstalled on upgrade) and gets
+every other wallpaper source from user-added extension repositories — the
+curated
 [Cloud-wallpaper-Bundles](https://github.com/alamsamir7666-ux/Cloud-wallpaper-Bundles)
-repository carries WallpaperFlare, WallpapersDen, WallHere, Unsplash, Pexels,
+repository carries WallpaperFlare, WallpapersDen, Unsplash, Pexels,
 Pixabay, WallpaperCave and HDQWalls.
 
 > **Status:** `v1.0.0` — feature complete (8/8 parts). See [PLAN.md](PLAN.md).
@@ -58,7 +60,6 @@ Single-activity Jetpack Compose app, unidirectional data flow, feature modules.
 | `:core:testing` | Test doubles (fake repositories, dispatcher rule) |
 | `:extensions:core` | Plugin engine — install, verify, load, repos |
 | `:providers:wallhaven` | The built-in wallpaper source — bundled into the APK as a bundled extension |
-| `:providers:wallhere` | WallHere — bundled since v1.2.21; the Bundles repository carries its updates (the versionCode-aware reconcile leaves a newer repo install in place) |
 | `:feature:browse` | Home grid, search |
 | `:feature:detail` | Preview & apply |
 | `:feature:extensions` | Plugin/repo manager |

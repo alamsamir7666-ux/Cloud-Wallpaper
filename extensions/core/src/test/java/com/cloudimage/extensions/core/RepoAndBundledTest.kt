@@ -240,6 +240,155 @@ class BundledExtensionsInstallerTest {
             )
         }
 
+    @Test
+    fun `retired installed extension is uninstalled`() =
+        runTest {
+            // A v1.2.21 device: WallHere installed (bundled or repo, the
+            // same shape on disk). v1.2.22 no longer ships it and retires
+            // the id — the reconcile pass must uninstall it, not orphan
+            // it under the "never remove on upgrade" default.
+            val engine = engine()
+            val wallhere =
+                TestPackages.packageExtension(
+                    tmp.newFolder(),
+                    TestPackages.manifestJson(id = "cloudimage.wallhere", versionName = "1.1.4", versionCode = 6),
+                    fileName = "wallhere.zip",
+                )
+            BundledExtensionsInstaller(
+                bundled = listOf(BundledPackage("cloudimage.wallhere", "wallhere.zip", Sha256.of(wallhere), 6)),
+                source = { wallhere.readBytes() },
+                stagingDir = tmp.newFolder(),
+            ).reconcile(engine)
+            assertEquals(
+                listOf("cloudimage.wallhere"),
+                engine.installed.value
+                    .orEmpty()
+                    .map { it.id },
+            )
+
+            val upgrade =
+                BundledExtensionsInstaller(
+                    bundled = emptyList(),
+                    source = { null },
+                    stagingDir = tmp.newFolder(),
+                    retiredIds = setOf("cloudimage.wallhere"),
+                )
+
+            upgrade.reconcile(engine)
+
+            assertTrue(
+                engine.installed.value
+                    .orEmpty()
+                    .isEmpty(),
+            )
+        }
+
+    @Test
+    fun `retirement wins over a strictly newer repo copy`() =
+        runTest {
+            // The repo-newer-survives rule protects the bundled set; a
+            // retired id is dead by policy, not superseded — even a
+            // versionCode 9 install goes (v1.2.22's deliberate call for
+            // cloudimage.wallhere: the Bundles repository dropped the
+            // package, so no sanctioned newer copy can exist).
+            val engine = engine()
+            val repoNewer =
+                TestPackages.packageExtension(
+                    tmp.newFolder(),
+                    TestPackages.manifestJson(id = "cloudimage.wallhere", versionName = "9.9.9", versionCode = 9),
+                    fileName = "wallhere.zip",
+                )
+            BundledExtensionsInstaller(
+                bundled = listOf(BundledPackage("cloudimage.wallhere", "wallhere.zip", Sha256.of(repoNewer), 9)),
+                source = { repoNewer.readBytes() },
+                stagingDir = tmp.newFolder(),
+            ).reconcile(engine)
+
+            BundledExtensionsInstaller(
+                bundled = emptyList(),
+                source = { null },
+                stagingDir = tmp.newFolder(),
+                retiredIds = setOf("cloudimage.wallhere"),
+            ).reconcile(engine)
+
+            assertTrue(
+                engine.installed.value
+                    .orEmpty()
+                    .isEmpty(),
+            )
+        }
+
+    @Test
+    fun `non-retired extensions survive the retirement pass`() =
+        runTest {
+            val engine = engine()
+            val demo = TestPackages.packageExtension(tmp.newFolder())
+            val wallhere =
+                TestPackages.packageExtension(
+                    tmp.newFolder(),
+                    TestPackages.manifestJson(id = "cloudimage.wallhere"),
+                    fileName = "wallhere.zip",
+                )
+            BundledExtensionsInstaller(
+                bundled =
+                    listOf(
+                        BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(demo), 1),
+                        BundledPackage("cloudimage.wallhere", "wallhere.zip", Sha256.of(wallhere), 1),
+                    ),
+                source = { fileName ->
+                    when (fileName) {
+                        "test-extension.zip" -> demo.readBytes()
+                        "wallhere.zip" -> wallhere.readBytes()
+                        else -> null
+                    }
+                },
+                stagingDir = tmp.newFolder(),
+            ).reconcile(engine)
+
+            BundledExtensionsInstaller(
+                bundled = listOf(BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(demo), 1)),
+                source = { demo.readBytes() },
+                stagingDir = tmp.newFolder(),
+                retiredIds = setOf("cloudimage.wallhere"),
+            ).reconcile(engine)
+
+            assertEquals(
+                listOf("cloudimage.demo"),
+                engine.installed.value
+                    .orEmpty()
+                    .map { it.id },
+            )
+        }
+
+    @Test
+    fun `retired id in the bundled list is not reinstalled`() =
+        runTest {
+            // Belt-and-braces: a build that (mistakenly) still lists a
+            // retired id among its bundled packages must not reinstall
+            // it — retirement always wins.
+            val engine = engine()
+            val wallhere =
+                TestPackages.packageExtension(
+                    tmp.newFolder(),
+                    TestPackages.manifestJson(id = "cloudimage.wallhere"),
+                    fileName = "wallhere.zip",
+                )
+            val installer =
+                BundledExtensionsInstaller(
+                    bundled = listOf(BundledPackage("cloudimage.wallhere", "wallhere.zip", Sha256.of(wallhere), 1)),
+                    source = { wallhere.readBytes() },
+                    stagingDir = tmp.newFolder(),
+                    retiredIds = setOf("cloudimage.wallhere"),
+                )
+
+            assertEquals(0, installer.reconcile(engine))
+            assertTrue(
+                engine.installed.value
+                    .orEmpty()
+                    .isEmpty(),
+            )
+        }
+
     private fun engine(): ExtensionRepository {
         val dirs = ExtensionDirs(tmp.newFolder()).ensure()
         val index = ExtensionIndex(dirs.indexFile)

@@ -33,14 +33,14 @@ private data class BundledEntry(
 
 /**
  * Startup pass: installs the provider packages this APK bundles in its
- * assets (see the sync task in app/build.gradle.kts), refreshes the
- * engine, primes the browse sources so the first browse tab visit
- * has content, and keeps the periodic wallpaper rotation in lockstep
- * with the stored settings.
+ * assets (see the sync task in app/build.gradle.kts), retires the ids
+ * this build no longer sanctions, refreshes the engine, primes the
+ * browse sources so the first browse tab visit has content, and keeps
+ * the periodic wallpaper rotation in lockstep with the stored settings.
  *
  * Runs once per process start on a background dispatcher; the reconcile
  * pass is idempotent, so an app update simply reinstalls whichever
- * bundled package changed.
+ * bundled package changed — and uninstalls whichever it retired.
  */
 @Singleton
 class AppBootstrapper
@@ -56,13 +56,12 @@ class AppBootstrapper
         fun start() {
             appScope.launch(Dispatchers.IO) {
                 val bundled = readBundled()
-                if (bundled.isNotEmpty()) {
-                    BundledExtensionsInstaller(
-                        bundled = bundled,
-                        source = AssetPackageSource(),
-                        stagingDir = File(context.cacheDir, "bundled-staging"),
-                    ).reconcile(repository)
-                }
+                BundledExtensionsInstaller(
+                    bundled = bundled,
+                    source = AssetPackageSource(),
+                    stagingDir = File(context.cacheDir, "bundled-staging"),
+                    retiredIds = RETIRED_EXTENSION_IDS,
+                ).reconcile(repository)
                 sources.refresh()
             }
 
@@ -100,5 +99,22 @@ class AppBootstrapper
 
         private companion object {
             val json = Json { ignoreUnknownKeys = true }
+
+            /**
+             * Extension ids this APK no longer ships or sanctions —
+             * uninstalled on every start wherever they came from.
+             *
+             * v1.2.22: `cloudimage.wallhere` (bundled since v1.2.21,
+             * repo-published before that). The wallhere.com truncation
+             * could not be fixed reliably in the field across four
+             * provider revisions (v1.1.1 - v1.1.4), and the Bundles
+             * repository dropped the package — so the app retires it:
+             * upgrading devices lose the dead source instead of keeping
+             * a broken one.
+             */
+            val RETIRED_EXTENSION_IDS =
+                setOf(
+                    "cloudimage.wallhere",
+                )
         }
     }

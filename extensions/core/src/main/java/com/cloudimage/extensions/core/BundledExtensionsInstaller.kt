@@ -38,6 +38,14 @@ data class BundledPackage(
  * - an installed extension that is no longer bundled is left alone —
  *   removing user data on upgrade is never the right default.
  *
+ * Retirement (v1.2.22) is the sanctioned exception to that last rule: an
+ * id in [retiredIds] is uninstalled on sight, wherever it came from —
+ * an older APK bundled it, or a repository install delivered it. The
+ * repo-newer-survives rule protects the *bundled set*; a retired id is
+ * dead by policy, not superseded, so no version of it survives. A
+ * retired id that (mistakenly) also appears in the bundled list is
+ * skipped there — retirement always wins.
+ *
  * Reconciliation keys on the extension *id* (the engine renames package
  * files on install), comparing the installed manifest's versionCode
  * with the bundled row's and the installed file's checksum with the one
@@ -49,6 +57,8 @@ class BundledExtensionsInstaller(
     private val bundled: List<BundledPackage>,
     private val source: BundledPackageSource,
     private val stagingDir: File,
+    /** Extension ids this build no longer sanctions — uninstalled on sight (v1.2.22). */
+    private val retiredIds: Set<String> = emptySet(),
 ) {
     /**
      * Installs every stale or missing bundled package; returns the number
@@ -56,12 +66,22 @@ class BundledExtensionsInstaller(
      * the pass — one broken bundle must not block the others.
      */
     suspend fun reconcile(repository: ExtensionRepository): Int {
+        // Retirement first, so the install loop below sees the post-
+        // retirement world (the repository refreshes its installed flow
+        // on every uninstall).
+        if (retiredIds.isNotEmpty()) {
+            repository.installed.value
+                .orEmpty()
+                .filter { it.id in retiredIds }
+                .forEach { repository.uninstall(it.id) }
+        }
         val installed =
             repository.installed.value
                 .orEmpty()
                 .associateBy { it.id }
         var written = 0
         for (entry in bundled) {
+            if (entry.id in retiredIds) continue
             val current = installed[entry.id]
             val installedCode = current?.manifest?.versionCode
             if (current != null && installedCode != null && installedCode > entry.versionCode) {

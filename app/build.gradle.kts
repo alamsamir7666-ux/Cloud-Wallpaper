@@ -21,8 +21,8 @@ android {
 
     defaultConfig {
         applicationId = "com.cloudimage.app"
-        versionCode = 55
-        versionName = "1.2.21"
+        versionCode = 56
+        versionName = "1.2.22"
     }
 
     buildFeatures {
@@ -108,12 +108,7 @@ dependencies {
     implementation(project(":feature:settings"))
     implementation(project(":provider:api"))
 
-    // v1.2.21: WallHere ships as a bundled default too — the stop-at-24
-    // fix reaches the device by APK install alone, independent of the
-    // repository update flow, while the versionCode-aware reconcile keeps
-    // any later repo update (a strictly newer versionCode) in place.
     bundledExtensions(project(mapOf("path" to ":providers:wallhaven", "configuration" to "extensionPackage")))
-    bundledExtensions(project(mapOf("path" to ":providers:wallhere", "configuration" to "extensionPackage")))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
