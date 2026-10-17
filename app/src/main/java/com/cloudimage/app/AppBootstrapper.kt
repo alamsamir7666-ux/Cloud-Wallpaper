@@ -27,6 +27,8 @@ private data class BundledEntry(
     val id: String,
     val fileName: String,
     val sha256: String,
+    /** The package's versionCode — the reconcile pass's ordering signal (v1.2.21). */
+    val versionCode: Int,
 )
 
 /**
@@ -79,7 +81,14 @@ class AppBootstrapper
                 context.assets.open("bundled.json").bufferedReader().use { reader ->
                     json
                         .decodeFromString(ListSerializer(BundledEntry.serializer()), reader.readText())
-                        .map { BundledPackage(id = it.id, fileName = it.fileName, sha256 = it.sha256) }
+                        .map {
+                            BundledPackage(
+                                id = it.id,
+                                fileName = it.fileName,
+                                sha256 = it.sha256,
+                                versionCode = it.versionCode,
+                            )
+                        }
                 }
             }.getOrDefault(emptyList())
 

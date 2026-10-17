@@ -75,7 +75,7 @@ class BundledExtensionsInstallerTest {
             val engine = engine()
             val installer =
                 BundledExtensionsInstaller(
-                    bundled = listOf(BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(zip))),
+                    bundled = listOf(BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(zip), 1)),
                     source = { fileName -> if (fileName == "test-extension.zip") zip.readBytes() else null },
                     stagingDir = tmp.newFolder(),
                 )
@@ -98,7 +98,7 @@ class BundledExtensionsInstallerTest {
             val engine = engine()
             val installer =
                 BundledExtensionsInstaller(
-                    bundled = listOf(BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(zip))),
+                    bundled = listOf(BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(zip), 1)),
                     source = { zip.readBytes() },
                     stagingDir = tmp.newFolder(),
                 )
@@ -110,20 +110,24 @@ class BundledExtensionsInstallerTest {
         }
 
     @Test
-    fun `app update with new checksum reinstalls`() =
+    fun `app update with newer versionCode reinstalls`() =
         runTest {
             val engine = engine()
             val first = TestPackages.packageExtension(tmp.newFolder())
             BundledExtensionsInstaller(
-                bundled = listOf(BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(first))),
+                bundled = listOf(BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(first), 1)),
                 source = { first.readBytes() },
                 stagingDir = tmp.newFolder(),
             ).reconcile(engine)
 
-            val updated = TestPackages.packageExtension(tmp.newFolder(), TestPackages.manifestJson(versionName = "1.1.0"))
+            val updated =
+                TestPackages.packageExtension(
+                    tmp.newFolder(),
+                    TestPackages.manifestJson(versionName = "1.1.0", versionCode = 2),
+                )
             val secondPass =
                 BundledExtensionsInstaller(
-                    bundled = listOf(BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(updated))),
+                    bundled = listOf(BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(updated), 2)),
                     source = { updated.readBytes() },
                     stagingDir = tmp.newFolder(),
                 )
@@ -142,12 +146,88 @@ class BundledExtensionsInstallerTest {
         }
 
     @Test
+    fun `newer repo-installed package survives the bundled copy`() =
+        runTest {
+            // v1.2.21's reason for the versionCode rule: the sha-only
+            // equality this replaced reinstalled the BUNDLED bytes over
+            // every repo update at every start — a bundled extension
+            // could never take an update. A strictly newer installed
+            // copy must be left exactly as it is.
+            val engine = engine()
+            val repoNewer =
+                TestPackages.packageExtension(
+                    tmp.newFolder(),
+                    TestPackages.manifestJson(versionName = "9.9.9", versionCode = 9),
+                )
+            BundledExtensionsInstaller(
+                bundled = listOf(BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(repoNewer), 9)),
+                source = { repoNewer.readBytes() },
+                stagingDir = tmp.newFolder(),
+            ).reconcile(engine)
+
+            val olderBundled = TestPackages.packageExtension(tmp.newFolder())
+            val secondPass =
+                BundledExtensionsInstaller(
+                    bundled = listOf(BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(olderBundled), 1)),
+                    source = { olderBundled.readBytes() },
+                    stagingDir = tmp.newFolder(),
+                )
+
+            assertEquals(0, secondPass.reconcile(engine))
+            assertEquals(
+                "9.9.9",
+                engine.installed.value
+                    .orEmpty()
+                    .single()
+                    .manifest
+                    ?.versionName,
+            )
+        }
+
+    @Test
+    fun `same version with different bytes reinstalls`() =
+        runTest {
+            // A same-version refresh an app update re-shipped: the bytes
+            // differ, the versionCode does not — the bundled copy wins
+            // the tie (the app's own build is the tie's authority).
+            val engine = engine()
+            val first = TestPackages.packageExtension(tmp.newFolder())
+            BundledExtensionsInstaller(
+                bundled = listOf(BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(first), 3)),
+                source = { first.readBytes() },
+                stagingDir = tmp.newFolder(),
+            ).reconcile(engine)
+
+            val refreshed =
+                TestPackages.packageExtension(
+                    tmp.newFolder(),
+                    TestPackages.manifestJson(versionName = "1.0.1", versionCode = 3),
+                )
+            val secondPass =
+                BundledExtensionsInstaller(
+                    bundled = listOf(BundledPackage("cloudimage.demo", "test-extension.zip", Sha256.of(refreshed), 3)),
+                    source = { refreshed.readBytes() },
+                    stagingDir = tmp.newFolder(),
+                )
+
+            assertEquals(1, secondPass.reconcile(engine))
+            assertEquals(
+                "1.0.1",
+                engine.installed.value
+                    .orEmpty()
+                    .single()
+                    .manifest
+                    ?.versionName,
+            )
+        }
+
+    @Test
     fun `bundled entry with no payload is skipped`() =
         runTest {
             val engine = engine()
             val installer =
                 BundledExtensionsInstaller(
-                    bundled = listOf(BundledPackage("cloudimage.ghost", "ghost.zip", "00")),
+                    bundled = listOf(BundledPackage("cloudimage.ghost", "ghost.zip", "00", 1)),
                     source = { null },
                     stagingDir = tmp.newFolder(),
                 )

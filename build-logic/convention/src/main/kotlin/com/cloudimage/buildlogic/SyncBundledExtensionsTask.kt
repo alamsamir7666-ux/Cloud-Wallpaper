@@ -16,9 +16,11 @@ import java.util.zip.ZipFile
  * Stages the bundled wallpaper providers into the app's assets.
  *
  * Copies every packaged (dexed) provider zip handed in through [packages]
- * into [output] and generates a `bundled.json` manifest (ids + sha256s)
- * next to them — a fresh install reconciles the packages through the
- * extension engine at first start.
+ * into [output] and generates a `bundled.json` manifest (ids, versionCodes
+ * and sha256s) next to them — a fresh install reconciles the packages
+ * through the extension engine at first start, and the versionCode each
+ * row carries is what lets that reconcile leave a repo-installed NEWER
+ * copy alone instead of stomping it back to the bundled one.
  *
  * The output is a [DirectoryProperty] (not the legacy `Sync` task) so the
  * app can wire it through the Variant API — AGP 9 rejects Provider
@@ -34,6 +36,10 @@ abstract class SyncBundledExtensionsTask : DefaultTask() {
     @get:OutputDirectory
     abstract val output: DirectoryProperty
 
+    private companion object {
+        val VERSION_CODE = Regex("\"versionCode\"\\s*:\\s*(\\d+)")
+    }
+
     @TaskAction
     fun sync() {
         val dir = output.get().asFile
@@ -43,7 +49,7 @@ abstract class SyncBundledExtensionsTask : DefaultTask() {
         val zips = dir.listFiles { file -> file.extension == "zip" }.orEmpty()
         val manifest =
             zips.joinToString(prefix = "[\n", separator = ",\n", postfix = "\n]") { zip ->
-                """  {"id": "${readExtensionId(zip)}", "fileName": "${zip.name}", "sha256": "${sha256(zip)}"}"""
+                """  {"id": "${readExtensionId(zip)}", "fileName": "${zip.name}", "sha256": "${sha256(zip)}", "versionCode": ${readExtensionVersionCode(zip)}}"""
             }
         File(dir, "bundled.json").writeText(manifest)
     }
@@ -54,6 +60,16 @@ abstract class SyncBundledExtensionsTask : DefaultTask() {
             val entry = archive.getEntry("extension.json") ?: error("${zip.name} has no extension.json")
             archive.getInputStream(entry).bufferedReader().readText()
         }.substringAfter("\"id\"").substringAfter(':').substringAfter('"').substringBefore('"')
+
+    /** Reads the `versionCode` field out of the extension.json inside a package zip. */
+    private fun readExtensionVersionCode(zip: File): Int =
+        ZipFile(zip).use { archive ->
+            val entry = archive.getEntry("extension.json") ?: error("${zip.name} has no extension.json")
+            archive.getInputStream(entry).bufferedReader().readText()
+        }.let { text ->
+            VERSION_CODE.find(text)?.groupValues?.get(1)?.toInt()
+                ?: error("${zip.name}'s extension.json declares no readable versionCode")
+        }
 
     /** Hex sha256 of a file, matching the engine's checksum format. */
     private fun sha256(file: File): String {
