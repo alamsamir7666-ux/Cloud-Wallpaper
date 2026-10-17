@@ -150,6 +150,40 @@ class BrowseViewModelTest {
         }
 
     @Test
+    fun duplicateContinuationsEndTheWalkQuietly() =
+        runTest {
+            // A provider that repeats a page it already served (a clamped
+            // or stale walk) must not crash the keyed grid with duplicate
+            // keys or spin the load-more footer — the walk ends quietly
+            // (v1.2.20).
+            val fake = FakeWallpaperSources()
+            fake.enqueueSearch(page(ids = listOf("p1"), nextPage = 2))
+            fake.enqueueSearch(page(ids = listOf("p1"), nextPage = 3))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first { !it.isFirstLoading }
+
+            viewModel.loadMore()
+            val done = viewModel.state.first { it.endReached }
+
+            assertEquals(listOf("p1"), done.wallpapers.map { it.id })
+            viewModel.loadMore()
+            assertEquals(2, fake.searchCalls.size)
+        }
+
+    @Test
+    fun duplicateCellsInsideOnePageAreServedOnce() =
+        runTest {
+            // The same id twice in ONE page would feed the staggered grid
+            // duplicate keys — the first occurrence wins.
+            val fake = FakeWallpaperSources()
+            fake.enqueueSearch(page(ids = listOf("p1", "p1", "p2"), nextPage = null))
+            val viewModel = newViewModel(fake, backgroundScope)
+            val loaded = viewModel.state.first { !it.isFirstLoading }
+
+            assertEquals(listOf("p1", "p2"), loaded.wallpapers.map { it.id })
+        }
+
+    @Test
     fun searchSubmitRestartsFromPageOne() =
         runTest {
             val fake = FakeWallpaperSources()
@@ -732,6 +766,44 @@ class BrowseViewModelTest {
                     .wallpapers
                     .map { it.id },
             )
+        }
+
+    @Test
+    fun clampedSectionContinuationsEndQuietly() =
+        runTest {
+            // A tab whose continuation repeats its first page (the source
+            // clamped a too-deep request to its last page) keeps its items,
+            // ends its walk and never re-serves the repeats (v1.2.20).
+            val fake = FakeWallpaperSources()
+            fake.setSources(SourceInfo("wallhaven", "Wallhaven", requiresApiKey = false))
+            fake.setSectionsResult(
+                NetworkResult.Success(listOf(section(sectionId = "trending", title = "Trending"))),
+            )
+            fake.enqueueSearch(page(ids = listOf("t1"), nextPage = 2))
+            fake.enqueueSearch(page(ids = listOf("t1"), nextPage = 3))
+            val viewModel = newViewModel(fake, backgroundScope)
+            viewModel.state.first {
+                it.sections
+                    .singleOrNull()
+                    ?.wallpapers
+                    ?.isNotEmpty() == true
+            }
+
+            viewModel.loadMoreSection("wallhaven:trending")
+            val done =
+                viewModel.state.first {
+                    it.sections.single().endReached
+                }
+
+            assertEquals(
+                listOf("t1"),
+                done.sections
+                    .single()
+                    .wallpapers
+                    .map { it.id },
+            )
+            viewModel.loadMoreSection("wallhaven:trending")
+            assertEquals(2, fake.searchCalls.size)
         }
 
     @Test

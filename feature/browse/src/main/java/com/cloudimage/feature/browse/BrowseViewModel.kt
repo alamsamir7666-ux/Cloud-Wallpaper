@@ -333,6 +333,16 @@ class BrowseViewModel
         /** Page cursor for the grid; 1 after every restart. */
         private var currentPage = 1
 
+        /**
+         * The (provider, id) keys the grid walk has already served — its
+         * duplicate armor (v1.2.20). A provider continuation that repeats
+         * wallpapers would otherwise append duplicate keys into the
+         * staggered grid — a crash — and one that repeats a whole page
+         * would spin the load-more footer forever. Cleared by every
+         * [startGrid]; page one seeds it.
+         */
+        private val gridServedIds = mutableSetOf<Pair<String, String>>()
+
         /** Keeps a random grid sort stable across pages of one session. */
         private var randomSeed: String? = null
 
@@ -390,6 +400,15 @@ class BrowseViewModel
         private val sectionPages = mutableMapOf<String, Int>()
         private val sectionSeeds = mutableMapOf<String, String>()
         private val sectionJobs = mutableMapOf<String, Job>()
+
+        /**
+         * Each section walk's served (provider, id) keys — the same
+         * duplicate armor the grid carries (v1.2.20), per tab: a clamped
+         * or stale continuation serves repeats, and repeats must end the
+         * walk quietly instead of crashing the keyed grid or looping its
+         * footer. Reset by every section first page.
+         */
+        private val sectionServedIds = mutableMapOf<String, MutableSet<Pair<String, String>>>()
 
         /** Provider ids that have an API key stored; drives the key prompts. */
         private var storedApiKeyIds: Set<String> = emptySet()
@@ -757,10 +776,17 @@ class BrowseViewModel
                         .onSuccess { result ->
                             sectionPages[key] = page
                             updateSection(key) { state ->
+                                val served = sectionServedIds.getOrPut(key) { mutableSetOf() }
+                                val fresh = result.page.wallpapers.filter { served.add(it.providerId to it.id) }
                                 state.copy(
-                                    wallpapers = state.wallpapers + result.page.wallpapers,
+                                    wallpapers = state.wallpapers + fresh,
                                     isLoadingMore = false,
-                                    endReached = !result.page.hasNext,
+                                    // A continuation that served nothing new
+                                    // ends the row's walk (v1.2.20): the source
+                                    // repeated what the tab already holds — a
+                                    // clamped or stale walk — and looping the
+                                    // footer on it helps no one.
+                                    endReached = !result.page.hasNext || fresh.isEmpty(),
                                     error = null,
                                     errorDetail = null,
                                     errorChallengeUrl = null,
@@ -896,6 +922,7 @@ class BrowseViewModel
             sectionJobs.clear()
             sectionPages.clear()
             sectionSeeds.clear()
+            sectionServedIds.clear()
             val needsKey = selectedNeedsApiKey()
             _state.update {
                 it.copy(
@@ -956,6 +983,9 @@ class BrowseViewModel
         /** Loads (or retries) one row's first page. */
         private fun loadSectionFirstPage(section: BrowseSectionState) {
             sectionPages[section.key] = 1
+            // A refreshed first page is a NEW walk — its served-ids memory
+            // must not poison the page with "everything already seen".
+            sectionServedIds.remove(section.key)
             sectionJobs[section.key] =
                 viewModelScope.launch {
                     updateSection(section.key) {
@@ -968,8 +998,12 @@ class BrowseViewModel
                             sourceId = section.sourceId,
                         ).onSuccess { result ->
                             updateSection(section.key) { state ->
+                                val served = sectionServedIds.getOrPut(section.key) { mutableSetOf() }
                                 state.copy(
-                                    wallpapers = result.page.wallpapers,
+                                    // Fresh cells only: a page that repeats
+                                    // ids it already served would feed the
+                                    // staggered grid duplicate keys.
+                                    wallpapers = result.page.wallpapers.filter { served.add(it.providerId to it.id) },
                                     isFirstLoading = false,
                                     endReached = !result.page.hasNext,
                                     error = null,
@@ -1348,6 +1382,7 @@ class BrowseViewModel
             searchJob?.cancel()
             currentPage = 1
             randomSeed = null
+            gridServedIds.clear()
             val needsKey = selectedNeedsApiKey()
             _state.update {
                 it.copy(
@@ -1371,7 +1406,11 @@ class BrowseViewModel
                         .onSuccess { result ->
                             _state.update { state ->
                                 state.copy(
-                                    wallpapers = result.page.wallpapers,
+                                    // The walk's fresh cells only: a page
+                                    // that repeats ids it already served
+                                    // (or repeats itself) would feed the
+                                    // staggered grid duplicate keys.
+                                    wallpapers = result.page.wallpapers.filter { gridServedIds.add(it.providerId to it.id) },
                                     isFirstLoading = false,
                                     endReached = !result.page.hasNext,
                                     error = null,
@@ -1497,15 +1536,21 @@ class BrowseViewModel
             return copy(contentRatings = ratings.ifEmpty { setOf(ContentRating.SFW) }, seed = seed)
         }
 
-        private fun BrowseUiState.appendPage(page: Page): BrowseUiState =
-            copy(
-                wallpapers = wallpapers + page.wallpapers,
+        private fun BrowseUiState.appendPage(page: Page): BrowseUiState {
+            val fresh = page.wallpapers.filter { gridServedIds.add(it.providerId to it.id) }
+            return copy(
+                wallpapers = wallpapers + fresh,
                 isLoadingMore = false,
-                endReached = !page.hasNext,
+                // A continuation that served nothing new ends the walk
+                // (v1.2.20): the source repeated what the feed already
+                // holds — a clamped or stale walk — and looping the
+                // footer on it helps no one.
+                endReached = !page.hasNext || fresh.isEmpty(),
                 error = null,
                 errorDetail = null,
                 errorChallengeUrl = null,
             )
+        }
 
         private fun SourceFailure.toFailedSource(): FailedSource =
             FailedSource(
