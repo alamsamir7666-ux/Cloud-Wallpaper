@@ -233,6 +233,61 @@ class WallhereWallpaperProviderTest {
         }
 
     @Test
+    fun multiWordAdultRowsAreClassifiedNsfw() =
+        runTest {
+            // The compound adult rows the site's own vocabulary carries — "panties
+            // down" and "Lingerie Football League" straight from the suggestion
+            // filter's own doc, plus a hyphenated "anime-hentai" — must classify
+            // NSFW (v1.1.4: v1.1.2 matched whole tag strings only and let every
+            // one of these through as SFW), while innocent words that merely
+            // CONTAIN an adult word ("bass", "sea grass") stay SFW: the check is
+            // per WORD, never substring.
+            val compoundGrid =
+                listOf(
+                    "9000001" to "panties down,bedroom,woman",
+                    "9000002" to "Lingerie Football League,sport,woman",
+                    "9000003" to "anime-hentai,cartoon",
+                    "9000004" to "bass guitar,sea grass,music",
+                ).joinToString("\n") { (id, row) ->
+                    """
+                    <a href="/en/wallpaper/$id" class="current-item-photo">
+                                    <img width="240" height="340" alt="$row" title="$row" src="https://c.wallhere.com/photos/11/22/compound_$id.jpg!s1" data-src="https://c.wallhere.com/photos/11/22/compound_$id.jpg!s2"></a>
+                    """.trimIndent()
+                }
+            configureWith(mapOf("https://wallhere.com/en/wallpapers?order=popular" to ok(compoundGrid)))
+            val wallpapers = provider.popular(1, Filters.None).getOrThrow().wallpapers
+            assertEquals(4, wallpapers.size)
+            assertEquals(ContentRating.NSFW, wallpapers.first { it.id == "9000001" }.contentRating)
+            assertEquals(ContentRating.NSFW, wallpapers.first { it.id == "9000002" }.contentRating)
+            assertEquals(ContentRating.NSFW, wallpapers.first { it.id == "9000003" }.contentRating)
+            assertEquals(ContentRating.SFW, wallpapers.first { it.id == "9000004" }.contentRating)
+        }
+
+    @Test
+    fun tagRowsDecodeHtmlEntities() =
+        runTest {
+            // Tag rows decode their HTML entities before they become tags
+            // (v1.1.4): decimal and hex code points ("café", "città"), the
+            // apostrophe family ("rock'n'roll" from `&#x27;` and `&#39;`), and a
+            // named ampersand ("salt & pepper") — while a DOUBLE-encoded entity
+            // (`T&amp;#39;shirt`) stays the literal text `T&#39;shirt` it honestly
+            // is, never decoded twice.
+            val entityRow = "caf&#233;,citt&#xE0;,rock&#x27;n&#x27;roll,salt &amp; pepper,T&amp;#39;shirt"
+            val entityGrid =
+                """
+                <a href="/en/wallpaper/9100001" class="current-item-photo">
+                                <img width="240" height="340" alt="$entityRow" title="$entityRow" src="https://c.wallhere.com/photos/11/22/entities_9100001.jpg!s1" data-src="https://c.wallhere.com/photos/11/22/entities_9100001.jpg!s2"></a>
+                """.trimIndent()
+            configureWith(mapOf("https://wallhere.com/en/wallpapers?order=popular" to ok(entityGrid)))
+            provider.popular(1, Filters.None).getOrThrow().also { page ->
+                assertEquals(
+                    listOf("café", "città", "rock'n'roll", "salt & pepper", "T&#39;shirt"),
+                    page.wallpapers.single().tags,
+                )
+            }
+        }
+
+    @Test
     fun tagRowsDropSiteFurnitureAndCap() =
         runTest {
             configureWith(mapOf("https://wallhere.com/en/wallpapers?order=popular" to ok(listing)))

@@ -86,10 +86,15 @@ import java.net.URLEncoder
  *
  * The site mixes adult-tagged wallpapers into its DEFAULT feeds, so the
  * provider declares SKETCHY and classifies every item by the site's OWN
- * tag vocabulary: an item whose tag row carries an adult word is NSFW,
+ * tag vocabulary: an item whose tag row carries an adult WORD is NSFW,
  * and the host's rating switch filters it exactly as it does Wallhaven's
  * purity labels. Everything else is SFW — and with the `NSFW=off`
- * mapping above, SFW-only users now get a server-filtered feed too.
+ * mapping above, SFW-only users now get a server-filtered feed too. The
+ * adult-word check is per WORD of each tag (v1.1.4: v1.1.2 matched whole
+ * tag strings only and let compound rows like "panties down" or
+ * "Lingerie Football League" through as SFW) — the SAME check the
+ * suggestion filter below already rode, so the content filter and the
+ * suggestion filter can no longer disagree about the same vocabulary.
  *
  * ## Cloudflare
  *
@@ -99,7 +104,7 @@ import java.net.URLEncoder
  * (per-host clearances, the WebView document lane, and since app
  * v1.2.19 the in-app browser escape hatch) — this plugin parses
  * whatever comes back. Its requests are bare of cookies but not of
- * identity (v1.1.3): the site serves its listings to MOBILE agents in
+ * identity (v1.1.4): the site serves its listings to MOBILE agents in
  * the bar-less infinite-scroll dialect (v1.1.2's field report), and on
  * a phone every fetch lane the host owns carries a mobile or
  * Android-branded agent — the descriptive host default contains
@@ -169,7 +174,7 @@ import java.net.URLEncoder
  * appended — duplicates never reach keyed grids. When a bar IS
  * present it still governs, exactly as before.
  *
- * v1.1.3 makes the FIRST continuation prove itself. A page two that
+ * v1.1.4 makes the FIRST continuation prove itself. A page two that
  * repeats page one's wallpapers, or that answers with no grid the
  * parser reads, is never an honest end on a site whose pages are
  * fixed at twenty-four: page one served a full page, so a dead page
@@ -194,7 +199,7 @@ class WallhereWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "WallHere",
-            versionName = "1.1.3",
+            versionName = "1.1.4",
             author = "Cloudimage",
             description = "Free HD wallpapers from wallhere.com - scraped, keyless, tag-searchable.",
             // The site mixes adult-tagged content into its default feeds;
@@ -281,7 +286,7 @@ class WallhereWallpaperProvider : WallpaperProvider {
                 val seen =
                     synchronized(lock) { tagPool.toList() }
                         .filter { it.contains(query, ignoreCase = true) }
-                        .filterNot(::isAdultSuggestion)
+                        .filterNot(::isAdultTag)
                 (baked + seen).distinct().take(TAG_SUGGESTION_LIMIT)
             }
         }
@@ -424,7 +429,7 @@ class WallhereWallpaperProvider : WallpaperProvider {
                 throw IllegalStateException("wallhere's page $page carried no recognizable wallpapers")
             }
             if (page == 2) {
-                // v1.1.3: the FIRST continuation can never be an honest
+                // v1.1.4: the FIRST continuation can never be an honest
                 // empty end on this site's fixed-size pages — page one
                 // served a full twenty-four, so a bar-less page two
                 // with no grid is markup this parser no longer reads.
@@ -451,7 +456,7 @@ class WallhereWallpaperProvider : WallpaperProvider {
         val fresh = if (page == 1) items else items.filter { it.id !in seen }
         if (page > 1 && fresh.isEmpty()) {
             if (page == 2) {
-                // v1.1.3: the first continuation repeating page one
+                // v1.1.4: the first continuation repeating page one
                 // verbatim is not a clamp — no listing this site serves
                 // is one page deep when its first page was FULL. It is
                 // the page parameter not advancing on this connection
@@ -519,13 +524,16 @@ class WallhereWallpaperProvider : WallpaperProvider {
 
     /**
      * An item's rating, from the site's own vocabulary: NSFW when the
-     * tag row carries an adult word, SFW otherwise. The host's rating
-     * switch does the filtering; this classification is what makes it
-     * honest for a source whose server-side switch is only asked on
-     * SFW-only requests.
+     * tag row carries an adult WORD — checked per word, so multi-word
+     * rows ("panties down", "Lingerie Football League") classify exactly
+     * like the bare vocabulary while innocent words ("grass", "bass")
+     * never trip their shorter selves. The host's rating switch does the
+     * filtering; this classification is what makes it honest for a
+     * source whose server-side switch is only asked on SFW-only
+     * requests.
      */
     private fun ratingFor(tags: List<String>): ContentRating =
-        if (tags.any { it.lowercase() in WallhereParser.ADULT_TAG_WORDS }) {
+        if (tags.any(::isAdultTag)) {
             ContentRating.NSFW
         } else {
             ContentRating.SFW
@@ -579,11 +587,15 @@ class WallhereWallpaperProvider : WallpaperProvider {
     }
 
     /**
-     * True when a candidate suggestion carries an adult word — checked
-     * per WORD, so multi-word rows ("panties down", "Lingerie Football
-     * League") are withheld exactly like the bare vocabulary.
+     * True when a tag carries an adult word — checked per WORD (spaces,
+     * hyphens and underscores all split), so multi-word rows ("panties
+     * down", "Lingerie Football League") are caught exactly like the
+     * bare vocabulary while innocent words ("grass", "bass") never trip
+     * their shorter selves. THE SAME CHECK gates per-item ratings and
+     * search-bar suggestions — the content filter and the suggestion
+     * filter must agree about the same vocabulary.
      */
-    private fun isAdultSuggestion(tag: String): Boolean = tag.lowercase().split(' ', '-', '_').any { it in WallhereParser.ADULT_TAG_WORDS }
+    private fun isAdultTag(tag: String): Boolean = tag.lowercase().split(' ', '-', '_').any { it in WallhereParser.ADULT_TAG_WORDS }
 
     // ------------------------------------------------------------- plumbing
 

@@ -193,6 +193,47 @@ internal object WallhereParser {
     private val TAG_SEPARATOR = Regex("""\s*,\s*""")
 
     /**
+     * One HTML entity as an attribute may carry it — a decimal code
+     * point (`&#233;`), a hex one (`&#xE0;`), or a named form. The
+     * trailing semicolon is REQUIRED: raw text that merely looks
+     * entity-shaped ("AT&T", "rock&roll") is not an entity and must
+     * survive untouched.
+     */
+    private val ENTITY = Regex("""&(?:#\d{1,7};|#[xX][0-9a-fA-F]{1,6};|[a-zA-Z][a-zA-Z0-9]{1,31};)""")
+
+    /**
+     * The named entities worth decoding — the XML five, the nbsp the
+     * site's own attributes use, and the typographic handful its
+     * multi-language tag rows occasionally carry. Unknown named entities
+     * stay literal — honest, never garbage.
+     */
+    private val NAMED_ENTITIES =
+        mapOf(
+            "amp" to "&",
+            "lt" to "<",
+            "gt" to ">",
+            "quot" to "\"",
+            "apos" to "'",
+            "nbsp" to " ",
+            "ndash" to "–",
+            "mdash" to "—",
+            "lsquo" to "‘",
+            "rsquo" to "’",
+            "ldquo" to "“",
+            "rdquo" to "”",
+            "hellip" to "…",
+            "times" to "×",
+            "deg" to "°",
+            "middot" to "·",
+            "laquo" to "«",
+            "raquo" to "»",
+            "bull" to "•",
+            "copy" to "©",
+            "reg" to "®",
+            "trade" to "™",
+        )
+
+    /**
      * Words never worth carrying as tags — site furniture the tag rows
      * pick up, resolution labels, and the app's own vocabulary leaks.
      */
@@ -302,14 +343,43 @@ internal object WallhereParser {
             .distinct()
             .take(MAX_GRID_TAGS)
 
-    /** Strips entities and runs of whitespace — the attribute miner's soap. */
+    /**
+     * The code point a numeric entity body states, when it states a
+     * usable character — control garbage and lone surrogates answer
+     * null and stay literal.
+     */
+    private fun codePointOf(body: String): Int? {
+        if (!body.startsWith("#")) return null
+        val code =
+            if (body.length > 1 && (body[1] == 'x' || body[1] == 'X')) {
+                body.substring(2).toIntOrNull(16)
+            } else {
+                body.substring(1).toIntOrNull()
+            }
+        return code?.takeIf { it == 0x09 || it == 0x0A || it == 0x0D || (it in 0x20..0x10FFFF && it !in 0xD800..0xDFFF) }
+    }
+
+    /**
+     * Decodes entities and collapses whitespace — the attribute miner's
+     * soap (v1.1.4). ONE single left-to-right pass: every entity resolves
+     * independently, so a double-encoded `&amp;#39;` stays the literal
+     * text `&#39;` (v1.1.2's chained replaces decoded it twice), while
+     * plain text that merely looks entity-shaped ("AT&T", "rock&roll")
+     * keeps its ampersand untouched. Decimal and hex code points decode
+     * to their characters — the accented vocabulary of the site's
+     * multi-language tag rows (`café`, `città`) and the apostrophe family
+     * (`&#x27;` beside `&#39;`) — and an unknown named entity stays
+     * literal rather than mangling into garbage.
+     */
     private fun textOf(raw: String): String =
-        raw
-            .replace("&nbsp;", " ")
-            .replace("&amp;", "&")
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
-            .replace(Regex("""\s+"""), " ")
+        ENTITY
+            .replace(raw) { match ->
+                val body = match.value.substring(1, match.value.length - 1)
+                codePointOf(body)
+                    ?.let { String(Character.toChars(it)) }
+                    ?: NAMED_ENTITIES[body]
+                    ?: match.value
+            }.replace(Regex("""\s+"""), " ")
             .trim()
 
     // ---------------------------------------------------------------- grid
