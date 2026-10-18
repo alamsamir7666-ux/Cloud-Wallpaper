@@ -8,41 +8,58 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Two global search engines answering as one (v1.2.14) — the deployed
- * bridge lane and the in-app Reddit lane, merged page by page.
+ * bridge lane and the in-app Reddit lane, merged page by page. v1.2.23
+ * adds an optional THIRD lane (the Supabase corpus) that rides the same
+ * contract: concurrent, interleaved, individually droppable.
  *
  * The merge rules, in the order they matter:
- * - Both lanes run CONCURRENTLY for every page — the bridge's slow
+ * - All lanes run CONCURRENTLY for every page — the bridge's slow
  *   upstream (tens of seconds on a cold start) must not wait behind
- *   Reddit, and Reddit must not wait behind the bridge.
- * - The SECONDARY lane (Reddit) runs under a timeout the primary never
- *   pays: it is the lane whose network conditions vary wildly (carrier
- *   proxies, Reddit throttling a burst), and a grid tile's worth of extra
- *   results is never worth stalling the page for. The primary's own
- *   timeouts stay the honest bound for it.
- * - Results INTERLEAVE, round-robin: a wallpaper grid of mixed provenance
- *   reads as a broader search than either lane alone, and no source hogs
- *   the first screen. Ids are stable across engines (`gs:` + URL), so the
- *   same image found by both lanes collapses into one card and the view
- *   model's seen-id set keeps the merge honest across pages.
- * - A failed or timed-out secondary is INVISIBLE: the page is the
- *   primary's, exactly as before this engine existed. This is the
- *   lane-failure contract that lets Reddit be added without ever making
+ *   Reddit or the corpus, and neither must wait behind the bridge.
+ * - The SECONDARY lanes (Reddit, corpus) run under timeouts the primary
+ *   never pays: they are the lanes whose network conditions vary wildly
+ *   (carrier proxies, Reddit throttling a burst, a paused free-tier
+ *   database), and a grid tile's worth of extra results is never worth
+ *   stalling the page for. The primary's own timeouts stay the honest
+ *   bound for it.
+ * - Results INTERLEAVE, round-robin, in lane order: a wallpaper grid of
+ *   mixed provenance reads as a broader search than any lane alone, and
+ *   no source hogs the first screen. Ids are stable across engines
+ *   (`gs:` + URL), so the same image found by two lanes collapses into
+ *   one card and the view model's seen-id set keeps the merge honest
+ *   across pages.
+ * - A failed or timed-out secondary lane is INVISIBLE: the page is the
+ *   remaining lanes', exactly as before this engine existed. This is the
+ *   lane-failure contract that lets lanes be added without ever making
  *   search worse.
- * - A failed PRIMARY with a healthy secondary degrades to the secondary
- *   alone — the resilience the mortal-bridge era asked for: a recycled
- *   sandbox no longer kills search outright while Reddit still answers
- *   from the phone's own network.
- * - Only when BOTH lanes fail does the caller see a failure, and it is
+ * - A failed PRIMARY with healthy secondaries degrades to the
+ *   secondaries alone — the resilience the mortal-bridge era asked for:
+ *   a recycled sandbox no longer kills search outright while Reddit and
+ *   the corpus still answer.
+ * - Only when ALL lanes fail does the caller see a failure, and it is
  *   the PRIMARY's — the bridge's error taxonomy is the one the UI's
  *   messages were written for.
  */
 class MergedSearchEngine(
     private val primary: ImageSearchEngine,
     private val secondary: ImageSearchEngine,
-    /** The secondary lane's overall budget per page; the primary has none. */
+    /** Optional third lane (v1.2.23: the Supabase corpus); null keeps the v1.2.14 two-lane behavior. */
+    private val tertiary: ImageSearchEngine? = null,
+    /** The secondary lanes' overall budget per page; the primary has none. */
     private val secondaryTimeoutMs: Long = DEFAULT_SECONDARY_TIMEOUT_MS,
+    /** The tertiary lane's budget; defaults to the secondary's. */
+    private val tertiaryTimeoutMs: Long = secondaryTimeoutMs,
 ) : ImageSearchEngine {
-    override val name: String = "${primary.name}+${secondary.name}"
+    override val name: String =
+        buildString {
+            append(primary.name)
+            append('+')
+            append(secondary.name)
+            tertiary?.let {
+                append('+')
+                append(it.name)
+            }
+        }
 
     /**
      * Only the primary has anything to warm — the bridge's config fetch.
@@ -65,11 +82,19 @@ class MergedSearchEngine(
                         withTimeoutOrNull(secondaryTimeoutMs) { secondary.search(query, page, filters) }
                     }
                 }
-            // The primary lane runs unbounded by the secondary's budget:
+            val tertiaryPage =
+                tertiary?.let { lane ->
+                    async {
+                        guardLane {
+                            withTimeoutOrNull(tertiaryTimeoutMs) { lane.search(query, page, filters) }
+                        }
+                    }
+                }
+            // The primary lane runs unbounded by the secondaries' budgets:
             // its own timeouts (the bridge's 160 s worst case) are the
             // honest bound the search UI already promises.
             val primaryPage = guardLane { primary.search(query, page, filters) }
-            merge(primaryPage, secondaryPage.await(), page)
+            merge(primaryPage, secondaryPage.await(), tertiaryPage?.await(), page)
         }
 
     /**
@@ -91,25 +116,28 @@ class MergedSearchEngine(
         }
 
     /**
-     * The page-lane merge: success pairs interleave, a lone success stands
-     * alone, and a lone primary failure with no secondary rescue is the
-     * failure the caller sees.
+     * The page-lane merge: success pages interleave in lane order, any
+     * lone success stands alone, and only an all-lanes failure surfaces —
+     * as the primary's failure, the taxonomy the UI's messages expect.
      */
     private fun merge(
         primary: ImageSearchResult?,
         secondary: ImageSearchResult?,
+        tertiary: ImageSearchResult?,
         page: Int,
     ): ImageSearchResult {
-        val primarySuccess = primary as? ImageSearchResult.Success
-        val secondarySuccess = secondary as? ImageSearchResult.Success
+        val successes =
+            listOfNotNull(
+                primary as? ImageSearchResult.Success,
+                secondary as? ImageSearchResult.Success,
+                tertiary as? ImageSearchResult.Success,
+            )
         return when {
-            primarySuccess != null && secondarySuccess != null ->
+            successes.isNotEmpty() ->
                 ImageSearchResult.Success(
-                    page = interleave(primarySuccess.page, secondarySuccess.page, page),
+                    page = interleave(successes.map { it.page }, page),
                 )
 
-            primarySuccess != null -> primarySuccess
-            secondarySuccess != null -> secondarySuccess
             else ->
                 (primary as? ImageSearchResult.Failure)
                     ?: ImageSearchResult.Failure(
@@ -120,28 +148,24 @@ class MergedSearchEngine(
     }
 
     /**
-     * Round-robin the two pages' results, collapsing ids both lanes
-     * found. `hasMore` is either lane's — the scroll continues while ANY
-     * engine still has pages, and the next page re-asks both.
+     * Round-robin the pages' results in lane order, collapsing ids two
+     * lanes found. `hasMore` is any lane's — the scroll continues while
+     * ANY engine still has pages, and the next page re-asks all of them.
      */
     private fun interleave(
-        primary: ImageSearchPage,
-        secondary: ImageSearchPage,
+        pages: List<ImageSearchPage>,
         page: Int,
     ): ImageSearchPage {
-        val long = primary.results
-        val short = secondary.results
-        val merged = ArrayList<Wallpaper>(long.size + short.size)
-        val shared = minOf(long.size, short.size)
-        for (index in 0 until shared) {
-            merged.add(long[index])
-            merged.add(short[index])
+        val merged = ArrayList<Wallpaper>(pages.sumOf { it.results.size })
+        val longest = pages.maxOfOrNull { it.results.size } ?: 0
+        for (index in 0 until longest) {
+            for (lane in pages) {
+                lane.results.getOrNull(index)?.let(merged::add)
+            }
         }
-        merged.addAll(long.drop(shared))
-        merged.addAll(short.drop(shared))
         return ImageSearchPage(
             results = merged.distinctBy { it.id },
-            hasMore = primary.hasMore || secondary.hasMore,
+            hasMore = pages.any { it.hasMore },
             page = page,
         )
     }

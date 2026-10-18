@@ -30,6 +30,12 @@ into the app and works out of the box; every other source installs from the
 - **Browse** — staggered masonry grids, search with filters (category, purity,
   sorting, aspect ratio), infinite scroll, SFW-only mode enforced at the
   provider layer
+- **Global search** — one query, three concurrent lanes merged into a single
+  grid: the Render bridge (SearXNG metasearch + deep Pinterest paging),
+  Reddit's wallpaper subreddits straight from the device, and a shared
+  Supabase corpus of harvested search metadata (v1.2.23) that answers
+  covered queries instantly and anonymously — failed lanes fold silently,
+  so search degrades gracefully instead of dying
 - **Preview & apply** — fullscreen zoomable preview, set as home / lock /
   both, download to gallery, share
 - **Extensions** — CloudStream-style runtime plugins (dexed zips,
