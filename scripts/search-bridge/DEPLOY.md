@@ -86,34 +86,6 @@ Commit and push. Every installed app picks it up on its **next search**:
 the v1.2.1 config fetch re-reads this file after any bridge failure and
 at least every 10 minutes. No app update, no reinstall.
 
-## Optional: the Supabase corpus mirror (search_corpus)
-
-The bridge can mirror every served search result into a shared Supabase
-table, giving the app (v1.2.23+) an instant corpus lane on top of the
-live bridge. This is **off by default** — the bridge works exactly as
-before until you add two environment variables:
-
-1. Dashboard → your `cloudimage-search` service → **Environment**.
-2. Add:
-   - `SUPABASE_URL` = `https://<project-ref>.supabase.co`
-   - `SUPABASE_SERVICE_KEY` = the project's **service_role** key
-     (Settings → API). Server-side secret — this key bypasses RLS and
-     must never appear in the app or this repo.
-3. Save (Render restarts the service) and verify:
-
-   ```bash
-   curl https://YOUR-URL.onrender.com/health
-   # ..."supabaseMirror":true...
-   ```
-
-The table (`public.search_corpus`, RLS: anonymous SELECT only, writes
-via service key, dedupe on `content_key`) is created by the corpus
-tooling — see the app repo's Task 39 notes. Mirroring is fire-and-forget:
-if Supabase is paused or the env vars are absent, searches behave exactly
-as they always have. Every `/health` request pings the corpus, and a
-6-day internal timer does the same — both above Supabase's 7-day idle
-pause, and real app traffic (every search reads the corpus) counts too.
-
 ## The honest limits (free plan)
 
 - **15-minute sleep**: after 15 idle minutes the service stops; the next

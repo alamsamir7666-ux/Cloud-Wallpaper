@@ -1,5 +1,3 @@
 {
-  "baseUrl": "https://cloudimage-search.onrender.com",
-  "corpusUrl": "https://ihhwqbucsjrzedcqbfkw.supabase.co",
-  "corpusAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloaHdxYnVjc2pyemVkY3FiZmt3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIyOTcwODEsImV4cCI6MjEwNzg3MzA4MX0.ZlBQLFRY760Aj7uKG_-3vwycU90bPFwtahRFcx6RL4g"
+  "baseUrl": "https://cloudimage-search.onrender.com"
 }

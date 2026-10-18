@@ -12,9 +12,6 @@ import javax.inject.Singleton
  * Binds the global image search to its merged engine (v1.2.14): the
  * Browser repo system's bridge as the primary lane, and Reddit's public
  * listing API — called directly from the device — as the secondary.
- * v1.2.23 adds the Supabase corpus as a tertiary lane: the shared,
- * seeded search-metadata store, read anonymously over PostgREST with
- * the baked-in public anon key (RLS-locked to SELECT).
  *
  * The engine and its [SearchBackendConfig] are constructed here (not via
  * @Inject) because their inputs are deployment wiring: which client they
@@ -41,6 +38,5 @@ internal object GlobalSearchModule {
         MergedSearchEngine(
             primary = BrowserSearchEngine(config = config, baseClient = okHttpClient, json = json),
             secondary = RedditSearchEngine(baseClient = okHttpClient, json = json),
-            tertiary = CorpusSearchEngine(config = config, baseClient = okHttpClient, json = json),
         )
 }

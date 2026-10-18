@@ -28,7 +28,6 @@
 //                the recommendation.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
 import { URL, pathToFileURL } from 'node:url';
@@ -100,27 +99,6 @@ const PINTEREST_USER_AGENT =
 // contact info sails through (200). Env-overridable for future tuning.
 const PROXY_USER_AGENT = process.env.PROXY_USER_AGENT ||
   'CloudImageBridge/1.0 (https://github.com/alamsamir7666-ux/Cloud-Wallpaper; image thumbnail proxy)';
-
-// --- Supabase corpus mirror -------------------------------------------------
-//
-// Every successful /api/search upserts its result rows into a shared
-// Supabase table (public.search_corpus) so the app gains an instant,
-// keyless corpus lane on top of the live bridge. Writes go through the
-// service_role key — a server-side secret held as a Render env var,
-// NEVER shipped inside the app; reads from phones are anonymous and
-// RLS-restricted to SELECT. Mirroring is strictly fire-and-forget: an
-// absent, failing, or paused Supabase never slows or breaks a search.
-//
-// Upserts use Prefer: resolution=merge-duplicates on the content_key
-// unique column, and re-serve refreshes scraped_at — which doubles as
-// each row's liveness heartbeat for the app-side TTL governance.
-const SUPABASE_URL_ENV = (process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
-const SUPABASE_SERVICE_KEY = (process.env.SUPABASE_SERVICE_KEY || '').trim();
-const SUPABASE_MIRROR = Boolean(SUPABASE_URL_ENV && SUPABASE_SERVICE_KEY);
-const SUPABASE_REST = SUPABASE_URL_ENV ? `${SUPABASE_URL_ENV}/rest/v1` : '';
-const SUPABASE_TIMEOUT_MS = parseInt(process.env.SUPABASE_TIMEOUT_MS || '10000', 10);
-const MIRROR_MAX_ROWS = 60; // per request; a page is <= MAX_RESULTS_PER_PAGE anyway
-const mirrorInFlight = new Set(); // query_norm keys with a POST in flight
 
 class CseQuotaError extends Error {}
 class CseConfigError extends Error {}
@@ -776,106 +754,6 @@ function hostnameOf(url) {
   }
 }
 
-// --- Supabase corpus mirror: helpers ---------------------------------------
-
-// MUST stay byte-identical with the app's CorpusSearchEngine and the
-// harvest seeder: trim, lowercase, collapse internal whitespace.
-function normalizeQuery(q) {
-  return String(q || '').trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-// Tolerant dimension parse — providers emit numbers (SearXNG, Pinterest,
-// CSE), strings like "1920px" (z-ai CLI), or junk like "n/a". Mirrors the
-// app-side asDimension(): exact positive int or null.
-function parseDimension(v) {
-  if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.round(v);
-  const m = /^(\d+)/.exec(String(v ?? '').trim());
-  return m ? parseInt(m[1], 10) : null;
-}
-
-// Marketplace product shots (amazon/etsy/ebay/walmart/...) are almost never
-// good wallpapers - the corpus is curated to exclude them, and the one-shot
-// cleanup SQL (download/corpus-cleanup-marketplaces.sql) deletes rows with
-// this EXACT pattern set. Keep the two in sync. Blocking only skips the
-// MIRROR write; the bridge still serves the result to the phone.
-const MIRROR_BLOCKED_MARKET_RE = /(amazon|etsy|ebay|walmart|auctionninja|alibaba|aliexpress|temu|shein)/i;
-
-function isBlockedMarketplace(url, source) {
-  const host = hostnameOf(String(url || '')) || '';
-  const src = String(source || '');
-  return MIRROR_BLOCKED_MARKET_RE.test(host) || MIRROR_BLOCKED_MARKET_RE.test(src);
-}
-
-// Maps one provider-agnostic result DTO onto a search_corpus row.
-function corpusRowFor(queryNorm, r) {
-  const url = String(r.original_url || '');
-  if (!/^https?:\/\//i.test(url)) return null;
-  if (isBlockedMarketplace(url, r.source)) return null;
-  return {
-    query_norm: queryNorm,
-    content_key: createHash('md5').update(`${queryNorm}|${url}`).digest('hex'),
-    title: r.caption ? String(r.caption) : null,
-    page_url: null,
-    image_url: url,
-    thumb_url: null,
-    width: parseDimension(r.original_width),
-    height: parseDimension(r.original_height),
-    source_host: (r.source && String(r.source)) || hostnameOf(url) || null,
-    snippet: null,
-    scraped_at: new Date().toISOString(),
-  };
-}
-
-// Fire-and-forget upsert of a served result page. One POST per query at
-// a time (merge-duplicates makes repeats idempotent; the in-flight guard
-// just keeps double-tapped searches from stacking writes).
-function mirrorSearchResults(query, results) {
-  if (!SUPABASE_MIRROR || !Array.isArray(results) || results.length === 0) return;
-  const qn = normalizeQuery(query);
-  if (!qn || mirrorInFlight.has(qn)) return;
-  const rows = results.map((r) => corpusRowFor(qn, r)).filter(Boolean).slice(0, MIRROR_MAX_ROWS);
-  if (rows.length === 0) return;
-  mirrorInFlight.add(qn);
-  const release = () => mirrorInFlight.delete(qn);
-  // on_conflict=content_key: without it PostgREST upserts on the primary
-  // key (uuid, absent from the payload) and the unique constraint would
-  // reject re-served rows with 23505.
-  fetch(`${SUPABASE_REST}/search_corpus?on_conflict=content_key`, {
-    method: 'POST',
-    headers: {
-      apikey: SUPABASE_SERVICE_KEY,
-      authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      'content-type': 'application/json',
-      prefer: 'resolution=merge-duplicates,return=minimal',
-    },
-    body: JSON.stringify(rows),
-    signal: AbortSignal.timeout(SUPABASE_TIMEOUT_MS),
-  })
-    .then(async (resp) => {
-      if (!resp.ok) {
-        const detail = await resp.text().catch(() => '');
-        console.warn(`[mirror] supabase answered HTTP ${resp.status}: ${detail.slice(0, 160)}`);
-      }
-    })
-    .catch((err) => console.warn(`[mirror] supabase unreachable: ${err.message}`))
-    .finally(release);
-}
-
-// Keep-alive ping — Supabase's free tier pauses projects after ~7 idle
-// days. Called from /health (any uptime monitor keeps the corpus alive
-// for free) and from a long-interval timer as a belt-and-suspenders.
-async function pingSupabase() {
-  if (!SUPABASE_MIRROR) return;
-  try {
-    await fetch(`${SUPABASE_REST}/search_corpus?select=id&limit=1`, {
-      headers: { apikey: SUPABASE_SERVICE_KEY, authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
-      signal: AbortSignal.timeout(SUPABASE_TIMEOUT_MS),
-    });
-  } catch (err) {
-    console.warn(`[mirror] keep-alive ping failed: ${err.message}`);
-  }
-}
-
 async function runSearch(params) {
   if (PROVIDER === 'zaicli') return searchViaZaCli(params);
   if (PROVIDER === 'googlecse') return searchViaGoogleCse(params);
@@ -926,10 +804,6 @@ async function handleSearch(req, res) {
       error: err.message,
     });
     return;
-  }
-
-  if (SUPABASE_MIRROR) {
-    mirrorSearchResults(query, outcome.results);
   }
 
   sendJson(res, 200, {
@@ -1131,7 +1005,6 @@ const server = http.createServer(async (req, res) => {
     } else if (req.method === 'GET' && url.pathname === '/api/proxy-image') {
       await handleProxyImage(req, res);
     } else if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
-      if (SUPABASE_MIRROR) pingSupabase(); // free keep-alive rides any monitor
       sendJson(res, 200, {
         ok: true,
         service: 'cloudimage-search-bridge',
@@ -1139,7 +1012,6 @@ const server = http.createServer(async (req, res) => {
         searxngConfigured: Boolean(SEARXNG_BASE),
         pinterestEngine: PROVIDER === 'searxng' && PINTEREST_ENGINE,
         googleCseConfigured: Boolean(process.env.GOOGLE_CSE_KEY && process.env.GOOGLE_CSE_CX),
-        supabaseMirror: SUPABASE_MIRROR,
       });
     } else {
       sendJson(res, 404, { error: 'not found', path: url.pathname });
@@ -1173,15 +1045,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
     console.log(`  POST /api/search        — image search (${PROVIDER})`);
     console.log(`  GET  /api/proxy-image   — image proxy with caching`);
     console.log(`  GET  /health            — health check`);
-    console.log(
-      `  corpus mirror: ${SUPABASE_MIRROR ? 'ON -> ' + SUPABASE_URL_ENV : 'OFF (set SUPABASE_URL + SUPABASE_SERVICE_KEY to enable)'}`,
-    );
-    if (SUPABASE_MIRROR) {
-      // 6 days < Supabase's 7-day idle pause. unref: the timer must never
-      // hold the process open on shutdown.
-      const keepAliveMs = parseInt(process.env.SUPABASE_KEEPALIVE_HOURS || '144', 10) * 3600_000;
-      setInterval(() => pingSupabase(), keepAliveMs).unref();
-    }
   });
 
   process.on('SIGTERM', () => {
@@ -1190,4 +1053,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   });
 }
 
-export { wikimediaThumbFor, pinimgThumbFor, pinterestItemsToResults, normalizeQuery, corpusRowFor, parseDimension, isBlockedMarketplace };
+export { wikimediaThumbFor, pinimgThumbFor, pinterestItemsToResults };

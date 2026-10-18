@@ -23,8 +23,6 @@ class SearchBackendConfigTest {
     private lateinit var config: SearchBackendConfig
     private val json = Json { ignoreUnknownKeys = true }
     private val fallback = "https://fallback.example.com"
-    private val fallbackCorpus =
-        SearchBackendConfig.CorpusEndpoint("https://corpus-fallback.example.com", "fallback-key")
     private var now: Long = 1_000_000L
 
     @Before
@@ -44,7 +42,6 @@ class SearchBackendConfigTest {
             json = json,
             remoteUrl = server.url("/search-backend.json").toString(),
             defaultBaseUrl = fallback,
-            defaultCorpus = fallbackCorpus,
             clock = { now },
         )
 
@@ -183,67 +180,5 @@ class SearchBackendConfigTest {
             // so baseUrl() falls back to the default, not the stale override.
             server.enqueue(MockResponse().setResponseCode(500))
             assertEquals(fallback, config.baseUrl())
-        }
-
-    @Test
-    fun corpusFieldsRideTheSameFetchAsTheBaseUrl() =
-        runTest {
-            server.enqueue(
-                MockResponse().setBody(
-                    """{"baseUrl": "https://bridge.example.com",
-                        "corpusUrl": "https://corpus.example.com/",
-                        "corpusAnonKey": "rotated-key"}""",
-                ),
-            )
-            config = newConfig()
-
-            assertEquals("https://bridge.example.com", config.baseUrl())
-            val corpus = config.corpus()
-            // One fetch served BOTH accessors.
-            assertEquals(1, server.requestCount)
-            assertEquals("https://corpus.example.com", corpus?.url)
-            assertEquals("rotated-key", corpus?.anonKey)
-        }
-
-    @Test
-    fun corpusFallsBackToTheBakedDefaultWhenTheFileOmitsIt() =
-        runTest {
-            server.enqueue(MockResponse().setBody("""{"baseUrl": "https://bridge.example.com"}"""))
-            config = newConfig()
-
-            assertEquals(fallbackCorpus, config.corpus())
-        }
-
-    @Test
-    fun corpusFieldsAreValidatedLikeTheBaseUrl() =
-        runTest {
-            // Bad scheme: rejected, default wins.
-            server.enqueue(
-                MockResponse().setBody("""{"corpusUrl": "ftp://nope.example.com", "corpusAnonKey": "k"}"""),
-            )
-            config = newConfig()
-            assertEquals(fallbackCorpus, config.corpus())
-
-            // A corpus URL without a key is not an endpoint.
-            server.enqueue(MockResponse().setBody("""{"corpusUrl": "https://corpus.example.com"}"""))
-            config = newConfig()
-            assertEquals(fallbackCorpus, config.corpus())
-        }
-
-    @Test
-    fun corpusClearsToTheDefaultWhenTheRefetchFails() =
-        runTest {
-            server.enqueue(
-                MockResponse().setBody("""{"corpusUrl": "https://corpus.example.com", "corpusAnonKey": "k"}"""),
-            )
-            config = newConfig()
-            assertEquals("https://corpus.example.com", config.corpus()?.url)
-
-            config.invalidate()
-
-            // The refetch fails — the stale corpus override must not
-            // keep serving; the baked default answers.
-            server.enqueue(MockResponse().setResponseCode(500))
-            assertEquals(fallbackCorpus, config.corpus())
         }
 }

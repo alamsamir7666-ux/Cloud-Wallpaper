@@ -60,44 +60,11 @@ cloudflared tunnel --url http://localhost:3000
 See [DEPLOY.md](DEPLOY.md) — the combined image (`Dockerfile.searxng`:
 SearXNG + bridge in one container), a `render.yaml` blueprint (Render,
 no credit card, recommended) and `fly.toml` (Fly.io, faster wake) are
-all in place. The whole deploy needs **no secrets, no API keys**; the
-optional Supabase corpus mirror below adds two env vars.
+all in place. The whole deploy needs **no secrets, no API keys**.
 
 The bridge listens on `$PORT` (default 3000) on all interfaces. Tests:
 `npm test` (stubs the SearXNG, Pinterest and Google APIs — no
 credentials, no running engine needed).
-
-## The Supabase corpus mirror
-
-Every successful `/api/search` upserts its served rows into a shared
-Supabase table (`public.search_corpus`) — the corpus behind the app's
-instant, keyless corpus search lane (v1.2.23+). The write path uses the
-**service_role key** held as a host env var (never shipped in the app);
-reads from phones are anonymous and RLS-locked to SELECT. Mirroring is
-fire-and-forget — a missing, paused, or failing Supabase never slows or
-breaks a search — and re-served rows refresh `scraped_at`, which doubles
-as each URL's liveness heartbeat for TTL governance.
-
-Enable by setting two env vars on the host (see DEPLOY.md):
-
-- `SUPABASE_URL` — project root, e.g. `https://<ref>.supabase.co`
-- `SUPABASE_SERVICE_KEY` — the service_role key (server-side only)
-
-Knobs: `SUPABASE_TIMEOUT_MS` (default 10 s),
-`SUPABASE_KEEPALIVE_HOURS` (default 144 = 6 days; Supabase's free tier
-pauses projects after ~7 idle days, and every `/health` hit also pings
-the corpus — so any uptime monitor keeps it alive for free).
-
-Local smoke test (needs all three env vars, writes to the real table
-and cleans up after itself): `node test-supabase-mirror.mjs`.
-
-**Marketplace blocklist**: rows whose image host or source label matches
-`amazon | etsy | ebay | walmart | auctionninja | alibaba | aliexpress |
-temu | shein` are never mirrored (product shots are rarely good
-wallpapers). The bridge still *serves* those results — only the corpus
-write is skipped. The cleanup SQL that purged the seed corpus
-(`download/corpus-cleanup-marketplaces.sql`) uses the identical pattern
-set; keep the two in sync when editing either.
 
 ## The Pinterest deep-paging engine
 
