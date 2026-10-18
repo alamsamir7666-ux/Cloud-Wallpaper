@@ -338,4 +338,202 @@ class RedditSearchEngineTest {
             // spacing, because OkHttp runs on a real dispatcher.
             assertEquals(2, server.requestCount)
         }
+
+    // ---- The installed-app OAuth lane (v1.2.25) ----
+
+    private val tokenBody =
+        """{"access_token": "tok-1", "token_type": "bearer", "expires_in": 3600, "scope": "*"}"""
+
+    private fun authedEngine(auth: RedditAppAuth): RedditSearchEngine =
+        RedditSearchEngine(
+            baseClient = OkHttpClient(),
+            json = json,
+            oauth = auth,
+            clientIdProvider = { "my-client-id" },
+            overrideBaseUrl = server.url("/").toString().trimEnd('/'),
+            minRequestIntervalMs = 0L,
+        )
+
+    @Test
+    fun `oauth mode mints a token then searches with a bearer header`() =
+        runTest {
+            val auth =
+                RedditAppAuth(
+                    baseClient = OkHttpClient(),
+                    json = json,
+                    deviceIdStore = { "device-id-00000000000000" },
+                    overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
+                )
+            engine = authedEngine(auth)
+
+            server.enqueue(MockResponse().setBody(tokenBody))
+            server.enqueue(MockResponse().setBody(listing))
+
+            val outcome = engine.search("mountain", 1, filters)
+
+            // Results parse exactly as the anonymous lane's do.
+            assertEquals(2, (outcome as Success).page.results.size)
+
+            // Request 1: the token mint.
+            val mint = server.takeRequest()
+            assertEquals("/api/v1/access_token", mint.path)
+            // Request 2: the search, authorized.
+            val search = server.takeRequest()
+            assertTrue(search.path!!.startsWith("/r/wallpapers"))
+            assertEquals("Bearer tok-1", search.getHeader("Authorization"))
+        }
+
+    @Test
+    fun `the token is minted once and reused across searches`() =
+        runTest {
+            val auth =
+                RedditAppAuth(
+                    baseClient = OkHttpClient(),
+                    json = json,
+                    deviceIdStore = { "device-id-00000000000000" },
+                    overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
+                )
+            engine = authedEngine(auth)
+
+            server.enqueue(MockResponse().setBody(tokenBody))
+            server.enqueue(MockResponse().setBody(listing))
+            server.enqueue(MockResponse().setBody(listing))
+
+            engine.search("mountain", 1, filters)
+            engine.search("mountain", 2, filters)
+
+            // One mint + two searches — never a second token request.
+            assertEquals(3, server.requestCount)
+            assertEquals("/api/v1/access_token", server.takeRequest().path)
+            assertEquals("Bearer tok-1", server.takeRequest().getHeader("Authorization"))
+            assertEquals("Bearer tok-1", server.takeRequest().getHeader("Authorization"))
+        }
+
+    @Test
+    fun `a 401 search mints a fresh token and replays once`() =
+        runTest {
+            val auth =
+                RedditAppAuth(
+                    baseClient = OkHttpClient(),
+                    json = json,
+                    deviceIdStore = { "device-id-00000000000000" },
+                    overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
+                )
+            engine = authedEngine(auth)
+
+            server.enqueue(MockResponse().setBody(tokenBody)) // first mint
+            server.enqueue(MockResponse().setResponseCode(401)) // token refused
+            server.enqueue(
+                MockResponse().setBody(tokenBody.replace("tok-1", "tok-2")),
+            ) // fresh mint
+            server.enqueue(MockResponse().setBody(listing)) // the replay
+
+            val outcome = engine.search("mountain", 1, filters)
+
+            assertEquals(2, (outcome as Success).page.results.size)
+            assertEquals(4, server.requestCount)
+            server.takeRequest() // mint 1
+            server.takeRequest() // refused search
+            server.takeRequest() // mint 2
+            val replay = server.takeRequest()
+            assertEquals("Bearer tok-2", replay.getHeader("Authorization"))
+        }
+
+    @Test
+    fun `a twice-refused token surfaces the server failure never a loop`() =
+        runTest {
+            val auth =
+                RedditAppAuth(
+                    baseClient = OkHttpClient(),
+                    json = json,
+                    deviceIdStore = { "device-id-00000000000000" },
+                    overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
+                )
+            engine = authedEngine(auth)
+
+            server.enqueue(MockResponse().setBody(tokenBody))
+            server.enqueue(MockResponse().setResponseCode(401))
+            server.enqueue(MockResponse().setBody(tokenBody.replace("tok-1", "tok-2")))
+            server.enqueue(MockResponse().setResponseCode(401))
+
+            val outcome = engine.search("mountain", 1, filters)
+
+            val failure = outcome as Failure
+            assertEquals(ImageSearchError.SERVER, failure.error)
+            assertEquals("HTTP 401", failure.detail)
+            // Mint, refuse, mint, refuse — and STOP.
+            assertEquals(4, server.requestCount)
+        }
+
+    @Test
+    fun `a failed mint falls back to the anonymous request`() =
+        runTest {
+            val auth =
+                RedditAppAuth(
+                    baseClient = OkHttpClient(),
+                    json = json,
+                    deviceIdStore = { "device-id-00000000000000" },
+                    overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
+                )
+            engine = authedEngine(auth)
+
+            server.enqueue(MockResponse().setResponseCode(401)) // mint refused
+            server.enqueue(MockResponse().setBody(listing)) // anonymous search succeeds
+
+            val outcome = engine.search("mountain", 1, filters)
+
+            assertEquals(2, (outcome as Success).page.results.size)
+            server.takeRequest() // the failed mint
+            val fallbackSearch = server.takeRequest()
+            assertEquals(null, fallbackSearch.getHeader("Authorization"))
+            assertTrue(fallbackSearch.path!!.startsWith("/r/wallpapers"))
+        }
+
+    @Test
+    fun `no client id keeps the anonymous request exactly as before`() =
+        runTest {
+            engine =
+                RedditSearchEngine(
+                    baseClient = OkHttpClient(),
+                    json = json,
+                    oauth =
+                        RedditAppAuth(
+                            baseClient = OkHttpClient(),
+                            json = json,
+                            deviceIdStore = { "device-id-00000000000000" },
+                            overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
+                        ),
+                    clientIdProvider = { null },
+                    overrideBaseUrl = server.url("/").toString().trimEnd('/'),
+                    minRequestIntervalMs = 0L,
+                )
+            server.enqueue(MockResponse().setBody(listing))
+
+            val outcome = engine.search("mountain", 1, filters)
+
+            assertEquals(2, (outcome as Success).page.results.size)
+            assertEquals(1, server.requestCount)
+            val only = server.takeRequest()
+            assertEquals(null, only.getHeader("Authorization"))
+        }
+
+    @Test
+    fun `oauth requests answer rate limiting with the typed failure`() =
+        runTest {
+            val auth =
+                RedditAppAuth(
+                    baseClient = OkHttpClient(),
+                    json = json,
+                    deviceIdStore = { "device-id-00000000000000" },
+                    overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
+                )
+            engine = authedEngine(auth)
+
+            server.enqueue(MockResponse().setBody(tokenBody))
+            server.enqueue(MockResponse().setResponseCode(429))
+
+            val outcome = engine.search("mountain", 1, filters)
+
+            assertEquals(ImageSearchError.RATE_LIMITED, (outcome as Failure).error)
+        }
 }

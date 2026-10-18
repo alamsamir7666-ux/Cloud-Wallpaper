@@ -20,24 +20,35 @@ import java.util.concurrent.TimeUnit
 
 /**
  * The global image search engine backed by Reddit's public listing API —
- * the first IN-APP lane of the search (v1.2.14).
+ * the first IN-APP lane of the search (v1.2.14), riding the sanctioned
+ * installed-app OAuth identity since v1.2.25.
  *
  * Why Reddit, and why from the device: the wallpaper subreddits
  * (`r/wallpapers`, `r/Amoledbackgrounds`, `r/EarthPorn` and friends) are
  * among the largest human-curated wallpaper repositories on the internet,
  * posted by enthusiasts who resize and tag their uploads, and Reddit
  * exposes them over a free, keyless, documented JSON interface. But that
- * interface answers residential and mobile IPs — it 403s datacenter
- * ranges outright (verified: both this project's sandbox and the z-ai
- * reader service are blocked), so the Render bridge can never host this
- * lane the way it hosts SearXNG. The phone itself is the trusted vantage
- * point: the app calls `reddit.com` directly, the user's own network
- * reputation is the credential, and no server of ours ever pays a byte.
+ * anonymous interface budgets by IP (~10 requests/minute) — and on the
+ * CGNAT mobile networks this app rides, one public IP is shared by
+ * thousands of subscribers, so the budget is permanently drained by
+ * strangers and the lane answered 403/429 far more often than images.
+ * Reddit also 403s datacenter ranges outright (verified: both this
+ * project's sandbox and the z-ai reader service are blocked), so the
+ * Render bridge can never host this lane. The phone itself is the trusted
+ * vantage point — and since v1.2.25 it presents the installed-app OAuth
+ * identity ([RedditAppAuth]): a developer-registered client_id plus a
+ * per-installation device_id, exchanged for a bearer token whose traffic
+ * rides the ~100-requests-per-minute OAuth budget. No user login, no
+ * account linkage — and the credential names the app, not the IP, so it
+ * survives CGNAT by construction. When no client_id is configured (or the
+ * token cannot be minted) the engine falls back to the anonymous request
+ * exactly as v1.2.24 did, so a missing config degrades, never breaks.
  *
  * The contract rides on three Reddit facts:
  * - Search across subreddits is one request — `/r/a+b+c/search.json`
  *   with `restrict_sr=1` merges the subs into one relevance-ranked
- *   listing, so one call per page covers the whole scope.
+ *   listing, so one call per page covers the whole scope. The OAuth host
+ *   (`oauth.reddit.com`) serves the identical paths.
  * - Pagination is CURSOR based (`after=t3_xxx` from the previous
  *   response), unlike the bridge's 1-based counter, so the engine keeps
  *   a short per-query cursor chain in memory; the sequential walks of
@@ -50,21 +61,27 @@ import java.util.concurrent.TimeUnit
  *   smart — the phone never pays original bytes for a 640-px card.
  *
  * The lane is polite by design: one request at a time behind a pacing
- * mutex (Reddit's unauthenticated budget is ~10 requests/minute), a
- * descriptive User-Agent, `include_over_18=off` on the request and an
- * `over_18` skip in the parser, and a 429 answered with the typed
- * [ImageSearchError.RATE_LIMITED] the UI already knows how to phrase.
- * A blocked or throttled Reddit never surfaces directly — the merged
- * engine folds this lane's failures silently into the bridge's results.
+ * mutex (the OAuth budget is ~100/minute, but the anonymous fallback and
+ * the token endpoint are not, and the merged engine's page cadence never
+ * needs faster anyway), a descriptive User-Agent, `include_over_18=off`
+ * on the request and an `over_18` skip in the parser, and a 429 answered
+ * with the typed [ImageSearchError.RATE_LIMITED] the UI already knows how
+ * to phrase. A blocked or throttled Reddit never surfaces directly — the
+ * merged engine folds this lane's failures silently into the bridge's
+ * results.
  */
 class RedditSearchEngine(
     baseClient: OkHttpClient,
     private val json: Json,
+    /** The installed-app OAuth identity; null keeps the anonymous lane. */
+    private val oauth: RedditAppAuth? = null,
+    /** The client_id in force right now (remote-configurable); null = anonymous. */
+    private val clientIdProvider: suspend () -> String? = { null },
     /** Tests point this at MockWebServer; production leaves it null. */
     private val overrideBaseUrl: String? = null,
     /**
      * The minimum spacing between Reddit requests — the pacing that keeps
-     * a barren-page walk inside Reddit's unauthenticated budget. Injectable
+     * a barren-page walk inside Reddit's budget. Injectable
      * so tests run with zero spacing instead of sleeping.
      */
     private val minRequestIntervalMs: Long = DEFAULT_MIN_INTERVAL_MS,
@@ -128,15 +145,33 @@ class RedditSearchEngine(
             }
             val effectiveQuery =
                 filters.sizeTier.queryToken()?.let { "$query $it" } ?: query
-            val request =
-                Request
-                    .Builder()
-                    .url(searchUrl(effectiveQuery, cursor))
-                    .header(HEADER_USER_AGENT, USER_AGENT)
-                    .build()
+
+            // The installed-app identity: a configured client_id rides the
+            // OAuth host with a bearer token; anything else (no config, or
+            // the token could not be minted) falls back to the anonymous
+            // request exactly as v1.2.24 did — degraded, never broken.
+            val clientId =
+                try {
+                    clientIdProvider()?.takeIf { it.isNotBlank() }
+                } catch (_: Exception) {
+                    null
+                }
+            var token: String? = null
+            if (clientId != null && oauth != null) {
+                token = oauth.bearerToken(clientId)
+            }
 
             pace()
-            val response =
+            var request =
+                Request
+                    .Builder()
+                    .url(searchUrl(effectiveQuery, cursor, token != null))
+                    .header(HEADER_USER_AGENT, USER_AGENT)
+                    .apply {
+                        if (token != null) header("Authorization", "Bearer $token")
+                    }.build()
+
+            var response =
                 try {
                     client.newCall(request).execute()
                 } catch (e: SocketTimeoutException) {
@@ -150,6 +185,40 @@ class RedditSearchEngine(
                         detail = e.message,
                     )
                 }
+
+            // An OAuth request answered 401 means Reddit refused the token
+            // (expired early, revoked). Mint a fresh one, replay the search
+            // ONCE, and let a second refusal fall through to the failure
+            // taxonomy below — never a loop.
+            if (response.code == HTTP_UNAUTHORIZED && token != null) {
+                response.close()
+                oauth?.invalidate()
+                token = clientId?.let { id -> oauth?.bearerToken(id) }
+                if (token != null) {
+                    pace()
+                    request =
+                        Request
+                            .Builder()
+                            .url(searchUrl(effectiveQuery, cursor, token != null))
+                            .header(HEADER_USER_AGENT, USER_AGENT)
+                            .header("Authorization", "Bearer $token")
+                            .build()
+                    response =
+                        try {
+                            client.newCall(request).execute()
+                        } catch (e: SocketTimeoutException) {
+                            return@withContext ImageSearchResult.Failure(
+                                error = ImageSearchError.TIMEOUT,
+                                detail = e.message,
+                            )
+                        } catch (e: IOException) {
+                            return@withContext ImageSearchResult.Failure(
+                                error = ImageSearchError.NETWORK,
+                                detail = e.message,
+                            )
+                        }
+                }
+            }
 
             response.use { answered ->
                 val body = answered.body?.string().orEmpty()
@@ -233,13 +302,20 @@ class RedditSearchEngine(
      * The URL of one subreddit-scoped search page. Built as a plain string
      * on purpose: the multi-subreddit path segment (`a+b+c`) must stay
      * literal, and query values are form-encoded — `URLEncoder` gives
-     * Reddit exactly the encoding its own web client sends.
+     * Reddit exactly the encoding its own web client sends. The OAuth
+     * host serves the identical paths, so [authed] only picks the host.
      */
     internal fun searchUrl(
         query: String,
         cursor: String?,
+        authed: Boolean = false,
     ): String {
-        val base = (overrideBaseUrl ?: DEFAULT_BASE_URL).trimEnd('/')
+        val base =
+            (
+                overrideBaseUrl ?: (
+                    if (authed) DEFAULT_OAUTH_BASE_URL else DEFAULT_BASE_URL
+                )
+            ).trimEnd('/')
         val encoded = URLEncoder.encode(query, "UTF-8")
         var url =
             "$base/r/$SUBREDDITS/search.json" +
@@ -382,6 +458,12 @@ class RedditSearchEngine(
             "wallpapers+wallpaper+MinimalWallpaper+Amoledbackgrounds+EarthPorn+MobileWallpapers"
 
         private const val DEFAULT_BASE_URL = "https://www.reddit.com"
+
+        /** The OAuth host — identical paths, bearer-token budget. */
+        private const val DEFAULT_OAUTH_BASE_URL = "https://oauth.reddit.com"
+
+        /** The token-refused status that triggers the single replay. */
+        private const val HTTP_UNAUTHORIZED = 401
 
         /** Reddit requires a descriptive agent; a generic one is throttled. */
         internal const val USER_AGENT =

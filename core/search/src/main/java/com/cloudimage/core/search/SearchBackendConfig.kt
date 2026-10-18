@@ -34,7 +34,10 @@ import java.util.concurrent.atomic.AtomicLong
  * never answer again. Republishing the config file heals installed apps
  * on their next retry, with no process restart and no app update.
  *
- * The remote file's shape is `{"baseUrl": "https://host"}`.
+ * The remote file's shape is `{"baseUrl": "https://host", "redditClientId": "id"}`
+ * — every field optional; unknown-to-this-version fields are ignored and
+ * missing fields keep their defaults, so a config file published ahead of
+ * an app update (or behind one) is always safe.
  */
 class SearchBackendConfig(
     baseClient: OkHttpClient,
@@ -47,6 +50,13 @@ class SearchBackendConfig(
     @Serializable
     private data class BackendConfigDto(
         val baseUrl: String? = null,
+        val redditClientId: String? = null,
+    )
+
+    /** What one successful remote fetch yields. */
+    private data class RemoteConfig(
+        val baseUrl: String?,
+        val redditClientId: String?,
     )
 
     /** Config fetches are tiny and must never stall a search behind a slow one. */
@@ -62,7 +72,7 @@ class SearchBackendConfig(
 
     /** The override last fetched from the remote config; null until a fetch succeeds. */
     @Volatile
-    private var remoteOverride: String? = null
+    private var remoteOverride: RemoteConfig? = null
 
     /** [clock] time of the last fetch attempt (success OR failure); 0 means "never". */
     private val lastFetchedAtMs = AtomicLong(0L)
@@ -75,7 +85,22 @@ class SearchBackendConfig(
      * every stale call re-fetches exactly once under the lock, so a
      * republished config file heals the next search, not the next process.
      */
-    suspend fun baseUrl(): String {
+    suspend fun baseUrl(): String = current().baseUrl ?: defaultBaseUrl
+
+    /**
+     * The Reddit installed-app client_id in force right now (v1.2.25):
+     * the remote override when the last fetch carried one, otherwise the
+     * built-in default. Null means the Reddit lane rides its anonymous
+     * fallback — a valid, deliberately degraded state, so a config file
+     * without the field keeps the app on v1.2.24 behavior.
+     */
+    suspend fun redditClientId(): String? = current().redditClientId ?: DEFAULT_REDDIT_CLIENT_ID
+
+    /**
+     * The remote config in force right now — one shared fetch for every
+     * field, the same staleness lifecycle [baseUrl] has always had.
+     */
+    private suspend fun current(): RemoteConfig {
         if (isStale()) {
             mutex.withLock {
                 if (isStale()) {
@@ -84,7 +109,7 @@ class SearchBackendConfig(
                 }
             }
         }
-        return remoteOverride ?: defaultBaseUrl
+        return remoteOverride ?: RemoteConfig(baseUrl = null, redditClientId = null)
     }
 
     /**
@@ -105,7 +130,7 @@ class SearchBackendConfig(
     }
 
     /** One best-effort fetch, never throwing: a config problem must never break search. */
-    private fun fetchRemoteOverride(): String? =
+    private fun fetchRemoteOverride(): RemoteConfig? =
         try {
             fetchClient
                 .newCall(Request.Builder().url(remoteUrl).build())
@@ -115,9 +140,12 @@ class SearchBackendConfig(
                     val body = response.body?.string().orEmpty()
                     json
                         .decodeFromString(BackendConfigDto.serializer(), body)
-                        .baseUrl
-                        ?.trim()
-                        ?.takeIf { it.startsWith("https://") || it.startsWith("http://") }
+                        .let { dto ->
+                            RemoteConfig(
+                                baseUrl = dto.baseUrl?.trim()?.takeIf { it.startsWith("https://") || it.startsWith("http://") },
+                                redditClientId = dto.redditClientId?.trim()?.takeIf { it.isNotBlank() },
+                            )
+                        }
                 }
         } catch (_: Exception) {
             null
@@ -134,6 +162,14 @@ class SearchBackendConfig(
         /** The remote override, served from the app repo's main branch. */
         const val REMOTE_CONFIG_URL =
             "https://raw.githubusercontent.com/alamsamir7666-ux/Cloud-Wallpaper/main/search-backend.json"
+
+        /**
+         * The baked Reddit installed-app client_id — not a secret (it ships
+         * in the APK by Reddit's design for installed apps), but still
+         * remote-overridable so it can be rotated without an app update.
+         * Null until the developer registers the app and pastes the id.
+         */
+        val DEFAULT_REDDIT_CLIENT_ID: String? = null
 
         /**
          * How long a fetched override stays fresh when nothing invalidates
