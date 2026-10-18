@@ -13,7 +13,7 @@
 // 3. reads them back with the ANON key (the phone's read path, RLS-checked)
 // 4. cleans up with the service key
 import assert from 'node:assert/strict';
-import { normalizeQuery, corpusRowFor } from './server.js';
+import { normalizeQuery, corpusRowFor, isBlockedMarketplace } from './server.js';
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
 const SVC = process.env.SUPABASE_SERVICE_KEY || '';
@@ -37,6 +37,16 @@ assert.equal(row.source_host, 'Unsplash');
 assert.match(row.content_key, /^[0-9a-f]{32}$/);
 assert.ok(row.scraped_at.endsWith('Z'));
 assert.equal(corpusRowFor('q', { original_url: 'javascript:alert(1)' }), null);
+// Marketplace blocklist: these hosts/sources must never be mirrored.
+assert.equal(isBlockedMarketplace('https://m.media-amazon.com/images/I/x.jpg', null), true);
+assert.equal(isBlockedMarketplace('https://i.ebayimg.com/images/g/x.jpg', 'ebay'), true);
+assert.equal(isBlockedMarketplace('https://i.etsystatic.com/il/x.jpg', null), true);
+assert.equal(isBlockedMarketplace('https://example.com/a.jpg', 'Amazon'), true); // source label catches z-ai-style rows
+assert.equal(corpusRowFor('q', { original_url: 'https://m.media-amazon.com/images/I/x.jpg', source: 'amazon.com' }), null);
+assert.equal(isBlockedMarketplace('https://images.pexels.com/photos/x.jpg', 'Pexels'), false);
+assert.equal(isBlockedMarketplace('https://upload.wikimedia.org/wikipedia/x.jpg', null), false);
+assert.equal(isBlockedMarketplace('https://i.pinimg.com/564x/x.jpg', 'Pinterest'), false);
+console.log('marketplace blocklist OK (amazon/etsy/ebay/walmart/... skipped, wikimedia/pexels/pinimg pass)');
 console.log('helpers OK:', JSON.stringify(row).slice(0, 120), '...');
 
 // 2. upsert two overlapping pages (mirrors what the bridge does per search)

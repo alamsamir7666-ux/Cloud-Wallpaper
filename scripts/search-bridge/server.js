@@ -793,10 +793,24 @@ function parseDimension(v) {
   return m ? parseInt(m[1], 10) : null;
 }
 
+// Marketplace product shots (amazon/etsy/ebay/walmart/...) are almost never
+// good wallpapers - the corpus is curated to exclude them, and the one-shot
+// cleanup SQL (download/corpus-cleanup-marketplaces.sql) deletes rows with
+// this EXACT pattern set. Keep the two in sync. Blocking only skips the
+// MIRROR write; the bridge still serves the result to the phone.
+const MIRROR_BLOCKED_MARKET_RE = /(amazon|etsy|ebay|walmart|auctionninja|alibaba|aliexpress|temu|shein)/i;
+
+function isBlockedMarketplace(url, source) {
+  const host = hostnameOf(String(url || '')) || '';
+  const src = String(source || '');
+  return MIRROR_BLOCKED_MARKET_RE.test(host) || MIRROR_BLOCKED_MARKET_RE.test(src);
+}
+
 // Maps one provider-agnostic result DTO onto a search_corpus row.
 function corpusRowFor(queryNorm, r) {
   const url = String(r.original_url || '');
   if (!/^https?:\/\//i.test(url)) return null;
+  if (isBlockedMarketplace(url, r.source)) return null;
   return {
     query_norm: queryNorm,
     content_key: createHash('md5').update(`${queryNorm}|${url}`).digest('hex'),
@@ -1176,4 +1190,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   });
 }
 
-export { wikimediaThumbFor, pinimgThumbFor, pinterestItemsToResults, normalizeQuery, corpusRowFor, parseDimension };
+export { wikimediaThumbFor, pinimgThumbFor, pinterestItemsToResults, normalizeQuery, corpusRowFor, parseDimension, isBlockedMarketplace };

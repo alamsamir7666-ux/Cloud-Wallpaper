@@ -91,6 +91,14 @@ the corpus — so any uptime monitor keeps it alive for free).
 Local smoke test (needs all three env vars, writes to the real table
 and cleans up after itself): `node test-supabase-mirror.mjs`.
 
+**Marketplace blocklist**: rows whose image host or source label matches
+`amazon | etsy | ebay | walmart | auctionninja | alibaba | aliexpress |
+temu | shein` are never mirrored (product shots are rarely good
+wallpapers). The bridge still *serves* those results — only the corpus
+write is skipped. The cleanup SQL that purged the seed corpus
+(`download/corpus-cleanup-marketplaces.sql`) uses the identical pattern
+set; keep the two in sync when editing either.
+
 ## The Pinterest deep-paging engine
 
 The app's search protocol is stateless (`{query,count,page}`), but
