@@ -40,6 +40,9 @@ include(":providers:wallhaven")
 // its fixed package (1.2.1 — preview-family thumbs) for the extension
 // repository; the app itself does not depend on it.
 include(":providers:wallpapercave")
+// The Behance provider module builds the extension package for the
+// repository the same way; the app itself does not depend on it.
+include(":providers:behance")
 include(":feature:browse")
 include(":feature:browser")
 include(":feature:detail")

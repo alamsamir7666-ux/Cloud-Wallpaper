@@ -43,6 +43,12 @@ import java.net.URI
  *   preview, a ~330 px JPEG around 10 KB (the originals run 2.5–7.9 MB;
  *   `/dwp1x/` and `/dwp2x/` answer 415 for user uploads, so `/fuwp/` is
  *   the only decodable tier that family has).
+ * - `mir-s3-cdn-cf.behance.net/project_modules/source/{file}` →
+ *   `project_modules/fs/{file}` — the Behance extension's originals (the
+ *   `source` family) measured 1–3.6 MB per file while the `fs` render —
+ *   1920 px, the size the site's own project viewer shows — carries the
+ *   same image in 0.1–1.1 MB (3–9× smaller, verified live across
+ *   modules). The CDN is open, so the tier needs no clearance.
  *
  * The match is on whole path segments — `/wp/` and `/uwp/` as complete
  * directories, never as substrings, so thumbnail families like
@@ -63,6 +69,22 @@ internal object DisplayUrlResolver {
             "uwp" to "fuwp",
         )
 
+    /** The Behance image CDN — open, no clearance needed. */
+    private const val BEHANCE_CDN_HOST = "mir-s3-cdn-cf.behance.net"
+
+    /**
+     * The Behance module family rewrite: `project_modules/source/{file}`
+     * is the multi-megabyte original; the same file's `fs` render is the
+     * 1920-px display the site's own viewer shows. Keyed on the family
+     * segment (the SECOND path segment, after `project_modules`), whole
+     * segments only, so `fs` itself and every other family pass through
+     * untouched.
+     */
+    private val BEHANCE_MODULE_DIRS =
+        mapOf(
+            "source" to "fs",
+        )
+
     /**
      * The URL the viewer should display first. Identical to [url] when no
      * verified display tier exists for it.
@@ -74,10 +96,27 @@ internal object DisplayUrlResolver {
         val scheme = uri.scheme?.lowercase() ?: return url
         if (scheme != "http" && scheme != "https") return url
         val host = uri.host?.lowercase() ?: return url
-        if (host !in WALLPAPERCAVE_HOSTS) return url
         val path = uri.rawPath ?: return url
         val segments = path.split('/').filter { it.isNotEmpty() }
         if (segments.isEmpty()) return url
+        if (host == BEHANCE_CDN_HOST) {
+            // project_modules/{family}/{file} — the family names the render.
+            if (segments.firstOrNull() == "project_modules") {
+                val family = segments.getOrNull(1) ?: return url
+                val displayFamily = BEHANCE_MODULE_DIRS[family] ?: return url
+                val file = segments.getOrNull(2) ?: return url
+                return buildString {
+                    append("https://")
+                    append(BEHANCE_CDN_HOST)
+                    append("/project_modules/")
+                    append(displayFamily)
+                    append('/')
+                    append(file)
+                }
+            }
+            return url
+        }
+        if (host !in WALLPAPERCAVE_HOSTS) return url
         val displayDir = DISPLAY_DIRS[segments[0]] ?: return url
         val file = segments.getOrNull(1) ?: return url
         return buildString {
