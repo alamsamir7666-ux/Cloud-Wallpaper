@@ -34,7 +34,7 @@ jobs:
         run: ./gradlew :providers:wallpapercave:packageExtension --no-daemon
 
       - name: Unit tests
-        run: ./gradlew :providers:wallpapercave:testDebugUnitTest --no-daemon
+        run: ./gradlew :providers:wallpapercave:test --no-daemon
 
       - name: Upload package
         uses: actions/upload-artifact@v4

@@ -271,6 +271,7 @@ internal object WallpaperCaveParser {
                 else -> null
             }
         val path = if (origin != null) imagePath.removePrefix(origin) else imagePath
+
         fun answer(preview: String): String = origin?.let { "https://wallpapercave.com$preview" } ?: preview
 
         val thumbMatch = THUMB_PREFIX.find(path)
