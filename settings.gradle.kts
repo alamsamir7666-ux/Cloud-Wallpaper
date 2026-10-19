@@ -36,6 +36,10 @@ include(":core:testing")
 include(":extensions:core")
 include(":fixture:demo-provider")
 include(":providers:wallhaven")
+// v1.2.25: the WallpaperCave provider module is back in the tree to build
+// its fixed package (1.2.1 — preview-family thumbs) for the extension
+// repository; the app itself does not depend on it.
+include(":providers:wallpapercave")
 include(":feature:browse")
 include(":feature:browser")
 include(":feature:detail")
