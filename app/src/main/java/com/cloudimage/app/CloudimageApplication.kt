@@ -5,9 +5,11 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import com.cloudimage.app.image.AvifSoftwareDecoder
 import com.cloudimage.core.network.CloudflareBypasser
 import com.cloudimage.core.network.CloudimageHttpClient
 import com.cloudimage.core.network.ForegroundActivityTracker
+import com.cloudimage.core.network.ImageHostPenaltyBox
 import com.cloudimage.core.network.ImageProgressRegistry
 import dagger.hilt.android.HiltAndroidApp
 import okhttp3.OkHttpClient
@@ -104,6 +106,23 @@ class CloudimageApplication :
      * carries its cookies, exactly as the ladder's own replays do;
      * clearance binding wins over branding, the same rule the provider
      * facade follows. Hosts with no clearance brand as before.
+     *
+     * v1.2.28 adds two protections of its own, both born from the
+     * wallpapercave field report ("it don't show any images"):
+     *
+     * - the **penalty box interceptor** (see [ImageHostPenaltyBox]) —
+     *   image hosts that answer with rate-limit codes (wallpapercave's
+     *   CDN uses 415 for it, and genuine 429s anywhere) get a 75-second
+     *   fetch pause per host instead of twenty more failing requests per
+     *   screen, so the limit recovers instead of being perpetually
+     *   re-tripped by our own retry pressure;
+     *
+     * - the **AVIF decoder** — scraped sources are migrating their
+     *   card-sized tiers to AVIF, which the platform only decodes from
+     *   API 31; below that every such card rendered as the gray error
+     *   painter. A software decoder (AOMedia's libavif) covers the older
+     *   installed base, and stands down on Android 12+ where the
+     *   platform's own decoders are faster.
      */
     override fun newImageLoader(): ImageLoader =
         ImageLoader
@@ -114,6 +133,11 @@ class CloudimageApplication :
                     .callTimeout(0, TimeUnit.SECONDS)
                     .readTimeout(45, TimeUnit.SECONDS)
                     .addInterceptor(ImageProgressRegistry.interceptor())
+                    // v1.2.28: the penalty box gate — see ImageHostPenaltyBox.
+                    // While a host is limited, its fetches fail fast with a
+                    // synthetic 503 and touch no network, so the host's rate
+                    // bucket refills instead of being drained by retries.
+                    .addInterceptor(ImageHostPenaltyBox.interceptor())
                     .addInterceptor { chain ->
                         val request = chain.request()
                         val clearance = cloudflareBypasser.currentBypassFor(request.url.host)
@@ -134,5 +158,14 @@ class CloudimageApplication :
                             }
                         chain.proceed(branded)
                     }.build(),
-            ).build()
+            ).components {
+                // v1.2.28: software AVIF decode below Android 12. Scraped
+                // sources are converting their card-sized tiers to AVIF (the
+                // v1.2.28 wallpapercave audit: 10/12 AVIF + 2/12 WebP on
+                // topic pages); the platform decodes AVIF only from API 31,
+                // and on the older half of the installed base every such card
+                // rendered as the gray error painter. On Android 12+ this
+                // factory declines and the platform decoders take over.
+                add(AvifSoftwareDecoder.Factory())
+            }.build()
 }
