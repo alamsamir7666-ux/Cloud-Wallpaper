@@ -24,6 +24,7 @@ class WallpaperCaveWallpaperProviderTest {
     /** URL-routed responses; unmatched URLs answer 500 to fail loudly. */
     private class FakeClient : ProviderHttpClient {
         val requests = mutableListOf<String>()
+        val requestHeaders = mutableListOf<Map<String, String>>()
         var routes: Map<String, ProviderHttpResponse> = emptyMap()
 
         override suspend fun get(
@@ -31,6 +32,7 @@ class WallpaperCaveWallpaperProviderTest {
             headers: Map<String, String>,
         ): ProviderHttpResponse {
             requests += url
+            requestHeaders += headers
             return routes.entries
                 .firstOrNull { (prefix, _) -> url.startsWith(prefix) }
                 ?.value
@@ -125,6 +127,41 @@ class WallpaperCaveWallpaperProviderTest {
         """.trimIndent()
 
     // ------------------------------------------------------------- popular
+
+    @Test
+    fun `every document request wears the browser identity`() =
+        runTest {
+            // v1.2.2: the zone's bot scoring refused the app's honest
+            // descriptive agent from mobile IPs with a bare 403 — every
+            // document GET must ride the desktop-Chrome trio the Behance
+            // provider proved on behance.net's own Cloudflare zone.
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://wallpapercave.com/latest-uploads" to ok(latestGrid),
+                        "https://wallpapercave.com/morelatest" to ok(moreLatest),
+                        "https://wallpapercave.com/search" to ok(searchAlbums),
+                        "https://wallpapercave.com/w/" to ok(wallpaperPage),
+                    ),
+                )
+
+            provider.popular(page = 1).getOrThrow()
+            provider.search("manga", page = 1).getOrThrow()
+            provider.details("wp14981887").getOrThrow()
+
+            assertTrue("no document requests were recorded", client.requests.isNotEmpty())
+            client.requestHeaders.forEach { headers ->
+                assertTrue(
+                    "User-Agent was ${headers["User-Agent"]}",
+                    headers["User-Agent"]!!.startsWith("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
+                )
+                assertTrue(
+                    "Accept was ${headers["Accept"]}",
+                    headers["Accept"]!!.startsWith("text/html,application/xhtml+xml"),
+                )
+                assertEquals("en-US,en;q=0.9", headers["Accept-Language"])
+            }
+        }
 
     @Test
     fun `popular maps the latest grid with derived originals and tags`() =

@@ -115,14 +115,28 @@ class CloudimageProviderHttpClient
         /**
          * Whether [payload] is Cloudflare's own page rather than the
          * source's answer: a challenge-shaped status carrying block or
-         * interstitial furniture in its body. Both document checks are
-         * title-led and conservative — a Cloudflare-fronted API's JSON
-         * error matches neither, so it keeps the plain flow-through.
+         * interstitial furniture in its body, or — v1.2.29 — NO body at
+         * all. Both document checks are title-led and conservative — a
+         * Cloudflare-fronted API's JSON error matches neither, so it keeps
+         * the plain flow-through.
+         *
+         * The empty-body arm is the wallpapercave.com field report: the
+         * zone's bot scoring began answering the app's document requests
+         * with a bodyless 403, and since an empty challenge classification
+         * can only come from the edge's own headers (the body-marker path
+         * needs a body to match), such an answer IS the ladder's dead end —
+         * every rung ran inside [CloudimageHttpClient.getRaw], all of them
+         * failed, and the body carries nothing a plugin could phrase in
+         * its own words. Letting it flow through bought the user the
+         * dead "wallpapercave answered HTTP 403" sentence; re-raising it
+         * as [ProviderCloudflareException] tells them what actually
+         * happened and what Retry actually offers.
          */
         private fun isCloudflareFurniture(payload: HttpPayload): Boolean {
             if (payload.isSuccessful) return false
             if (!CloudflareChallenge.isChallenge(payload)) return false
             val body = payload.bodyText
+            if (body.isEmpty()) return true
             return CloudflareChallenge.isHardBlockDocument(body) ||
                 CloudflareChallenge.isInterstitialDocument(body)
         }

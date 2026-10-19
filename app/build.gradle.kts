@@ -21,8 +21,8 @@ android {
 
     defaultConfig {
         applicationId = "com.cloudimage.app"
-        versionCode = 62
-        versionName = "1.2.28"
+        versionCode = 63
+        versionName = "1.2.29"
     }
 
     buildFeatures {

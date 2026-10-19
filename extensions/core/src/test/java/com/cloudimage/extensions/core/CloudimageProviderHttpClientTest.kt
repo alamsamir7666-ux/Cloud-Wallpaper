@@ -146,4 +146,31 @@ class CloudimageProviderHttpClientTest {
             assertEquals(403, response.statusCode)
             assertEquals("{\"error\":\"invalid_api_key\"}", response.bodyText)
         }
+
+    @Test
+    fun emptyBodyCloudflareChallengeThrowsCloudflareException() =
+        runTest {
+            // The wallpapercave.com field shape (v1.2.29): the zone's bot
+            // scoring answers the app's document requests with a BODYLESS
+            // 403 from the Cloudflare edge — no block copy, no interstitial,
+            // nothing a plugin could phrase in its own words. An empty body
+            // whose challenge classification can only have come from the
+            // edge's own headers is the ladder's dead end, and re-raising
+            // it as the Cloudflare story is the only way the user learns
+            // what happened instead of the dead "answered HTTP 403".
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(403)
+                    .setHeader("Server", "cloudflare")
+                    .setBody(""),
+            )
+
+            val failure = runCatching { facade.get(server.url("/latest-uploads").toString()) }.exceptionOrNull()
+
+            assertTrue(failure is ProviderCloudflareException)
+            val cloudflare = failure as ProviderCloudflareException
+            assertEquals(403, cloudflare.statusCode)
+            assertEquals("localhost", cloudflare.host)
+            assertTrue(cloudflare.message!!.contains("Cloudflare protection refused this connection"))
+        }
 }

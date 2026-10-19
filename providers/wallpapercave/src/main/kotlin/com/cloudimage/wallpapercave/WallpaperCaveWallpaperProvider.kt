@@ -71,6 +71,24 @@ import java.net.URLEncoder
  * on Cloudflare challenges, the host's WebView clearance machinery already
  * sits between this plugin and the network.
  *
+ * ## Browser identity (v1.2.2)
+ *
+ * That last sentence aged badly: the site's Cloudflare zone began scoring
+ * the app's honest descriptive agent — `Cloudimage/1.0 (Android; …)` with
+ * no browser headers — as a bot from mobile-carrier IPs, answering a bare
+ * 403 no furniture detector could recognize, which surfaced as
+ * "wallpapercave answered HTTP 403" while the very same zone kept
+ * answering clean-datacenter requests of every shape. Bot scoring reads
+ * the whole request, and the one thing this provider's requests could
+ * change was their shape: every document GET now wears the same
+ * desktop-Chrome identity the Behance provider rides on its own
+ * Cloudflare-fronted source — User-Agent, Accept, Accept-Language, the
+ * exact trio behance.net's zone scores as a browser. The host client
+ * applies provider headers over its own agent, and a WebView-earned
+ * clearance still overrides the pair when one rides the request (the
+ * headers contradicting a clearance are dropped host-side, exactly as for
+ * any other provider).
+ *
  * ## State
  *
  * The contract asks plugins to be stateless; correctness here never depends
@@ -95,7 +113,7 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "WallpaperCave",
-            versionName = "1.2.1",
+            versionName = "1.2.2",
             author = "Cloudimage",
             description = "Wallpapers from wallpapercave.com - scraped, keyless.",
             // The site's upload rules only allow SFW content and it carries no
@@ -487,8 +505,22 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
     // ------------------------------------------------------------- plumbing
 
     private suspend fun get(url: String): ProviderHttpResponse =
-        httpClient?.get(url)
+        httpClient?.get(url, browserHeaders())
             ?: error("configure() was not called")
+
+    /**
+     * The browser-shaped identity every document GET wears (v1.2.2) — see
+     * the class KDoc's Browser identity section for the field story. The
+     * host client applies these over its own agent, so the zone's bot
+     * scoring reads a coherent desktop Chrome instead of the app's honest
+     * but unmistakably non-browser signature.
+     */
+    private fun browserHeaders(): Map<String, String> =
+        mapOf(
+            "User-Agent" to BROWSER_UA,
+            "Accept" to BROWSER_ACCEPT,
+            "Accept-Language" to BROWSER_ACCEPT_LANGUAGE,
+        )
 
     /** GETs [url], demands 2xx, hands the body to [parser]. */
     private suspend fun <T> fetchAndParse(
@@ -556,6 +588,25 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
     private companion object {
         const val ID = "cloudimage.wallpapercave"
         const val BASE_URL = "https://wallpapercave.com"
+
+        /**
+         * The desktop-Chrome identity document requests wear (v1.2.2) —
+         * the same trio, values included, the Behance provider rides on
+         * behance.net's own Cloudflare zone: a proven browser shape, not a
+         * hand-picked one. No `sec-ch-ua` client hints: those must agree
+         * with the engine that sends them, and this plugin is not an
+         * engine — the v1.2.4 lesson from WallpaperFlare.
+         */
+        const val BROWSER_UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+        /** Chrome's document Accept, avif-capable like the browser it claims. */
+        const val BROWSER_ACCEPT =
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+
+        /** Chrome's default English-first language preference. */
+        const val BROWSER_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
 
         /**
          * The browse tabs beyond the latest feed, in tab-bar order: the
