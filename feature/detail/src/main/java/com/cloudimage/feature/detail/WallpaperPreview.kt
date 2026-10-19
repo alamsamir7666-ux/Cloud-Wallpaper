@@ -77,6 +77,12 @@ import kotlin.math.roundToInt
  *   through telephoto's sub-sampling: zoomed-in regions decode tiles from
  *   the full-resolution original, so pinch-zoom stays crisp exactly like a
  *   phone gallery instead of magnifying a screen-sized bitmap;
+ * - when the wallpaper's source publishes a lightweight display render
+ *   (v1.2.26 — see [DisplayUrlResolver]), that tier shows sharp within
+ *   seconds while the multi-megabyte original still downloads behind it,
+ *   and it stays in view under the retry surface when the original never
+ *   arrives — a slow network degrades to a softer image, never to a black
+ *   screen;
  * - while the original downloads, a blurred blow-up of the thumbnail fills
  *   the screen and a corner chip reports byte-accurate progress — but only
  *   after a grace period, so a warm page never blinks its loading
@@ -142,6 +148,14 @@ internal fun WallpaperViewerPage(
     val haptics = LocalHapticFeedback.current
     val url = wallpaper.fullUrl
 
+    // The display tier (v1.2.26): a lightweight render of the same image
+    // the viewer can show within seconds on any network — sources like
+    // wallpapercave serve 2.5–7.9 MB originals that stall out on slow
+    // links, while their display renders are 100–250 KB. Most URLs have
+    // no tier and the page behaves exactly as it always has.
+    val displayUrl = remember(url) { DisplayUrlResolver.displayUrlFor(url) }
+    val hasTier = url.isNotBlank() && displayUrl != url
+
     // Load state keys on the URL (v1.2.7): a page slot's wallpaper can
     // change underneath it — the pager reuses compositions per index, and
     // the resolution flow replaces a blank-URL item in place — so a
@@ -149,7 +163,21 @@ internal fun WallpaperViewerPage(
     // into the new one's load.
     var retryAttempt by remember(url) { mutableIntStateOf(0) }
     var loadFailed by remember(url) { mutableStateOf(false) }
-    val progress = ImageProgressRegistry.observe(url).collectAsState()
+
+    // The tier's own tiny lifecycle: "settled" (displayed or failed)
+    // releases the original's download behind it, and "displayed" stands
+    // the loading furniture down once anything is on screen.
+    var tierDisplayed by remember(url) { mutableStateOf(false) }
+    var tierSettled by remember(url) { mutableStateOf(!hasTier) }
+
+    // One automatic retry per URL, politely spaced: a failed load on a
+    // flaky link heals itself once without the user's finger.
+    var autoRetried by remember(url) { mutableIntStateOf(0) }
+
+    // Byte progress follows whichever request the screen is actually
+    // waiting on: the tier while it flies, the original from then on.
+    val progressUrl = if (hasTier && !tierSettled) displayUrl else url
+    val progress = ImageProgressRegistry.observe(progressUrl).collectAsState()
 
     // The gesture layer reads whatever the latest composition parked here —
     // its pointer input never restarts mid-drag.
@@ -159,7 +187,12 @@ internal fun WallpaperViewerPage(
 
     // Leave the registry clean for the next wallpaper.
     DisposableEffect(url) {
-        onDispose { ImageProgressRegistry.reset(url) }
+        onDispose {
+            ImageProgressRegistry.reset(url)
+            if (hasTier) {
+                ImageProgressRegistry.reset(displayUrl)
+            }
+        }
     }
 
     val zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = MAX_ZOOM))
@@ -181,20 +214,40 @@ internal fun WallpaperViewerPage(
 
     val imageDisplayed = imageState.isImageDisplayed
 
+    // Anything visible — the original itself, or the display tier while
+    // the original is still on its way — stands the furniture down.
+    val contentVisible = imageDisplayed || tierDisplayed
+    val upgradingToOriginal = hasTier && tierDisplayed && !imageDisplayed && url.isNotBlank()
+
     // Loading furniture shows itself only after a grace period: a warm
     // page paints its image before the furniture could ever appear, so
     // the blurred backdrop and corner chip never blink on arrival. A
     // genuinely slow original still gets the full treatment, just
     // without the false alarm at the start.
     var showLoadingFurniture by remember { mutableStateOf(false) }
-    LaunchedEffect(url, imageDisplayed) {
-        if (imageDisplayed) {
+    LaunchedEffect(url, contentVisible) {
+        if (contentVisible) {
             showLoadingFurniture = false
         } else {
             delay(LOADING_FURNITURE_GRACE_MS)
-            if (!imageDisplayed) showLoadingFurniture = true
+            if (!contentVisible) showLoadingFurniture = true
         }
     }
+
+    // The single automatic retry: a quietly failed load gets one polite
+    // second chance a few seconds later; after that the retry surface is
+    // the user's alone. Bounded once per URL, and cancelled by the page
+    // itself leaving the composition.
+    LaunchedEffect(url, loadFailed) {
+        if (!loadFailed || autoRetried != 0) return@LaunchedEffect
+        autoRetried = 1
+        delay(AUTO_RETRY_BACKOFF_MS)
+        if (loadFailed) {
+            loadFailed = false
+            retryAttempt += 1
+        }
+    }
+
     val backdropAlpha by animateFloatAsState(
         targetValue = if (showLoadingFurniture) 1f else 0f,
         animationSpec = tween(durationMillis = 350),
@@ -275,6 +328,36 @@ internal fun WallpaperViewerPage(
                     }
                 }
 
+                // The display tier (v1.2.26): the lightweight render of the
+                // same image, sharp and on screen in seconds where the
+                // original needs minutes. It sits UNDER the zoomable — which
+                // stays transparent until its own bitmap is ready — so the
+                // upgrade to the original is the crossfade the zoomable
+                // paints over it, and a failed original leaves the tier in
+                // view beneath the retry surface instead of a black screen.
+                // The layer unmounts once the original displays; a re-request
+                // (a retry) remounts it from cache instantly.
+                if (hasTier && !imageDisplayed) {
+                    AsyncImage(
+                        model =
+                            ImageRequest
+                                .Builder(context)
+                                .data(displayUrl)
+                                .crossfade(TIER_CROSSFADE_MS)
+                                .listener(
+                                    onError = { _, _ -> tierSettled = true },
+                                    onSuccess = { _, _ ->
+                                        tierDisplayed = true
+                                        tierSettled = true
+                                        ImageProgressRegistry.finish(displayUrl)
+                                    },
+                                ).build(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+
                 // The image itself only mounts once there is something to
                 // load (v1.2.7): a BLANK full URL is not a load attempt but
                 // the signal that the real address is still being resolved —
@@ -282,34 +365,48 @@ internal fun WallpaperViewerPage(
                 // and the resolved URL arriving here is what starts the
                 // download. Firing a request at nothing would only flash
                 // the retry furniture for a failure that is not one.
+                // v1.2.26: with a display tier in place the original waits
+                // for the tier to settle first, so the two requests never
+                // compete for the same slow pipe, and its arrival crossfades
+                // over the tier below it. Without one — the common case —
+                // the load is exactly what it has always been: no crossfade,
+                // because the pager's own page motion is the transition and
+                // a fade over the black scrim reads as a blink per swipe.
                 if (url.isNotBlank()) {
                     ZoomableAsyncImage(
                         model =
-                            ImageRequest
-                                .Builder(context)
-                                .data(url)
-                                // No crossfade on purpose: the pager's own page
-                                // motion is the transition, and a fade from
-                                // transparent over the black scrim reads as a
-                                // blink on every swipe.
-                                // Bumping the attempt re-executes the request; the
-                                // memoryCacheKey changes with it so retries re-fetch.
-                                .setParameter("retry", retryAttempt, memoryCacheKey = "retry-$retryAttempt")
-                                .listener(
-                                    onError = { _, _ -> loadFailed = true },
-                                    onSuccess = { _, _ ->
-                                        loadFailed = false
-                                        ImageProgressRegistry.finish(url)
-                                    },
-                                ).build(),
+                            if (tierSettled) {
+                                ImageRequest
+                                    .Builder(context)
+                                    .data(url)
+                                    .apply {
+                                        if (hasTier) {
+                                            crossfade(ORIGINAL_CROSSFADE_MS)
+                                        }
+                                    }
+                                    // Bumping the attempt re-executes the request; the
+                                    // memoryCacheKey changes with it so retries re-fetch.
+                                    .setParameter("retry", retryAttempt, memoryCacheKey = "retry-$retryAttempt")
+                                    .listener(
+                                        onError = { _, _ -> loadFailed = true },
+                                        onSuccess = { _, _ ->
+                                            loadFailed = false
+                                            ImageProgressRegistry.finish(url)
+                                        },
+                                    ).build()
+                            } else {
+                                null
+                            },
                         contentDescription = stringResource(R.string.detail_preview),
                         state = imageState,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
 
-                // Corner loading chip: how much of the original has arrived.
-                if (showLoadingFurniture && !loadFailed) {
+                // Corner loading chip: how much of the image on its way has
+                // arrived — the tier while it flies, the original behind the
+                // tier once the screen already has something to show.
+                if ((showLoadingFurniture || upgradingToOriginal) && !loadFailed) {
                     ProgressChip(
                         progress = progress.value,
                         modifier =
@@ -322,6 +419,10 @@ internal fun WallpaperViewerPage(
 
                 if (loadFailed || (url.isBlank() && resolutionFailed)) {
                     RetryOverlay(
+                        text =
+                            stringResource(
+                                if (hasTier) R.string.detail_image_retry_full else R.string.detail_image_retry,
+                            ),
                         onRetry = {
                             if (url.isNotBlank()) {
                                 loadFailed = false
@@ -525,6 +626,7 @@ private fun ProgressChip(
 
 @Composable
 private fun RetryOverlay(
+    text: String,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -546,7 +648,7 @@ private fun RetryOverlay(
                 modifier = Modifier.padding(end = 8.dp),
             )
             Text(
-                text = stringResource(R.string.detail_image_retry),
+                text = text,
                 color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -579,3 +681,12 @@ private val DETAILS_NUDGE_CAP = 24.dp
 
 /** Grace before the blurred backdrop and progress chip show themselves. */
 private const val LOADING_FURNITURE_GRACE_MS = 150L
+
+/** Backoff before the one automatic retry a failed load gets. */
+private const val AUTO_RETRY_BACKOFF_MS = 4_000L
+
+/** The display tier's arrival over the blurred backdrop beneath it. */
+private const val TIER_CROSSFADE_MS = 200
+
+/** The original's arrival over the display tier beneath it. */
+private const val ORIGINAL_CROSSFADE_MS = 350

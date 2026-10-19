@@ -74,6 +74,14 @@ class CloudimageApplication :
      *   multi-megabyte downloads that legitimately outlast it on slow
      *   networks, and the per-read timeout already guards stalls;
      *
+     * - the read timeout is loosened to 45s (v1.2.26): the default 20s gap
+     *   between bytes kills exactly the transfers this app exists for — a
+     *   several-megabyte original crawling down a congested mobile link
+     *   stops and starts, and a 20s stall mid-transfer surfaced as "Tap to
+     *   retry" for images that were still moving. 45s keeps a genuinely
+     *   dead connection failing in under a minute while slow-but-alive
+     *   ones complete;
+     *
      * - [ImageProgressRegistry]'s interceptor rides along so the fullscreen
      *   viewer can report byte-accurate loading progress. It is a no-op
      *   pass-through for every URL nobody observes.
@@ -104,6 +112,7 @@ class CloudimageApplication :
                 okHttpClient
                     .newBuilder()
                     .callTimeout(0, TimeUnit.SECONDS)
+                    .readTimeout(45, TimeUnit.SECONDS)
                     .addInterceptor(ImageProgressRegistry.interceptor())
                     .addInterceptor { chain ->
                         val request = chain.request()
