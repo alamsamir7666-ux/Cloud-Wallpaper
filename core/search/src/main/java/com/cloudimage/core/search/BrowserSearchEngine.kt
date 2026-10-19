@@ -16,6 +16,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.net.SocketTimeoutException
+import java.net.URI
 import java.util.concurrent.TimeUnit
 
 /**
@@ -175,6 +176,10 @@ class BrowserSearchEngine(
             dto.results
                 .asSequence()
                 .filter { it.originalUrl.isNotBlank() }
+                // v1.2.25: crawler-bounce URLs never deliver image bytes (see
+                // [CRAWLER_BOUNCE_HOSTS]) — a card that can never render is
+                // worse than no card, so the junk is dropped at parse time.
+                .filter { !it.isCrawlerBounceUrl() }
                 .distinctBy { it.originalUrl }
                 .map { it.toWallpaper(base) }
                 .filter { filters.sizeTier.matches(it.width, it.height) }
@@ -247,6 +252,27 @@ class BrowserSearchEngine(
     }
 
     /**
+     * Whether a result's host is one of Meta's crawler-bounce CDNs —
+     * URLs that answer with an HTML redirect stub to the Threads/Instagram
+     * post page instead of image bytes, no matter what headers the client
+     * sends (verified live: `lookaside.fbsbx.com` serves a 284-byte
+     * `location.href=threads.com/t/...` stub with HTTP 200;
+     * `lookaside.instagram.com/seo/google_widget/crawler` 302s to the
+     * login-walled post page). Bing/Google image search index them for
+     * Googlebot, so SearXNG surfaces them as "image results" whenever a
+     * query matches a person with a Threads/Instagram presence — but the
+     * image pipeline receives HTML, the decode fails, and the grid shows a
+     * forever-blank card. Nothing about that is fixable client-side; the
+     * only honest handling is to drop the class at parse time (the bridge
+     * filters it upstream too — this is the defense that catches a bridge
+     * that has not been redeployed yet, or any future engine).
+     */
+    private fun ImageResultDto.isCrawlerBounceUrl(): Boolean {
+        val host = runCatching { URI(originalUrl).host?.lowercase() }.getOrNull() ?: return false
+        return host in CRAWLER_BOUNCE_HOSTS
+    }
+
+    /**
      * The backend normalizes dimensions to plain numbers, but the upstream
      * reports them as strings like `"1400px"` — tolerate both so a route
      * tweak upstream of us never breaks parsing. Zero and garbage mean
@@ -315,6 +341,18 @@ class BrowserSearchEngine(
         /** upload.wikimedia.org originals: /{repo}/{1}/{2}/{file} — shards then file. */
         private val WIKIMEDIA_ORIGINAL_PATH =
             Regex("""^https://upload\.wikimedia\.org/(wikipedia/[a-z-]+)/([0-9a-f])/([0-9a-f]{2})/([^/?#]+)$""", RegexOption.IGNORE_CASE)
+
+        /**
+         * Meta's crawler-bounce CDNs — HTML stubs and post-page redirects,
+         * never image bytes (see [isCrawlerBounceUrl] for the live evidence).
+         * Hostnames, lowercase, exact match — the set grows only on verified
+         * evidence of a host that cannot serve an image, never on speculation.
+         */
+        internal val CRAWLER_BOUNCE_HOSTS =
+            setOf(
+                "lookaside.fbsbx.com",
+                "lookaside.instagram.com",
+            )
 
         /** The backend's own CLI budget is 120s; read timeout sits above it. */
         private const val CONNECT_TIMEOUT_S = 15L

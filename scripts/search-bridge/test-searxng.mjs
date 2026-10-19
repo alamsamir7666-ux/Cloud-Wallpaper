@@ -70,6 +70,22 @@ const CANNED = {
       resolution: '1x1',
     },
     {
+      title: 'Threads crawler bounce (must be filtered)',
+      img_src: 'https://lookaside.fbsbx.com/lookaside/crawler/threads/DW5ISCIIML4/2/image.jpg',
+      url: 'https://www.threads.com/t/DW5ISCIIML4',
+      source: 'threads.net',
+      img_format: 'jpeg',
+      resolution: '1440x1800',
+    },
+    {
+      title: 'Instagram SEO widget bounce (must be filtered)',
+      img_src: 'https://lookaside.instagram.com/seo/google_widget/crawler/?media_id=3842236026899871398',
+      url: 'https://www.instagram.com/p/DVSXW2mk_oI',
+      source: 'instagram.com',
+      img_format: 'jpeg',
+      resolution: '1080x1350',
+    },
+    {
       title: 'No resolution at all',
       img_src: 'https://img.example.com/e.jpg',
       url: 'https://www.example.com/e',
@@ -154,6 +170,16 @@ try {
   const results = search.body.results || [];
   check('svg results filtered out', !results.some((r) => r.original_url.endsWith('.svg')));
   check('non-http img_src filtered out', results.every((r) => r.original_url.startsWith('http')));
+  // The crawler-bounce class: Meta lookaside hosts serve HTML stubs or
+  // post-page redirects, never image bytes — they must never become cards.
+  check(
+    'lookaside crawler-bounce hosts filtered out',
+    !results.some((r) => /^https:\/\/lookaside\.(fbsbx|instagram)\.com\//i.test(r.original_url)),
+  );
+  check(
+    'healthy results survive the bounce filter',
+    results.some((r) => r.original_url === 'https://img.example.com/a.jpg'),
+  );
   check(
     'duplicate URLs deduped',
     results.filter((r) => r.original_url === 'https://img.example.com/a.jpg').length === 1,

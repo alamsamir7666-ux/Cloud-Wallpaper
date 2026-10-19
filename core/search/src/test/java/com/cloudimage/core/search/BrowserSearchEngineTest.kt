@@ -185,6 +185,43 @@ class BrowserSearchEngineTest {
         }
 
     @Test
+    fun crawlerBounceHostsAreDroppedNotMapped() =
+        runTest {
+            // The two Meta crawler-bounce shapes observed live in global
+            // search: the Threads lookaside stub (HTML with HTTP 200) and
+            // the Instagram SEO-widget redirect to the post page. Neither
+            // can ever decode — they must be dropped, while a healthy
+            // result in the same page survives untouched.
+            server.enqueue(
+                MockResponse()
+                    .setBody(
+                        """
+                        {
+                          "success": true, "page": 1, "hasMore": false,
+                          "results": [
+                            {"original_url": "https://lookaside.fbsbx.com/lookaside/crawler/threads/DW5ISCIIML4/2/image.jpg",
+                             "source": "threads.net", "original_width": 1440, "original_height": 1800},
+                            {"original_url": "https://lookaside.instagram.com/seo/google_widget/crawler/?media_id=3842236026899871398",
+                             "source": "instagram.com", "original_width": 1080, "original_height": 1350},
+                            {"original_url": "https://LOOKASIDE.FBSBX.com/lookaside/crawler/threads/UPPER/1/image.jpg",
+                             "source": "threads.net", "original_width": 1080, "original_height": 1920},
+                            {"original_url": "https://img.example.com/healthy.jpg",
+                             "source": "Example", "original_width": 2000, "original_height": 1333}
+                          ]
+                        }
+                        """.trimIndent(),
+                    ).setHeader("Content-Type", "application/json"),
+            )
+
+            val page = (engine.search("q", 1, GlobalSearchFilters()) as Success).page
+
+            assertEquals(
+                listOf("gs:https://img.example.com/healthy.jpg"),
+                page.results.map { it.id },
+            )
+        }
+
+    @Test
     fun tierVerifiesExactlyClientSide() =
         runTest {
             server.enqueue(MockResponse().setBody(onePageOfResults).setHeader("Content-Type", "application/json"))

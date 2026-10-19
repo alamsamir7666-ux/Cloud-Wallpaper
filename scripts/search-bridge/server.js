@@ -340,6 +340,8 @@ function cseItemsToResults(items) {
     if (!/^https?:\/\//i.test(link)) continue;
     // Android's image pipeline cannot decode SVG results.
     if (String(item.fileFormat || '').toLowerCase().includes('svg')) continue;
+    // Crawler-bounce hosts serve HTML stubs/redirects, never image bytes.
+    if (isCrawlerBounce(link)) continue;
     if (seen.has(link)) continue;
     seen.add(link);
     results.push({
@@ -720,6 +722,8 @@ function searxngItemsToResults(items) {
     // Android's image pipeline cannot decode SVG results.
     const fmt = String(item.img_format || '').toLowerCase();
     if (fmt.includes('svg')) continue;
+    // Crawler-bounce hosts serve HTML stubs/redirects, never image bytes.
+    if (isCrawlerBounce(link)) continue;
     if (seen.has(link)) continue;
     seen.add(link);
     const dims = parseResolution(item.resolution);
@@ -752,6 +756,28 @@ function hostnameOf(url) {
   } catch {
     return null;
   }
+}
+
+// Meta's crawler-bounce CDNs — hosts that answer image requests with an
+// HTML redirect stub to the Threads/Instagram post page instead of image
+// bytes, regardless of User-Agent (verified live 2026-10-19:
+// lookaside.fbsbx.com/lookaside/crawler/... serves a 284-byte
+// `location.href=threads.com/t/...` stub with HTTP 200, and
+// lookaside.instagram.com/seo/google_widget/crawler?media_id=... 302s to
+// the login-walled post page). Bing/Google image search index these URLs
+// for Googlebot, so SearXNG surfaces them as "image results" for any
+// query matching a person with a Threads/Instagram presence — and every
+// one of them is a forever-blank card in the app. Filtered here at the
+// source; the app also filters at parse time as the defense that catches
+// this bridge before its next deploy.
+const CRAWLER_BOUNCE_HOSTS = new Set([
+  'lookaside.fbsbx.com',
+  'lookaside.instagram.com',
+]);
+
+function isCrawlerBounce(url) {
+  const host = hostnameOf(url);
+  return !!host && CRAWLER_BOUNCE_HOSTS.has(host.toLowerCase());
 }
 
 async function runSearch(params) {

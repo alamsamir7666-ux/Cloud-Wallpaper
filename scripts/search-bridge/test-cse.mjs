@@ -55,6 +55,18 @@ const CANNED_ITEMS = [
     displayLink: 'www.example.com',
     image: { width: 10, height: 10 },
   },
+  {
+    link: 'https://lookaside.instagram.com/seo/google_widget/crawler/?media_id=3842236026899871398',
+    title: 'Instagram SEO widget bounce (must be filtered)',
+    displayLink: 'instagram.com',
+    image: { width: 1080, height: 1350 },
+  },
+  {
+    link: 'https://lookaside.fbsbx.com/lookaside/crawler/threads/DW5ISCIIML4/2/image.jpg',
+    title: 'Threads crawler bounce (must be filtered)',
+    displayLink: 'threads.net',
+    image: { width: 1440, height: 1800 },
+  },
 ];
 
 const stub = http.createServer((req, res) => {
@@ -126,6 +138,10 @@ try {
   check('search success:true', search.body.success === true);
   const results = search.body.results || [];
   check('svg results filtered out', !results.some((r) => r.original_url.endsWith('.svg')));
+  check(
+    'lookaside crawler-bounce hosts filtered out',
+    !results.some((r) => /^https:\/\/lookaside\.(fbsbx|instagram)\.com\//i.test(r.original_url)),
+  );
   check(
     'duplicate URLs deduped',
     results.filter((r) => r.original_url === 'https://img.example.com/a.jpg').length === 1,
