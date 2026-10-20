@@ -125,39 +125,4 @@ class DisplayUrlResolverTest {
             DisplayUrlResolver.displayUrlFor("https://wallpapercave.com/wp/wp123.jpg?token=1"),
         )
     }
-
-    @Test
-    fun behanceModuleSourcesBecomeTheFsDisplayRender() {
-        assertEquals(
-            "https://mir-s3-cdn-cf.behance.net/project_modules/fs/6a409a162276423.63d2c8a9c7b29.png",
-            DisplayUrlResolver.displayUrlFor(
-                "https://mir-s3-cdn-cf.behance.net/project_modules/source/6a409a162276423.63d2c8a9c7b29.png",
-            ),
-        )
-        // Case-insensitive host, http upgraded, query dropped — the tier
-        // requests the bare render file.
-        assertEquals(
-            "https://mir-s3-cdn-cf.behance.net/project_modules/fs/file.jpg",
-            DisplayUrlResolver.displayUrlFor(
-                "http://MIR-S3-CDN-CF.BEHANCE.NET/project_modules/source/file.jpg?token=1",
-            ),
-        )
-    }
-
-    @Test
-    fun behanceFamiliesOtherThanSourcePassThroughUntouched() {
-        listOf(
-            "https://mir-s3-cdn-cf.behance.net/project_modules/fs/6a409a162276423.63d2c8a9c7b29.png",
-            "https://mir-s3-cdn-cf.behance.net/project_modules/max_632/6a409a162276423.63d2c8a9c7b29.png",
-            "https://mir-s3-cdn-cf.behance.net/project_modules/hd/6a409a162276423.63d2c8a9c7b29.png",
-            "https://mir-s3-cdn-cf.behance.net/project_modules/source",
-            "https://mir-s3-cdn-cf.behance.net/project/source/file.png",
-            "https://mir-s3-cdn-cf.behance.net/project_modules/",
-            "https://mir-s3-cdn-cf.behance.net/project_modules",
-            "https://behance.net/project_modules/source/file.png",
-            "https://mir-s3-cdn-cf.behance.net.evil.example/project_modules/source/file.png",
-        ).forEach { url ->
-            assertEquals(url, DisplayUrlResolver.displayUrlFor(url))
-        }
-    }
 }

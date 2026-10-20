@@ -15,7 +15,6 @@ coroutines = "1.9.0"
 serializationJson = "1.11.0"
 okhttp = "4.12.0"
 coil = "2.7.0"
-avifAndroid = "1.1.1.14d8e3c4"
 telephoto = "0.19.0"
 datastore = "1.1.1"
 room = "2.8.5"
@@ -69,16 +68,6 @@ okhttp-logging = { module = "com.squareup.okhttp3:logging-interceptor", version.
 okhttp-mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp" }
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }
 coil = { module = "io.coil-kt:coil", version.ref = "coil" }
-# Software AVIF decode for the image loader below API 31 (v1.2.28): scraped
-# sources are migrating their preview tiers to AVIF (wallpapercave's /fuwp/
-# family measured 10/12 AVIF + 2/12 WebP on topic pages in the v1.2.28
-# audit) while the platform only decodes AVIF from Android 12 — every card
-# below that rendered as the gray error painter. Coil 2 has no first-party
-# AVIF decoder, so this is AOMedia's libavif JNI wrapper (the same one the
-# format's authors ship); the app's Decoder adapter around it lives in
-# com.cloudimage.app.image.AvifSoftwareDecoder. On API 31+ the adapter
-# stands down and the platform decoders take over.
-avif-android = { module = "org.aomedia.avif.android:avif", version.ref = "avifAndroid" }
 
 # Gallery-grade zooming for the fullscreen viewer (v1.0.17): sub-sampled
 # tiles keep full-resolution originals crisp at any zoom. The dismiss,

@@ -21,8 +21,8 @@ android {
 
     defaultConfig {
         applicationId = "com.cloudimage.app"
-        versionCode = 63
-        versionName = "1.2.29"
+        versionCode = 60
+        versionName = "1.2.26"
     }
 
     buildFeatures {
@@ -119,7 +119,6 @@ dependencies {
     implementation(libs.hilt.lifecycle.viewmodel.compose)
     implementation(libs.androidx.work.runtime)
     implementation(libs.coil)
-    implementation(libs.avif.android)
     implementation(libs.androidx.hilt.work)
 
     testImplementation(project(":core:testing"))
