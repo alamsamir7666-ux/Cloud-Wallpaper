@@ -234,11 +234,83 @@ internal class WebViewCloudflareSolver(
         }
 
     /**
-     * The invisible lane's quiet trip: an invisibly-attached WebView when
-     * a live window exists, else a detached one. Both run the fetch
-     * discipline — [DEADLINE][fetchDetached], fail-fast on the
-     * interstitial — so a dead cookie escalates to the visible dialog
-     * exactly as v1.2.6's detached trip did.
+     * The POST lane's engine rung (v1.3): one script trip through the
+     * same lanes and the same discipline as [fetch]. [WebViewPage] is
+     * not the shape here — the script's parked answer string IS the
+     * exchange — so the lanes return it directly, and the caller
+     * degrades to its fallback response on null exactly as the fetch
+     * rung's callers do.
+     *
+     * The page the script runs in must be SAME-ORIGIN with the request
+     * the script issues (the caller's contract); loading it runs the
+     * full challenge discipline first, so a script never executes in a
+     * challenge shell, and the cookie jar a settled page leaves behind
+     * is the same one the fetch lanes leave.
+     */
+    override suspend fun evaluateOnPage(
+        url: String,
+        js: String,
+    ): String? =
+        withContext(Dispatchers.Main) {
+            val host = url.toHttpUrlOrNull()?.host
+            if (host == null) {
+                null
+            } else {
+                // The fetch lanes' exact escalation: a live clearance
+                // rides the quiet trip (invisible when a window exists,
+                // detached otherwise); a quiet trip that lands on the
+                // interstitial proves the cookie dead — wipe it, then
+                // escalate to the visible dialog where a challenge gets
+                // the real viewport, unless one just failed for this zone
+                // (then one detached best-effort, then the honest null).
+                if (hasClearanceFor(host)) {
+                    evaluateQuiet(url, host, js)?.let { return@withContext it }
+                    clearCookiesFor(host)
+                }
+                val activity =
+                    foregroundActivity()?.takeUnless { it.isFinishing || it.isDestroyed }
+                return@withContext if (activity == null || recentlyFailedAttached(host)) {
+                    evaluateDetached(url, host, js)
+                } else {
+                    val answer =
+                        runCatching { evaluateInDialog(activity, url, host, js, visible = true) }
+                            .getOrNull()
+                    if (answer == null) {
+                        recordAttachedFailure(host)
+                        evaluateDetached(url, host, js)
+                    } else {
+                        answer
+                    }
+                }
+            }
+        }
+
+    /**
+     * The script trip's quiet lane: invisibly attached when a live window
+     * exists, detached otherwise — [fetchQuiet]'s exact shape, fail-fast
+     * on the interstitial so a dead cookie escalates to the visible
+     * dialog instead of scripting against Cloudflare's shell.
+     */
+    private suspend fun evaluateQuiet(
+        url: String,
+        host: String,
+        js: String,
+    ): String? {
+        val activity = foregroundActivity()?.takeUnless { it.isFinishing || it.isDestroyed }
+        return if (activity == null) {
+            evaluateDetached(url, host, js)
+        } else {
+            runCatching { evaluateInDialog(activity, url, host, js, visible = false) }.getOrNull()
+                ?: evaluateDetached(url, host, js)
+        }
+    }
+
+    /**
+     * The quiet document fetch (v1.2.6's invisible lane): an invisibly-
+     * attached WebView when a live window exists, else a detached one.
+     * Both run the fetch discipline — [DEADLINE][fetchDetached], fail-fast
+     * on the interstitial — so a dead cookie escalates to the visible
+     * dialog exactly as v1.2.6's detached trip did.
      */
     private suspend fun fetchQuiet(
         url: String,
@@ -419,6 +491,72 @@ internal class WebViewCloudflareSolver(
         return try {
             webView.loadUrl(url)
             awaitDocument(client, webView, host, url, DETACHED_DEADLINE_MS, failFastOnInterstitial = true)
+        } finally {
+            runCatching { webView.stopLoading() }
+            runCatching { webView.destroy() }
+        }
+    }
+
+    /**
+     * One script trip in a dialog window over [activity] — the evaluate
+     * sibling of [fetchInDialog], with the identical dialog discipline
+     * (visible = the challenge the user can settle; invisible = the
+     * zero-alpha window a script quietly rides) and the identical
+     * teardown. The document settles FIRST (a script never runs in a
+     * challenge shell), then [runPageScript] kicks the caller's script
+     * and polls for the answer it parks on the page.
+     */
+    private suspend fun evaluateInDialog(
+        activity: Activity,
+        url: String,
+        host: String,
+        js: String,
+        visible: Boolean,
+    ): String? {
+        val client = ChallengeClient()
+        val webView = createWebView(client)
+        val dialog = challengeDialog(activity, webView, host, visible)
+        return try {
+            dialog.show()
+            webView.loadUrl(url)
+            val settled =
+                awaitDocument(
+                    client,
+                    webView,
+                    host,
+                    url,
+                    FETCH_DEADLINE_MS,
+                    failFastOnInterstitial = !visible,
+                    dismissed = { dialog.isShowing },
+                )
+            if (settled == null) null else runPageScript(webView, js)
+        } finally {
+            runCatching { dialog.dismiss() }
+            runCatching { webView.stopLoading() }
+            runCatching { webView.destroy() }
+        }
+    }
+
+    /** The background script trip — best effort, like the background fetch. */
+    private suspend fun evaluateDetached(
+        url: String,
+        host: String,
+        js: String,
+    ): String? {
+        val client = ChallengeClient()
+        val webView = createWebView(client)
+        return try {
+            webView.loadUrl(url)
+            val settled =
+                awaitDocument(
+                    client,
+                    webView,
+                    host,
+                    url,
+                    DETACHED_DEADLINE_MS,
+                    failFastOnInterstitial = true,
+                )
+            if (settled == null) null else runPageScript(webView, js)
         } finally {
             runCatching { webView.stopLoading() }
             runCatching { webView.destroy() }
@@ -844,6 +982,56 @@ internal class WebViewCloudflareSolver(
         }
 
     /**
+     * Runs the caller's [js] in the SETTLED page and waits for the answer
+     * it parks on the page — the script contract [evaluateOnPage] offers:
+     * the script starts an async operation (a fetch, typically), sets
+     * `__ciScriptDone` the moment it has an answer and
+     * `__ciScriptResult` to the answer string, and returns without
+     * blocking (an `evaluateJavascript` call cannot await a Promise — its
+     * callback would only ever see `[object Promise]`). This method
+     * supplies the polling: the kick-off, then one cheap expression per
+     * poll beat until the result lands or [SCRIPT_DEADLINE_MS] lapses.
+     *
+     * A script whose fetch outlives the deadline answers null — the
+     * honest failure the caller degrades on, never a synthesized body.
+     */
+    private suspend fun runPageScript(
+        webView: WebView,
+        js: String,
+    ): String? {
+        runCatching { webView.evaluateJavascript(js, null) }.onFailure { return null }
+        val deadline = System.currentTimeMillis() + SCRIPT_DEADLINE_MS
+        while (System.currentTimeMillis() < deadline) {
+            delay(POLL_INTERVAL_MS)
+            val result = evaluateString(webView, SCRIPT_POLL_EXPRESSION)
+            if (result != null) return result
+        }
+        return null
+    }
+
+    /**
+     * One `evaluateJavascript` expression's answer, JSON-decoded — null
+     * for the engine's literal `null` (the poll's "not yet"), null on
+     * any engine refusal. [WebView.extractHtml]'s decode discipline,
+     * factored out for the script lanes to share.
+     */
+    private suspend fun evaluateString(
+        webView: WebView,
+        expression: String,
+    ): String? =
+        suspendCancellableCoroutine { continuation ->
+            runCatching {
+                webView.evaluateJavascript(expression) { value ->
+                    val answer =
+                        value
+                            ?.takeUnless { it == "null" }
+                            ?.let { runCatching { json.decodeFromString<String?>(it) }.getOrNull() }
+                    continuation.resume(answer)
+                }
+            }.onFailure { continuation.resume(null) }
+        }
+
+    /**
      * The solver's [WebViewClient]: default navigation behavior (challenge
      * redirects stay in the view) plus the page-load and resource-activity
      * clocks the settle heuristics read — when the latest page finished
@@ -962,6 +1150,24 @@ internal class WebViewCloudflareSolver(
 
         /** Local backstop for a document fetch, above FETCH_TIMEOUT_MS. */
         const val FETCH_DEADLINE_MS = 65_000L
+
+        /**
+         * Local backstop for a script's own execution inside a settled
+         * page — the fetch of a same-origin request plus its body read
+         * lands in a couple of beats on a warm engine; thirty covers the
+         * slow tail without ever outliving the caller's outer window.
+         */
+        const val SCRIPT_DEADLINE_MS = 30_000L
+
+        /**
+         * The script-answer poll — null until the script parks its
+         * answer (the contract [runPageScript] and its scripts share):
+         * done-but-no-string reads as null too, so a misbehaving script
+         * rides to the deadline and then the honest failure, never a
+         * partial answer.
+         */
+        const val SCRIPT_POLL_EXPRESSION =
+            "window.__ciScriptDone === true ? (typeof window.__ciScriptResult === 'string' ? window.__ciScriptResult : null) : null"
 
         /**
          * The detached lane's shorter window — a cookie-carrying page

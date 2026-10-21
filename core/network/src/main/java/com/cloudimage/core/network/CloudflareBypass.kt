@@ -436,6 +436,35 @@ interface CloudflareSolver {
     suspend fun fetch(url: String): WebViewPage? = null
 
     /**
+     * Loads [url] — running whatever challenge it carries, exactly as
+     * [fetch] does — and, once the page has settled into the site's own
+     * content, evaluates [js] in that page and returns its final answer
+     * as a string (v1.3): the POST lane's engine rung. The script is
+     * expected to store its eventual result on the page (the caller
+     * supplies the polling globals); this method polls until the result
+     * lands or the trip's deadline expires.
+     *
+     * Why a script and not a plain replay: a POST to a same-origin API
+     * path issued INSIDE the page is indistinguishable from the site's
+     * own browser XHR — it wears the page's cookies, its User-Agent, its
+     * TLS fingerprint, everything — which is the only POST shape a
+     * fingerprint-strict zone (zedge.net, in the wild) reliably serves.
+     * The [url] should be an ordinary content page on the same origin as
+     * the request the script will issue; the script itself carries the
+     * path, headers and body.
+     *
+     * Returns the script's result string, or null when no page settled
+     * (timeout, hard block, no WebView) or the script never answered.
+     * Default null for JVM test doubles and solvers with no machinery:
+     * the caller degrades to surfacing the original response, exactly as
+     * [fetch]'s callers do.
+     */
+    suspend fun evaluateOnPage(
+        url: String,
+        js: String,
+    ): String? = null
+
+    /**
      * Forgets the solver's own failure memory — the record of VISIBLE
      * trips that failed recently, which otherwise suppresses the next
      * visible one for the zone (v1.2.11's no-second-dialog rule). Called
