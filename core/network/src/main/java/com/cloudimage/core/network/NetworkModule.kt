@@ -32,6 +32,7 @@ internal object NetworkModule {
      * and trivial for the cache directory the OS already manages.
      */
     private const val HTTP_CACHE_BYTES = 20L * 1024 * 1024
+
     @Provides
     @Singleton
     fun provideOkHttpClient(

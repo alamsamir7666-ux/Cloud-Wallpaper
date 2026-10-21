@@ -799,7 +799,10 @@ class CloudimageHttpClientTest {
     // ------------------------------------------------------------------
 
     private fun cachedClient(): Pair<CloudimageHttpClient, java.io.File> {
-        val cacheDir = java.nio.file.Files.createTempDirectory("http-cache").toFile()
+        val cacheDir =
+            java.nio.file.Files
+                .createTempDirectory("http-cache")
+                .toFile()
         val cached =
             CloudimageHttpClient(
                 okHttpClient =

@@ -76,11 +76,12 @@ data class ExtensionsUiState(
      */
     val updateCountByRepo: Map<String, Int>
         get() =
-            catalogs.mapValues { (_, entries) ->
-                entries.orEmpty().count { entry ->
-                    installedManifests[entry.id]?.let { entry.isUpdateTo(it) } == true
-                }
-            }.filterValues { it > 0 }
+            catalogs
+                .mapValues { (_, entries) ->
+                    entries.orEmpty().count { entry ->
+                        installedManifests[entry.id]?.let { entry.isUpdateTo(it) } == true
+                    }
+                }.filterValues { it > 0 }
 
     /** The total across every repo — zero when nothing is pending anywhere. */
     val pendingUpdatesTotal: Int get() = updateCountByRepo.values.sum()

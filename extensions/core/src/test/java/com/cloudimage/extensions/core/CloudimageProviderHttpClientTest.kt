@@ -156,7 +156,10 @@ class CloudimageProviderHttpClientTest {
     @Test
     fun transportFailureFallsBackToCachedDocument() =
         runTest {
-            val cacheDir = java.nio.file.Files.createTempDirectory("facade-cache").toFile()
+            val cacheDir =
+                java.nio.file.Files
+                    .createTempDirectory("facade-cache")
+                    .toFile()
             val cachedClient =
                 CloudimageHttpClient(
                     okHttpClient =

@@ -274,7 +274,9 @@ class CloudimageHttpClient
             payload.headers
                 .flatMap { (name, values) -> values.map { name to it } }
                 .firstOrNull { (name, _) -> name.equals(HEADER_RETRY_AFTER, ignoreCase = true) }
-                ?.second?.trim()?.toIntOrNull()
+                ?.second
+                ?.trim()
+                ?.toIntOrNull()
 
         /**
          * Performs a POST and returns the raw exchange — the v1.3 lane for
