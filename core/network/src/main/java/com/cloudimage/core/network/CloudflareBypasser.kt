@@ -263,6 +263,46 @@ class CloudflareBypasser(
     }
 
     /**
+     * The POST lane's engine rung (v1.3): load [url] through the same
+     * WebView discipline as [fetchDocument], then run [js] inside the
+     * settled page and hand back its answer. Serialized by the same
+     * per-zone lock, cooled by the same FETCH cooldown, and — on success
+     * — refreshing the host's WebView-only mark exactly like a document
+     * fetch, because a page that served a script is a page the engine
+     * gets through.
+     *
+     * A successful script trip usually also settles whatever challenge
+     * stood in the way and leaves a fresh clearance in the jar; the
+     * caller's [WebViewPage.clearance]-shaped handback does not apply
+     * here (the script's string IS the answer), so this returns the raw
+     * string or null, and the caller degrades to its fallback response
+     * on null exactly as the document rung's callers do.
+     */
+    suspend fun evaluateOnPage(
+        url: String,
+        js: String,
+    ): String? {
+        val zone = url.toHttpUrlOrNull()?.host?.let(::cloudflareZoneOf) ?: return null
+        return zoneLocks.computeIfAbsent(zone) { Mutex() }.withLock {
+            if (fetchFailedAt[zone]?.let { clock() - it < FAILURE_COOLDOWN_MS } == true) {
+                return@withLock null
+            }
+            val answer =
+                runCatching {
+                    withTimeoutOrNull(SCRIPT_TIMEOUT_MS) { solver.evaluateOnPage(url, js) }
+                }.getOrNull()
+            if (answer == null) {
+                fetchFailedAt[zone] = clock()
+                null
+            } else {
+                fetchFailedAt.remove(zone)
+                markWebViewOnly(url)
+                answer
+            }
+        }
+    }
+
+    /**
      * Fetches a document through the WebView when neither a plain request
      * nor a clearance replay got past the zone's challenge — the one path
      * no fingerprint check can distinguish from a user browsing, because
@@ -331,6 +371,14 @@ class CloudflareBypasser(
          * load, with the same human-in-the-loop window as a solve.
          */
         const val FETCH_TIMEOUT_MS = 60_000L
+
+        /**
+         * A script trip through the WebView (v1.3) — the same settle-plus-
+         * page-load window as a fetch, plus the script's own execution
+         * (its fetch, its body read): the same 60s ceiling keeps one
+         * human-in-the-loop window for every engine rung.
+         */
+        const val SCRIPT_TIMEOUT_MS = 60_000L
 
         /**
          * A failed host goes this quiet before another solve or fetch is

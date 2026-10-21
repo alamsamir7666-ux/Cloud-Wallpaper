@@ -43,9 +43,11 @@ open class ProviderHttpException(
 
 /**
  * The network facade every provider receives in
- * [WallpaperProvider.configure]. GET-only by design for V1 — every
+ * [WallpaperProvider.configure]. GET-only was the V1 design — every
  * wallpaper API in scope (Wallhaven, Unsplash, Pexels, Pixabay) is
- * GET-based; widen the contract in a version bump if that ever changes.
+ * GET-based — and v1.3 of the API widens the contract with [post] for
+ * the sources whose only addressable lane is a POST (zedge.net's
+ * GraphQL continuation, whose GET the server answers 405).
  */
 interface ProviderHttpClient {
     /**
@@ -68,4 +70,36 @@ interface ProviderHttpClient {
         url: String,
         headers: Map<String, String> = emptyMap(),
     ): ProviderHttpResponse
+
+    /**
+     * Performs a POST with a text [body] and returns the raw exchange —
+     * the v1.3 lane for sources whose continuation is a POST (zedge.net's
+     * `/api/graphql`, whose GET the server refuses with 405). The same
+     * ladder rules as [get]: [headers] ride on top of the host's own, a
+     * provider-supplied `User-Agent` is overridden back on challenged
+     * requests when a WebView-earned clearance binds the host to its own
+     * agent, non-2xx statuses flow through as ordinary responses for the
+     * plugin to phrase, and only transport failures throw
+     * [ProviderHttpException] (plus the host's own subclass for
+     * Cloudflare furniture, exactly as [get]).
+     *
+     * ## Version semantics (the compatibility contract)
+     *
+     * DEFAULT-THROWING so this is a binary-compatible widening: hosts
+     * compiled before v1.3 carry no `post` at all, and a plugin that
+     * calls it there hits a `NoSuchMethodError` at the call site — which
+     * is why a plugin that means to run on BOTH host generations wraps
+     * the call in its own `runCatching` (catching [Throwable]) and
+     * degrades to its honest pre-POST behavior on failure. A host that
+     * implements this method answers POSTs through the same
+     * clearance/WebView machinery as its GETs; the default body is the
+     * honest refusal for hosts with no POST lane (and for JVM test
+     * doubles, which inherit it untouched).
+     */
+    suspend fun post(
+        url: String,
+        body: String,
+        contentType: String = "application/json",
+        headers: Map<String, String> = emptyMap(),
+    ): ProviderHttpResponse = throw ProviderHttpException("POST $url is not supported by this host")
 }

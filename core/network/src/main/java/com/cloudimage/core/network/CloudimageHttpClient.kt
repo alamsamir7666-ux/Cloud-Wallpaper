@@ -7,11 +7,20 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.Response
 import java.io.IOException
 import java.net.SocketTimeoutException
@@ -143,6 +152,179 @@ class CloudimageHttpClient
                     Failure(NetworkError.Io(e))
                 }
             }
+
+        /**
+         * Performs a POST and returns the raw exchange — the v1.3 lane for
+         * sources whose continuation is a POST (zedge.net's GraphQL, whose
+         * GET the server answers 405). The ladder mirrors [getRaw] rung for
+         * rung, with one difference at the top: the last rung is not a
+         * document fetch — an engine page cannot POST a body — but a fetch
+         * executed INSIDE a WebView page on the request's origin, the one
+         * POST shape a fingerprint-strict zone cannot tell apart from the
+         * site's own browser XHR.
+         *
+         * - a host marked WebView-only skips the replay theater and goes
+         *   straight to the in-page fetch, degrading to one plain request
+         *   when the script trip fails (the zone's honest answer, the same
+         *   degradation [getRaw]'s WebView-only lane gives documents);
+         * - every other host POSTs plainly first (a clearance on file
+         *   rides it), asks for a fresh clearance when the zone challenges,
+         *   replays under it once, and escalates to the in-page fetch when
+         *   even the replay stays challenged.
+         *
+         * The in-page rung loads the ORIGIN ROOT of the request URL — an
+         * ordinary content page on the same origin — through the full
+         * challenge discipline, then evaluates a fetch-script there. Its
+         * answer decodes into the exchange; its failure (no page settled,
+         * script never answered, unparseable answer) keeps the challenged
+         * response the plain rung already produced, the honest result the
+         * caller already had.
+         */
+        suspend fun postRaw(
+            url: String,
+            body: String,
+            contentType: String,
+            extraHeaders: Map<String, String> = emptyMap(),
+        ): NetworkResult<HttpPayload> =
+            withContext(Dispatchers.IO) {
+                try {
+                    var payload: HttpPayload
+                    if (cloudflare.isWebViewOnly(url)) {
+                        payload =
+                            postThroughPage(url, body, contentType)
+                                ?: executePost(url, body, contentType, extraHeaders, null)
+                    } else {
+                        val state = cloudflare.bypassStateFor(url)
+                        payload = executePost(url, body, contentType, extraHeaders, state)
+                        if (CloudflareChallenge.isChallenge(payload)) {
+                            val bypass = cloudflare.solve(url, staleState = state)
+                            if (bypass != null) {
+                                payload = executePost(url, body, contentType, extraHeaders, bypass)
+                            }
+                        }
+                        if (CloudflareChallenge.isChallenge(payload)) {
+                            payload = postThroughPage(url, body, contentType) ?: payload
+                        }
+                    }
+                    Success(payload)
+                } catch (e: SocketTimeoutException) {
+                    Failure(NetworkError.Timeout)
+                } catch (e: IOException) {
+                    Failure(NetworkError.Io(e))
+                }
+            }
+
+        /**
+         * The in-page fetch rung: load the request URL's origin root in
+         * the engine — the full challenge discipline runs first, so the
+         * script never executes in a challenge shell — then POST [body] to
+         * [url]'s path from INSIDE that page, wearing the page's own
+         * cookies, agent and fingerprint. Returns the exchange the script
+         * reports, or null when no page settled or the script never
+         * answered (the caller degrades to its fallback).
+         */
+        private suspend fun postThroughPage(
+            url: String,
+            body: String,
+            contentType: String,
+        ): HttpPayload? {
+            val origin = originRootOf(url) ?: return null
+            val answer = cloudflare.evaluateOnPage(origin, fetchScript(url, contentType, body)) ?: return null
+            val exchange =
+                runCatching { json.parseToJsonElement(answer).jsonObject }.getOrNull() ?: return null
+            val status = exchange["status"]?.jsonPrimitive?.intOrNull ?: return null
+            val text = exchange["body"]?.jsonPrimitive?.contentOrNull ?: ""
+            return HttpPayload(statusCode = status, headers = emptyMap(), body = text.toByteArray())
+        }
+
+        /** The origin root — `scheme://host/` — the page a script posts from. */
+        private fun originRootOf(url: String): String? = url.toHttpUrlOrNull()?.let { "${it.scheme}://${it.host}/" }
+
+        /**
+         * The script the in-page rung evaluates: a same-origin POST of
+         * [body] to [url]'s path, answering `{"status":…,"body":…}` on
+         * the page globals the solver polls. Every interpolation rides as
+         * a JSON-encoded string literal — JSON's escaping is a safe subset
+         * of JavaScript's — so a body or content type carrying quotes,
+         * angle brackets or script breaks never escapes its literal.
+         */
+        internal fun fetchScript(
+            url: String,
+            contentType: String,
+            body: String,
+        ): String {
+            val httpUrl = url.toHttpUrlOrNull()
+            val path =
+                if (httpUrl != null) {
+                    httpUrl.encodedPath + (httpUrl.query?.let { "?$it" } ?: "")
+                } else {
+                    url
+                }
+            val pathLiteral = json.encodeToString(String.serializer(), path)
+            val contentTypeLiteral = json.encodeToString(String.serializer(), contentType)
+            val bodyLiteral = json.encodeToString(String.serializer(), body)
+            return "(function(){" +
+                "window.__ciScriptDone=false;" +
+                "window.__ciScriptResult=null;" +
+                "fetch(" + pathLiteral + ",{method:'POST'," +
+                "headers:{'Content-Type':" + contentTypeLiteral + "}," +
+                "body:" + bodyLiteral + ",credentials:'same-origin'})" +
+                ".then(function(r){return r.text().then(function(t){" +
+                "return JSON.stringify({status:r.status,body:t});});})" +
+                ".then(function(v){window.__ciScriptResult=v;window.__ciScriptDone=true;})" +
+                ".catch(function(e){window.__ciScriptResult=" +
+                "JSON.stringify({status:0,body:String(e)});window.__ciScriptDone=true;});" +
+                "return 'started';})()"
+        }
+
+        /**
+         * Runs one POST and buffers the exchange — [execute]'s sibling
+         * with a request body. The clearance discipline is identical: a
+         * [bypass] overrides the agent (clearance binding wins), its
+         * cookies ride the request, and the provider's client-hint headers
+         * drop on replayed requests so they cannot contradict the agent
+         * the clearance is bound to.
+         */
+        private suspend fun executePost(
+            url: String,
+            body: String,
+            contentType: String,
+            extraHeaders: Map<String, String>,
+            bypass: CloudflareBypass?,
+        ): HttpPayload {
+            if (url.isBlank()) {
+                return HttpPayload(statusCode = 404, headers = emptyMap(), body = ByteArray(0))
+            }
+            val replayHeaders =
+                if (bypass == null) {
+                    extraHeaders
+                } else {
+                    extraHeaders.filterKeys { name -> !name.startsWith(CLIENT_HINT_PREFIX, ignoreCase = true) }
+                }
+            val request =
+                Request
+                    .Builder()
+                    .url(url)
+                    .header(HEADER_USER_AGENT, USER_AGENT)
+                    .apply {
+                        for ((name, value) in replayHeaders) {
+                            header(name, value)
+                        }
+                        if (bypass != null) {
+                            header(HEADER_USER_AGENT, bypass.userAgent)
+                            header(HEADER_COOKIE, bypass.cookieHeader)
+                        }
+                        post(RequestBody.create(contentType.toMediaTypeOrNull(), body))
+                    }.build()
+            return okHttpClient.newCall(request).await().use { response ->
+                val bytes = response.body?.bytes() ?: ByteArray(0)
+                HttpPayload(
+                    statusCode = response.code,
+                    headers = response.headers.toMultimap(),
+                    body = bytes,
+                )
+            }
+        }
 
         /**
          * The WebView-only lane: the document straight from the engine, no

@@ -27,7 +27,8 @@ import javax.inject.Singleton
 class ProviderTransportException(
     val error: NetworkError,
     url: String,
-) : ProviderHttpException("GET $url failed: $error")
+    method: String = "GET",
+) : ProviderHttpException("$method $url failed: $error")
 
 /**
  * Thrown by the host facade when the answer a source finally gave is
@@ -95,22 +96,53 @@ class CloudimageProviderHttpClient
             headers: Map<String, String>,
         ): ProviderHttpResponse =
             when (val result = client.getRaw(url, headers)) {
-                is NetworkResult.Success -> {
-                    val payload = result.value
-                    if (isCloudflareFurniture(payload)) {
-                        throw ProviderCloudflareException(
-                            host = urlHost(url),
-                            statusCode = payload.statusCode,
-                        )
-                    }
-                    ProviderHttpResponse(
-                        statusCode = payload.statusCode,
-                        headers = payload.headers,
-                        body = payload.body,
-                    )
-                }
+                is NetworkResult.Success -> mapPayload(url, result.value)
                 is NetworkResult.Failure -> throw ProviderTransportException(result.error, url)
             }
+
+        /**
+         * The v1.3 POST lane, over the same ladder as [get]: the plain
+         * request first, a clearance replay when the zone challenges it,
+         * and — for a fingerprint-strict zone no cookie can satisfy — a
+         * fetch executed INSIDE a WebView page on the target's origin,
+         * the one POST shape no bot scoring can tell apart from the
+         * site's own browser XHR. Non-2xx statuses flow through untouched
+         * and only transport failures throw, per the facade contract;
+         * Cloudflare furniture re-raises exactly as [get] does.
+         */
+        override suspend fun post(
+            url: String,
+            body: String,
+            contentType: String,
+            headers: Map<String, String>,
+        ): ProviderHttpResponse =
+            when (val result = client.postRaw(url, body, contentType, headers)) {
+                is NetworkResult.Success -> mapPayload(url, result.value)
+                is NetworkResult.Failure -> throw ProviderTransportException(result.error, url, method = "POST")
+            }
+
+        /**
+         * The exchange-to-facade mapping every lane shares: a successful
+         * payload whose body is Cloudflare's own furniture re-raises as
+         * [ProviderCloudflareException] (the ladder's honest dead end),
+         * everything else flows through for the plugin to phrase.
+         */
+        private fun mapPayload(
+            url: String,
+            payload: HttpPayload,
+        ): ProviderHttpResponse {
+            if (isCloudflareFurniture(payload)) {
+                throw ProviderCloudflareException(
+                    host = urlHost(url),
+                    statusCode = payload.statusCode,
+                )
+            }
+            return ProviderHttpResponse(
+                statusCode = payload.statusCode,
+                headers = payload.headers,
+                body = payload.body,
+            )
+        }
 
         /**
          * Whether [payload] is Cloudflare's own page rather than the
