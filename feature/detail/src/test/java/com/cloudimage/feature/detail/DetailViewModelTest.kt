@@ -441,6 +441,88 @@ class DetailViewModelTest {
             assertTrue(sources.searchCalls.isEmpty())
         }
 
+    // ------------------------------------------------- the late-suggestion run
+
+    @Test
+    fun aTaglessListingWhoseDetailsBringTagsFillsTheRowLate() =
+        runTest {
+            sources.setSources(capableSource)
+            // zedge's shape: a grid tile with no tags and no dimensions —
+            // the row's own load walked out at the tag gate before the
+            // record ever landed (the v1.3.2 bug: never retried).
+            val bare = wallpaper.copy(width = null, height = null, tags = emptyList())
+            val lookalike = wallpaper.copy(id = "zzz999")
+            sources.enqueueDetails(
+                NetworkResult.Success(
+                    WallpaperDetails(
+                        wallpaper = bare.copy(tags = listOf("hair", "makeover")),
+                        author = "Manaswini_manu",
+                    ),
+                ),
+            )
+            sources.enqueueSearch(
+                NetworkResult.Success(Page(wallpapers = listOf(lookalike), nextPage = null)),
+            )
+
+            val viewModel = createViewModel(DetailDestination.encode(bare))
+            advanceUntilIdle()
+
+            // The screen carries the record's tags; the row answered.
+            val onScreen = viewModel.state.value.wallpaper
+            assertEquals(listOf("hair", "makeover"), onScreen?.tags)
+            assertEquals(listOf(lookalike), viewModel.state.value.moreLikeThis)
+            // The late query keys on the tags the RECORD stated — the
+            // listing had none to offer.
+            val call = sources.searchCalls.single()
+            assertEquals("hair makeover", call.first.text)
+            assertEquals(1, call.second)
+            // No grid parked a list: the late row becomes the browsing
+            // list, led by the MERGED item.
+            assertEquals(
+                listOf(bare.copy(tags = listOf("hair", "makeover")), lookalike),
+                viewModel.state.value.viewerList,
+            )
+        }
+
+    @Test
+    fun aRecordThatBringsNoTagsNeverArmsTheRow() =
+        runTest {
+            sources.setSources(capableSource)
+            val bare = wallpaper.copy(width = null, height = null, tags = emptyList())
+            sources.enqueueDetails(
+                NetworkResult.Success(WallpaperDetails(wallpaper = bare, author = "dreemaxx")),
+            )
+
+            val viewModel = createViewModel(DetailDestination.encode(bare))
+            advanceUntilIdle()
+
+            val settled = viewModel.state.value
+            assertTrue(settled.moreLikeThis.isEmpty())
+            assertTrue(sources.searchCalls.isEmpty())
+        }
+
+    @Test
+    fun aRowTheListingAlreadyFilledIsNotReAskedWhenDetailsLand() =
+        runTest {
+            sources.setSources(capableSource)
+            val undimensioned = taggedWallpaper.copy(width = null, height = null)
+            val lookalike = taggedWallpaper.copy(id = "zzz999")
+            sources.enqueueSearch(
+                NetworkResult.Success(Page(wallpapers = listOf(lookalike), nextPage = null)),
+            )
+            sources.enqueueDetails(
+                NetworkResult.Success(
+                    WallpaperDetails(wallpaper = undimensioned.copy(tags = listOf("forest", "river"))),
+                ),
+            )
+
+            val viewModel = createViewModel(DetailDestination.encode(undimensioned))
+            advanceUntilIdle()
+
+            assertEquals(1, sources.searchCalls.size)
+            assertEquals(listOf(lookalike), viewModel.state.value.moreLikeThis)
+        }
+
     @Test
     fun moreLikeThisStaysHiddenWhenTheSourceIsUnknown() =
         runTest {

@@ -505,6 +505,22 @@ class DetailViewModel
                                 },
                         )
                     }
+                    // The tags this record states are the recommendation
+                    // row's fuel (v1.3.2): a listing that shipped the item
+                    // without any — zedge's grids state none — walked out
+                    // of the row's load before this record ever landed, so
+                    // the row re-runs on the merged item now that it has
+                    // what it keys on. A row already filled keeps its
+                    // answer, and the guard reads the CURRENT state so a
+                    // swiped-away page's record can never fill this one —
+                    // the same settle's loadsJob cancellation owns the rest.
+                    if (
+                        wallpaper.tags.none { it.isNotBlank() } &&
+                        resolved.tags.any { it.isNotBlank() } &&
+                        _state.value.moreLikeThis.isEmpty()
+                    ) {
+                        loadMoreLikeThis(merged)
+                    }
                 }
             }
         }
@@ -657,7 +673,12 @@ class DetailViewModel
             /** How many of the wallpaper's tags join the recommendation query. */
             const val MORE_LIKE_THIS_TAG_LIMIT = 3
 
-            /** How many lookalikes the carousel shows at most. */
-            const val MORE_LIKE_THIS_LIMIT = 15
+            /**
+             * How many lookalikes the carousel shows at most — the source
+             * sites' own related shelves serve one 24-tile batch (zedge's
+             * does, probe-verified live), and the row matches them since
+             * v1.3.2 instead of clipping their answer short.
+             */
+            const val MORE_LIKE_THIS_LIMIT = 24
         }
     }
