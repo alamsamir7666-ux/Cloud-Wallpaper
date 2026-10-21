@@ -12,6 +12,7 @@ import com.cloudimage.extensions.core.RepoIndexResult
 import com.cloudimage.extensions.core.RepoManager
 import com.cloudimage.extensions.core.RepoPackageEntry
 import com.cloudimage.extensions.core.StoredRepo
+import com.cloudimage.extensions.core.isUpdateTo
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,6 +64,26 @@ data class ExtensionsUiState(
     /** Installed manifests by id — broken rows (unreadable manifest) never appear. */
     val installedManifests: Map<String, ExtensionManifest>
         get() = installed.mapNotNull { it.manifest }.associateBy { it.id }
+
+    /**
+     * Pending updates per repo id (v1.3.1): how many catalog entries each
+     * repository advertises that differ from what is installed — the
+     * number the browser's badge renders. Repos whose catalog is still
+     * fetching (null) or failed (empty) honestly contribute nothing, so
+     * the badge only ever appears for a catalog this session actually
+     * read. Same [isUpdateTo] rule the repo detail screen's Update button
+     * shows, so the two surfaces cannot disagree.
+     */
+    val updateCountByRepo: Map<String, Int>
+        get() =
+            catalogs.mapValues { (_, entries) ->
+                entries.orEmpty().count { entry ->
+                    installedManifests[entry.id]?.let { entry.isUpdateTo(it) } == true
+                }
+            }.filterValues { it > 0 }
+
+    /** The total across every repo — zero when nothing is pending anywhere. */
+    val pendingUpdatesTotal: Int get() = updateCountByRepo.values.sum()
 
     /** Installed and switched on — Cloudstream's "Downloaded" count. */
     val downloadedCount: Int get() = installedManifests.count { it.key !in disabledSources }

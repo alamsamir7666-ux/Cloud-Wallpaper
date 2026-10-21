@@ -47,6 +47,22 @@ data class RepoPackageEntry(
 )
 
 /**
+ * True when the repository advertises something other than what is
+ * installed for the same package id (v1.3.1, the one source of truth
+ * for "an update is available"): a higher [RepoPackageEntry.versionCode]
+ * wins outright, and an equal code with a different [versionName] (a
+ * re-publish under the same code) still offers the action.
+ *
+ * Extracted from the repo detail ViewModel's private copy so every
+ * surface that can answer "is this an update?" — the detail screen's
+ * per-entry Update button, the extensions browser's per-repo pending
+ * badge — reads the SAME rule and can never drift apart.
+ */
+fun RepoPackageEntry.isUpdateTo(installed: ExtensionManifest): Boolean =
+    versionCode > installed.versionCode ||
+        (versionCode == installed.versionCode && versionName != installed.versionName)
+
+/**
  * One bundle a repository advertises (v1.2.2) — a named, curated group
  * of the repo's own packages, the meta-package pattern: a bundle adds no
  * files of its own, its content IS the list of member package ids

@@ -7,8 +7,10 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import kotlinx.serialization.json.Json
+import okhttp3.Cache
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
+import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.inject.Qualifier
 import javax.inject.Singleton
@@ -24,9 +26,16 @@ annotation class NetworkDebugLogging
 @Module
 @InstallIn(SingletonComponent::class)
 internal object NetworkModule {
+    /**
+     * The disk budget for shared HTTP caching (v1.3.1): 20 MB — hundreds
+     * of provider documents, a rounding error against any image cache,
+     * and trivial for the cache directory the OS already manages.
+     */
+    private const val HTTP_CACHE_BYTES = 20L * 1024 * 1024
     @Provides
     @Singleton
     fun provideOkHttpClient(
+        @ApplicationContext context: Context,
         @NetworkDebugLogging debugLogging: Boolean,
     ): OkHttpClient =
         OkHttpClient
@@ -34,6 +43,16 @@ internal object NetworkModule {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
             .callTimeout(30, TimeUnit.SECONDS)
+            // v1.3.1: the disk HTTP cache every provider document request
+            // now shares. One shared client, one shared cache — OkHttp's
+            // contract (a Cache instance must belong to exactly one client)
+            // holds because the client is a @Singleton. The freshness that
+            // fills it comes from origins that speak for themselves and,
+            // for the many that are silent, from
+            // [ProviderCachePolicyInterceptor]'s sixty-second default;
+            // the stale-on-error seam reads it back when transport dies.
+            .cache(Cache(File(context.cacheDir, "provider-http"), HTTP_CACHE_BYTES))
+            .addNetworkInterceptor(ProviderCachePolicyInterceptor)
             .apply {
                 if (debugLogging) {
                     addInterceptor(

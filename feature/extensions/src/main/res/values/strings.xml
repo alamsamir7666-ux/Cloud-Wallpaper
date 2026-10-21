@@ -51,6 +51,8 @@
     <string name="extensions_search_clear">Clear search</string>
     <string name="extensions_refresh_repo">Check for updates</string>
     <string name="extensions_catalog_update_to">Update to v%1$s</string>
+    <string name="extensions_repo_pending_updates">%1$d updates available</string>
+    <string name="extensions_repo_one_pending_update">1 update available</string>
     <string name="extensions_updated_snackbar">%1$s updated</string>
 
     <!-- v1.0.20: Cloudstream-style repository browser. -->

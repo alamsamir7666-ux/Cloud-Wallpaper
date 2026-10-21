@@ -146,4 +146,80 @@ class CloudimageProviderHttpClientTest {
             assertEquals(403, response.statusCode)
             assertEquals("{\"error\":\"invalid_api_key\"}", response.bodyText)
         }
+
+    /**
+     * v1.3.1 stale-on-error: a GET whose transport failed but whose
+     * document the disk cache still holds returns THAT last known good
+     * answer instead of throwing — the offline-reader degradation. The
+     * cached answer is served even though the network is now dead.
+     */
+    @Test
+    fun transportFailureFallsBackToCachedDocument() =
+        runTest {
+            val cacheDir = java.nio.file.Files.createTempDirectory("facade-cache").toFile()
+            val cachedClient =
+                CloudimageHttpClient(
+                    okHttpClient =
+                        OkHttpClient
+                            .Builder()
+                            .cache(okhttp3.Cache(cacheDir, 5L * 1024 * 1024))
+                            .addNetworkInterceptor(com.cloudimage.core.network.ProviderCachePolicyInterceptor)
+                            .build(),
+                    json = Json { ignoreUnknownKeys = true },
+                )
+            val cachedFacade = CloudimageProviderHttpClient(cachedClient)
+            val url = server.url("/feed?cursor=2").toString()
+
+            // Prime: the origin answers, silent about freshness — the
+            // interceptor grants the document its sixty seconds.
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setBody("the last good feed")
+                    .addHeader("Content-Type", "application/json"),
+            )
+            assertEquals("the last good feed", cachedFacade.get(url).bodyText)
+
+            // Kill the network. The same GET now fails transport — and is
+            // rescued from the cache, body intact, status 200.
+            server.shutdown()
+            val rescued = cachedFacade.get(url)
+            assertTrue(rescued.isSuccessful)
+            assertEquals("the last good feed", rescued.bodyText)
+            cacheDir.deleteRecursively()
+        }
+
+    /** The rescue is honest: a URL never fetched throws the transport truth. */
+    @Test
+    fun transportFailureWithoutCacheEntryStillThrows() =
+        runTest {
+            server.shutdown()
+
+            val failure =
+                runCatching {
+                    facade.get(server.url("/never-fetched").toString())
+                }.exceptionOrNull()
+
+            assertTrue(failure is ProviderTransportException)
+        }
+
+    /**
+     * The rescue only applies to transport failures: a non-2xx ANSWER is
+     * the source speaking, and a cached older success must never be
+     * smuggled back over the fresh failure.
+     */
+    @Test
+    fun httpAnswerIsNeverReplacedByStaleCache() =
+        runTest {
+            val url = server.url("/flaky").toString()
+            server.enqueue(MockResponse().setResponseCode(200).setBody("cached goodness"))
+            assertEquals("cached goodness", facade.get(url).bodyText)
+
+            server.enqueue(MockResponse().setResponseCode(500).setBody("origin bug"))
+            val fresh = facade.get(url)
+
+            assertFalse(fresh.isSuccessful)
+            assertEquals(500, fresh.statusCode)
+            assertEquals("origin bug", fresh.bodyText)
+        }
 }

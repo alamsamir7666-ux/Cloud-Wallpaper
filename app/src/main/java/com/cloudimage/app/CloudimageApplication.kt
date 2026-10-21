@@ -111,6 +111,14 @@ class CloudimageApplication :
             .okHttpClient(
                 okHttpClient
                     .newBuilder()
+                    // Images belong to Coil's own disk cache (v1.3.1): the
+                    // shared client now carries a 20 MB HTTP document cache
+                    // for provider APIs, and letting this derived client
+                    // keep it would store every CDN-cacheable image twice
+                    // — once in each cache — while Coil serves from its own
+                    // anyway. Dropping it keeps one byte stored per image
+                    // and hands provider documents the whole HTTP budget.
+                    .cache(null)
                     .callTimeout(0, TimeUnit.SECONDS)
                     .readTimeout(45, TimeUnit.SECONDS)
                     .addInterceptor(ImageProgressRegistry.interceptor())

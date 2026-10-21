@@ -9,6 +9,7 @@ import com.cloudimage.extensions.core.RepoIndexDto
 import com.cloudimage.extensions.core.RepoIndexResult
 import com.cloudimage.extensions.core.RepoPackageEntry
 import com.cloudimage.extensions.core.StoredRepo
+import com.cloudimage.extensions.core.isUpdateTo
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -255,5 +256,61 @@ class ExtensionsViewModelTest {
             ),
             state.statsSegments(),
         )
+    }
+
+    // ---------------------------------------------------------------
+    // v1.3.1 — the pending-updates badge state.
+    // ---------------------------------------------------------------
+
+    @Test
+    fun updateCountPerRepoCountsOnlyRealUpdates() {
+        val state =
+            ExtensionsUiState(
+                installed = listOf(manifestRow("cloudimage.wallhaven", versionCode = 3)),
+                catalogs =
+                    mapOf(
+                        // A higher code IS an update; the same code with a
+                        // different name (re-publish) IS; the identical entry
+                        // is not; an uninstalled package is not.
+                        "r1" to
+                            listOf(
+                                catalogEntry("cloudimage.wallhaven", versionCode = 4),
+                                catalogEntry("cloudimage.wallhaven", versionName = "1.0.1-hotfix", versionCode = 3),
+                                catalogEntry("cloudimage.wallhaven", versionCode = 3),
+                                catalogEntry("cloudimage.unsplash", versionCode = 9),
+                            ),
+                        // Catalog still fetching — contributes nothing.
+                        "r2" to null,
+                        // Catalog fetched, nothing newer — absent from the map.
+                        "r3" to listOf(catalogEntry("cloudimage.other")),
+                    ),
+            )
+
+        assertEquals(mapOf("r1" to 2), state.updateCountByRepo)
+        assertEquals(2, state.pendingUpdatesTotal)
+    }
+
+    @Test
+    fun updateCountAgreesWithTheDetailScreensRule() {
+        // The one source of truth: the repo detail screen's Update button
+        // and the browser's badge must flip on the same diffs. Built via the
+        // same isUpdateTo predicate both now share.
+        val installed = manifestRow("cloudimage.zedge", versionName = "1.4.0", versionCode = 5)
+        val newer =
+            catalogEntry("cloudimage.zedge", versionName = "1.5.0", versionCode = 6)
+        val republished =
+            catalogEntry("cloudimage.zedge", versionName = "1.4.0-1", versionCode = 5)
+        val unchanged =
+            catalogEntry("cloudimage.zedge", versionName = "1.4.0", versionCode = 5)
+
+        assertTrue(newer.isUpdateTo(installed.manifest!!))
+        assertTrue(republished.isUpdateTo(installed.manifest!!))
+        assertFalse(unchanged.isUpdateTo(installed.manifest!!))
+    }
+
+    @Test
+    fun noCatalogsMeansNoPendingUpdates() {
+        assertEquals(emptyMap<String, Int>(), ExtensionsUiState().updateCountByRepo)
+        assertEquals(0, ExtensionsUiState().pendingUpdatesTotal)
     }
 }

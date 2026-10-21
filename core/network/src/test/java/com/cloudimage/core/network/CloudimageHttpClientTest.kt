@@ -693,4 +693,236 @@ class CloudimageHttpClientTest {
             // caller's estimate stands either way.
             assertEquals(NetworkResult.Failure(NetworkError.Http(code = 400, url = "not a url")), result)
         }
+
+    // ------------------------------------------------------------------
+    // v1.3.1 — the transient retry seam (bounded, GET-only, jittered).
+    // ------------------------------------------------------------------
+
+    @Test
+    fun transient502IsRetriedAndRecovers() =
+        runTest {
+            val url = server.url("/flaky-feed").toString()
+            server.enqueue(MockResponse().setResponseCode(502).setBody("bad gateway"))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("recovered"))
+
+            val result = client.getRaw(url)
+
+            assertTrue(result is NetworkResult.Success)
+            assertEquals("recovered", (result as NetworkResult.Success).value.bodyText)
+            assertEquals(2, server.requestCount)
+        }
+
+    @Test
+    fun transientFailuresStopAtMaxAttempts() =
+        runTest {
+            val url = server.url("/down-cdn").toString()
+            repeat(3) { server.enqueue(MockResponse().setResponseCode(503)) }
+
+            val result = client.getRaw(url)
+
+            assertTrue(result is NetworkResult.Success) // non-2xx is an answer, not a failure
+            assertEquals(503, (result as NetworkResult.Success).value.statusCode)
+            assertEquals(1 + CloudimageHttpClient.MAX_TRANSIENT_RETRIES, server.requestCount)
+        }
+
+    @Test
+    fun deterministic500IsNeverRetried() =
+        runTest {
+            val url = server.url("/origin-bug").toString()
+            server.enqueue(MockResponse().setResponseCode(500))
+
+            client.getRaw(url)
+
+            assertEquals(1, server.requestCount)
+        }
+
+    @Test
+    fun cloudflareChallengeShapeIsNeverRetried() =
+        runTest {
+            val url = server.url("/guarded").toString()
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(503)
+                    .setHeader("Server", "cloudflare")
+                    .setBody("<html>Just a moment...</html>"),
+            )
+
+            client.getRaw(url)
+
+            // The ladder owns challenges — one plain attempt, no retry seam.
+            assertEquals(1, server.requestCount)
+        }
+
+    @Test
+    fun shortRetryAfterIsHonoredAndRescuesThe429() =
+        runTest {
+            val url = server.url("/rate-limited").toString()
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(429)
+                    .setHeader("Retry-After", "1")
+                    .setBody("slow down"),
+            )
+            server.enqueue(MockResponse().setResponseCode(200).setBody("welcome back"))
+
+            val result = client.getRaw(url)
+
+            assertTrue(result is NetworkResult.Success)
+            assertEquals("welcome back", (result as NetworkResult.Success).value.bodyText)
+            assertEquals(2, server.requestCount)
+        }
+
+    @Test
+    fun retryDelayDoublesWithFullJitter() {
+        val first = CloudimageHttpClient.transientRetryDelayMs(attempt = 1)!!
+        val second = CloudimageHttpClient.transientRetryDelayMs(attempt = 2)!!
+        val third = CloudimageHttpClient.transientRetryDelayMs(attempt = 3)!!
+
+        // Nominal 400/800/1600, each spread to [0.5x, 1.5x).
+        assertTrue(first in 200..600)
+        assertTrue(second in 400..1200)
+        assertTrue(third in 800..2400)
+    }
+
+    @Test
+    fun retryDelayHonorsShortRetryAfter() {
+        assertEquals(2000L, CloudimageHttpClient.transientRetryDelayMs(attempt = 1, retryAfterSeconds = 2))
+    }
+
+    @Test
+    fun longRetryAfterCancelsTheRetry() {
+        assertNull(CloudimageHttpClient.transientRetryDelayMs(attempt = 1, retryAfterSeconds = 30))
+    }
+
+    // ------------------------------------------------------------------
+    // v1.3.1 — the disk cache + freshness policy + stale-on-error seam.
+    // ------------------------------------------------------------------
+
+    private fun cachedClient(): Pair<CloudimageHttpClient, java.io.File> {
+        val cacheDir = java.nio.file.Files.createTempDirectory("http-cache").toFile()
+        val cached =
+            CloudimageHttpClient(
+                okHttpClient =
+                    OkHttpClient
+                        .Builder()
+                        .cache(okhttp3.Cache(cacheDir, 5L * 1024 * 1024))
+                        .addNetworkInterceptor(ProviderCachePolicyInterceptor)
+                        .build(),
+                json = Json { ignoreUnknownKeys = true },
+            )
+        return cached to cacheDir
+    }
+
+    @Test
+    fun silentJsonDocumentBecomesCacheableAndSurvivesNetworkDeath() =
+        runTest {
+            val (cached, cacheDir) = cachedClient()
+            val url = server.url("/api/feed?page=1").toString()
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setBody("""{"wallpapers":[]}""")
+                    .addHeader("Content-Type", "application/json"),
+            )
+
+            assertEquals("""{"wallpapers":[]}""", cached.getRaw(url).let { (it as NetworkResult.Success).value.bodyText })
+            server.shutdown()
+
+            val stale = cached.getCachedOnly(url)
+            assertTrue(stale != null && stale.isSuccessful)
+            assertEquals("""{"wallpapers":[]}""", stale!!.bodyText)
+            cacheDir.deleteRecursively()
+        }
+
+    @Test
+    fun explicitNoStoreIsRespectedAndNothingIsCached() =
+        runTest {
+            val (cached, cacheDir) = cachedClient()
+            val url = server.url("/volatile").toString()
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setBody("now or never")
+                    .addHeader("Content-Type", "application/json")
+                    .addHeader("Cache-Control", "no-store"),
+            )
+
+            cached.getRaw(url)
+            server.shutdown()
+
+            assertNull(cached.getCachedOnly(url))
+            cacheDir.deleteRecursively()
+        }
+
+    @Test
+    fun challengeAnswersAreNeverCached() =
+        runTest {
+            val (cached, cacheDir) = cachedClient()
+            val url = server.url("/guarded-feed").toString()
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(503)
+                    .setHeader("Server", "cloudflare")
+                    .setBody("Just a moment...")
+                    .addHeader("Content-Type", "text/html"),
+            )
+
+            cached.getRaw(url)
+            server.shutdown()
+
+            assertNull(cached.getCachedOnly(url))
+            cacheDir.deleteRecursively()
+        }
+
+    @Test
+    fun imageBodiesStayOutsideTheHttpCache() =
+        runTest {
+            val (cached, cacheDir) = cachedClient()
+            val url = server.url("/full/aurora.jpg").toString()
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setBody("jpegbytes")
+                    .addHeader("Content-Type", "image/jpeg"),
+            )
+
+            cached.getRaw(url)
+            server.shutdown()
+
+            assertNull(cached.getCachedOnly(url))
+            cacheDir.deleteRecursively()
+        }
+
+    @Test
+    fun postAnswersAreNotServedFromCache() =
+        runTest {
+            val (cached, cacheDir) = cachedClient()
+            val url = server.url("/graphql").toString()
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setBody("""{"data":{"browse":[]}}""")
+                    .addHeader("Content-Type", "application/json"),
+            )
+
+            val first = cached.postRaw(url, body = "{}", contentType = "application/json")
+            assertTrue(first is NetworkResult.Success)
+            server.shutdown()
+
+            // The honest failure of a continuation POST is never masked by
+            // a stale GET-adjacent answer: OkHttp caches GETs only, and the
+            // stale seam never runs for the POST lane.
+            val second = cached.postRaw(url, body = "{}", contentType = "application/json")
+            assertTrue(second is NetworkResult.Failure)
+            cacheDir.deleteRecursively()
+        }
+
+    @Test
+    fun cachedOnlyMissReportsNull() =
+        runTest {
+            val (cached, cacheDir) = cachedClient()
+
+            assertNull(cached.getCachedOnly(server.url("/never-seen").toString()))
+            cacheDir.deleteRecursively()
+        }
 }

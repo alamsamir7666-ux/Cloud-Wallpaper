@@ -13,6 +13,7 @@ import com.cloudimage.extensions.core.RepoIndexResult
 import com.cloudimage.extensions.core.RepoManager
 import com.cloudimage.extensions.core.RepoPackageEntry
 import com.cloudimage.extensions.core.StoredRepo
+import com.cloudimage.extensions.core.isUpdateTo
 import com.cloudimage.extensions.core.reason
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -99,13 +100,13 @@ data class RepoDetailUiState(
 
     /**
      * True when [entry] advertises something other than what is installed:
-     * a higher code wins outright, and an equal code with a different
-     * name (a re-publish under the same code) still offers the action.
+     * delegated to the shared [RepoPackageEntry.isUpdateTo] rule
+     * (v1.3.1) so the detail screen and the browser's pending-updates
+     * badge can never disagree about what an update is.
      */
     fun updateAvailable(entry: RepoPackageEntry): Boolean {
         val installedManifest = installedManifests[entry.id] ?: return false
-        return entry.versionCode > installedManifest.versionCode ||
-            (entry.versionCode == installedManifest.versionCode && entry.versionName != installedManifest.versionName)
+        return entry.isUpdateTo(installedManifest)
     }
 
     /** The visible rows: category- and search-filtered, sorted by name. */

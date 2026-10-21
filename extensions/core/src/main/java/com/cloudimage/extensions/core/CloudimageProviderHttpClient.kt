@@ -97,7 +97,20 @@ class CloudimageProviderHttpClient
         ): ProviderHttpResponse =
             when (val result = client.getRaw(url, headers)) {
                 is NetworkResult.Success -> mapPayload(url, result.value)
-                is NetworkResult.Failure -> throw ProviderTransportException(result.error, url)
+                is NetworkResult.Failure ->
+                    // The stale-on-error rescue (v1.3.1): transport died —
+                    // offline, mid-handover, DNS gone — but the disk cache
+                    // may hold the very document this GET fetched before.
+                    // A plugin asking for it again (grid revisit, rotated
+                    // back page, cold-start home row) gets that last known
+                    // good answer instead of an exception; a URL never
+                    // fetched before finds nothing in the cache and the
+                    // original transport exception propagates, the exact
+                    // pre-v1.3.1 behavior. POST never degrades this way —
+                    // OkHttp caches GETs only, so continuation calls keep
+                    // their honest failure.
+                    client.getCachedOnly(url, headers)?.let { return mapPayload(url, it) }
+                        ?: throw ProviderTransportException(result.error, url)
             }
 
         /**

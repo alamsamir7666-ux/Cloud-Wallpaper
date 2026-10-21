@@ -216,6 +216,7 @@ private fun RepoBrowserList(
             ) { repo ->
                 RepoRow(
                     repo = repo,
+                    updateCount = state.updateCountByRepo[repo.id] ?: 0,
                     onClick = { onOpenRepo(repo) },
                     onLongClick = { onCopyRepo(repo) },
                     onRemove = { onRemoveRepo(repo) },
@@ -230,6 +231,7 @@ private fun RepoBrowserList(
 @Composable
 private fun RepoRow(
     repo: StoredRepo,
+    updateCount: Int,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onRemove: () -> Unit,
@@ -260,13 +262,39 @@ private fun RepoRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = repo.url,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = repo.url,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                // v1.3.1: the pending-updates badge — the catalogs this
+                // screen already fetches on every visit, summarized at
+                // repo-row level so "which repo has updates?" is answered
+                // without opening each one (the pre-badge answer: open
+                // every repo, every visit, and compare by eye).
+                if (updateCount > 0) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text =
+                            stringResource(
+                                if (updateCount == 1) {
+                                    R.string.extensions_repo_one_pending_update
+                                } else {
+                                    R.string.extensions_repo_pending_updates
+                                },
+                                updateCount,
+                            ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
         IconButton(
             onClick = onRemove,

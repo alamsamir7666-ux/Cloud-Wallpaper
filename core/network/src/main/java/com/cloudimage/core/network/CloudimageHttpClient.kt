@@ -3,6 +3,7 @@ package com.cloudimage.core.network
 import com.cloudimage.core.network.NetworkResult.Failure
 import com.cloudimage.core.network.NetworkResult.Success
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
@@ -14,6 +15,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.CacheControl
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -133,7 +135,7 @@ class CloudimageHttpClient
                     } else {
                         val state = cloudflare.bypassStateFor(url)
                         var stale = state
-                        payload = execute(url, extraHeaders, state)
+                        payload = executePlainGet(url, extraHeaders, state)
                         if (CloudflareChallenge.isChallenge(payload)) {
                             val bypass = cloudflare.solve(url, staleState = stale)
                             if (bypass != null) {
@@ -152,6 +154,127 @@ class CloudimageHttpClient
                     Failure(NetworkError.Io(e))
                 }
             }
+
+        /**
+         * The stale-on-error seam (v1.3.1): the last 2xx answer the disk
+         * cache holds for this URL, without touching the network —
+         * `only-if-cached` short-circuits the exchange entirely, so it
+         * works with the network down, the DNS gone, the route dropped.
+         *
+         * The provider facade calls this exactly when a GET's transport
+         * failed ([getRaw] came back [NetworkResult.Failure]): the plugin
+         * then receives yesterday's document instead of an exception, the
+         * same honest-degradation an offline reader's users expect, and it
+         * can only ever be a body the source itself once served — nothing
+         * is synthesized, nothing is stored by this app (the cache only
+         * holds what a real origin answered).
+         *
+         * Null when there is no such entry: OkHttp answers 504
+         * "Unsatisfiable Request" for a cache miss, and any other oddity
+         * (an entry that fails to open, an IOException where a cache
+         * should be) degrades the same way — the caller keeps its
+         * original failure and reports the transport truth.
+         *
+         * The request mirrors [execute]'s shape (same User-Agent, same
+         * plugin headers) so a `Vary`-sensitive origin's entry matches
+         * the one the real request would have written.
+         */
+        suspend fun getCachedOnly(
+            url: String,
+            extraHeaders: Map<String, String> = emptyMap(),
+        ): HttpPayload? =
+            withContext(Dispatchers.IO) {
+                if (url.isBlank()) return@withContext null
+                try {
+                    val request =
+                        Request
+                            .Builder()
+                            .url(url)
+                            .header(HEADER_USER_AGENT, USER_AGENT)
+                            .cacheControl(CacheControl.Builder().onlyIfCached().build())
+                            .apply {
+                                for ((name, value) in extraHeaders) {
+                                    header(name, value)
+                                }
+                            }.build()
+                    okHttpClient.newCall(request).await().use { response ->
+                        if (!response.isSuccessful) {
+                            return@withContext null
+                        }
+                        HttpPayload(
+                            statusCode = response.code,
+                            headers = response.headers.toMultimap(),
+                            body = response.body?.bytes() ?: ByteArray(0),
+                        )
+                    }
+                } catch (e: IOException) {
+                    null
+                }
+            }
+
+        /**
+         * The plain GET rung of [getRaw], hardened against transient
+         * failures (v1.3.1): up to [MAX_TRANSIENT_RETRIES] extra attempts,
+         * spaced by exponential backoff with full jitter, ONLY for the two
+         * failure shapes mobile networks actually produce and a retry can
+         * genuinely fix —
+         *
+         * - an [IOException] that is NOT a [SocketTimeoutException] (a
+         *   connection reset mid-handover, a brief DNS failure, a dropped
+         *   route: fast failures, so an immediate retry costs nothing and
+         *   often lands), and
+         * - a non-challenge answer in [TRANSIENT_RETRY_STATUSES] — 502/503/
+         *   504 (CDN and origin blips) and 429 (rate limit). A Cloudflare
+         *   challenge shape is excluded deliberately: the ladder owns
+         *   challenges, and re-hammering a challenged zone is bot behavior
+         *   that can trigger the very escalation it hopes to avoid.
+         *
+         * Everything else returns or throws on the first attempt exactly
+         * as before. Read timeouts never retry: the request already waited
+         * the full [okHttpClient] call timeout, and doubling that wait on
+         * a search the user is watching would trade a rare rescue for a
+         * certain stall. POST never retries through this seam at all —
+         * [executePost] is single-shot, the conservative industry default
+         * for non-idempotent verbs.
+         *
+         * A 429's numeric `Retry-After` (seconds) is honored when present
+         * and short (<= [RETRY_AFTER_CAP_MS]); a server that demands a
+         * longer pause than that is listened to — no retry — because a
+         * rate limiter's answer outranks our eagerness.
+         */
+        private suspend fun executePlainGet(
+            url: String,
+            extraHeaders: Map<String, String>,
+            bypass: CloudflareBypass?,
+        ): HttpPayload {
+            var attempt = 0
+            while (true) {
+                try {
+                    val payload = execute(url, extraHeaders, bypass)
+                    if (attempt >= MAX_TRANSIENT_RETRIES || !isTransientlyUnavailable(payload)) return payload
+                    val delayMillis = transientRetryDelayMs(attempt + 1, retryAfterSecondsOf(payload)) ?: return payload
+                    delay(delayMillis)
+                    attempt++
+                } catch (e: IOException) {
+                    if (e is SocketTimeoutException || attempt >= MAX_TRANSIENT_RETRIES) throw e
+                    delay(transientRetryDelayMs(attempt + 1)!!)
+                    attempt++
+                }
+            }
+        }
+
+        /** The transient answer shapes a bounded retry may legally address. */
+        private fun isTransientlyUnavailable(payload: HttpPayload): Boolean =
+            !payload.isSuccessful &&
+                payload.statusCode in TRANSIENT_RETRY_STATUSES &&
+                !CloudflareChallenge.isChallenge(payload)
+
+        /** The numeric `Retry-After` (seconds) a 429 carried, when it did. */
+        private fun retryAfterSecondsOf(payload: HttpPayload): Int? =
+            payload.headers
+                .flatMap { (name, values) -> values.map { name to it } }
+                .firstOrNull { (name, _) -> name.equals(HEADER_RETRY_AFTER, ignoreCase = true) }
+                ?.second?.trim()?.toIntOrNull()
 
         /**
          * Performs a POST and returns the raw exchange — the v1.3 lane for
@@ -619,6 +742,55 @@ class CloudimageHttpClient
              * files report a few dozen ticks, not one per read.
              */
             internal const val PROGRESS_CHUNK_BYTES = 64L * 1024
+
+            /** Where a 429's own retry scheduling is read from. */
+            private const val HEADER_RETRY_AFTER = "Retry-After"
+
+            /**
+             * The answer shapes a bounded transient retry may legally
+             * address (v1.3.1): gateway/origin blips and rate limiting.
+             * 500 is deliberately absent — a deterministic origin bug is
+             * not made better by asking twice.
+             */
+            internal val TRANSIENT_RETRY_STATUSES = setOf(502, 503, 504, 429)
+
+            /** At most two extra attempts — three plain requests total. */
+            internal const val MAX_TRANSIENT_RETRIES = 2
+
+            /** Nominal first backoff step; doubles each attempt (400ms, 800ms). */
+            internal const val RETRY_BASE_DELAY_MS = 400L
+
+            /**
+             * The longest `Retry-After` the retry seam will honor; a server
+             * demanding more is telling the truth and is obeyed by not
+             * retrying at all.
+             */
+            internal const val RETRY_AFTER_CAP_MS = 5_000L
+
+            /**
+             * Milliseconds to sleep before transient retry [attempt]
+             * (1-based), full-jitter exponential backoff: 400ms then 800ms
+             * nominal, each spread to [0.5x, 1.5x) so a fleet of clients
+             * never thunders in lockstep. A short numeric `Retry-After`
+             * wins outright (the server scheduled the retry); a
+             * `Retry-After` longer than [RETRY_AFTER_CAP_MS] cancels the
+             * retry entirely (null) — the caller keeps the honest answer
+             * it already has. Pure and internal so the policy itself is
+             * unit-testable without a clock.
+             */
+            internal fun transientRetryDelayMs(
+                attempt: Int,
+                retryAfterSeconds: Int? = null,
+            ): Long? {
+                if (retryAfterSeconds != null) {
+                    val requested = retryAfterSeconds * 1000L
+                    if (requested > RETRY_AFTER_CAP_MS) return null
+                    return requested
+                }
+                val nominal = RETRY_BASE_DELAY_MS shl (attempt - 1).coerceAtLeast(0)
+                val jitter = 0.5 + Math.random() * 0.5
+                return (nominal * jitter).toLong()
+            }
 
             /**
              * The descriptive User-Agent every unbranded request from this
