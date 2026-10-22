@@ -11,7 +11,12 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
@@ -21,12 +26,33 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /**
+ * The browser-engine seam the keyless lane's second rung rides — the
+ * one piece of the ask that cannot live in this module: a real
+ * Chromium loading a real page and running a script inside it.
+ *
+ * The contract is the POST lane's engine rung verbatim: load [pageUrl]
+ * in the WebView engine (invisible, no dialog, no challenge escalation),
+ * wait for the page to settle into the site's own content, then evaluate
+ * [js] in it and hand back the string the script parks on the page's
+ * polling globals — or null when no page settled or the script never
+ * answered. Production wires `CloudflareBypasser.evaluateOnPageQuiet`
+ * behind this (see [GlobalSearchModule]); tests script it with a lambda.
+ */
+fun interface EngineScriptLane {
+    suspend fun run(
+        pageUrl: String,
+        js: String,
+    ): String?
+}
+
+/**
  * The global image search engine backed by Reddit's public JSON listings —
  * the in-app lane of the search, riding NO credential of any kind (v1.3.3):
  * no developer registration, no API key, no client id, no token endpoint,
  * no OAuth host. The phone asks Reddit's own front doors exactly the way
  * its browser does, and Reddit answers the way it answers any other
- * signed-out visitor.
+ * signed-out visitor (v1.3.4: with the browser ENGINE itself when the
+ * plain-client ask is refused).
  *
  * Why keyless, and why it works: the wallpaper subreddits
  * (`r/wallpapers`, `r/Amoledbackgrounds`, `r/EarthPorn` and friends) are
@@ -36,30 +62,42 @@ import java.util.concurrent.TimeUnit
  * installed-app OAuth identity bought its own request budget with a
  * developer-registered client id, but that id was never registered — the
  * lane has run anonymous since the day it shipped, which is exactly why
- * it never surfaced a single result: it identified itself with a
- * descriptive bot agent (`Cloudimage/1.2 …`) that Reddit's edge throttles
- * hardest, from one front door, against a per-IP anonymous budget that
- * shared carrier addresses drain by themselves. This engine keeps the
- * anonymous lane and makes it SURVIVE instead of credentialing it:
+ * it stays keyless now: no credential was ever minted, and none is
+ * needed, because the phone's own browser is the one vantage Reddit
+ * provisions to serve at web scale. This engine keeps the anonymous lane
+ * and makes it SURVIVE instead of credentialing it:
  *
- * - **The browser identity.** The request carries a stock Android Chrome
- *   user agent and an `Accept-Language`, because that is the identity
- *   Reddit's own signed-out mobile web rides — the one its edge is
- *   provisioned to serve at web scale without asking who is asking. A
- *   made-up agent names a scraper; a stock one names every phone on the
- *   train. (Verified from this project's sandbox: all Reddit front doors
- *   403 datacenter ranges by IP alone, in 30 ms, before any header is
- *   read — identity cannot rescue a blocked vantage, which is precisely
- *   why the lane runs from the device and never from the bridge.)
+ * - **The two-rung ask.** Reddit's "blocked by network security" wall —
+ *   verified live at v1.3.4, served to clean CORPORATE egress on every
+ *   `.json` door, with `old.reddit.com` behind a full login wall —
+ *   refuses any HTTP-client shape: a stock browser agent on an OkHttp
+ *   stack still carries OkHttp's TLS and HTTP fingerprints, and that is
+ *   what the wall scores. The lane therefore asks twice, per front door.
+ *   Rung one is the plain OkHttp request with a stock signed-out Android
+ *   Chrome agent — the fast path for the networks whose edge still
+ *   serves plain clients. When rung one is refused, rung two asks THE
+ *   SAME `.json` path from inside a settled Reddit page loaded in the
+ *   app's WebView engine: a same-origin `fetch` issued by the phone's
+ *   real Chromium, wearing its own cookies, its own agent and its own
+ *   fingerprint — the same shape the site's own XHR rides, the one
+ *   shape the wall cannot refuse without refusing the user's own
+ *   browser. The rung is the POST lane's proven engine discipline
+ *   ([EngineScriptLane], wired to `CloudflareBypasser.evaluateOnPageQuiet`
+ *   — invisible, no dialog), and once a door delivers through it the
+ *   lane LATCHES: later pages skip the refused OkHttp theater and go
+ *   straight to the engine, the same sticky-start economy the doors
+ *   themselves get.
  *
- * - **The front-door ladder.** `www.reddit.com`, `old.reddit.com` and
- *   `api.reddit.com` serve the identical `.json` route grammar and none
- *   of them asks for a credential. A refusal that belongs to one edge —
- *   a 403, a throttle, a reset — is often not shared by the next, so one
- *   logical request walks the doors in order until one answers, and the
- *   door that last answered is where the next request starts. A code
- *   that belongs to the request rather than the door (a 404, a 400)
- *   fails immediately without touring the ladder.
+ * - **The front doors.** `www.reddit.com` and `api.reddit.com` serve
+ *   the identical `.json` route grammar and neither asks for a
+ *   credential. A refusal that belongs to one edge — a 403, a throttle,
+ *   a reset — is often not shared by the next, so one logical request
+ *   walks the doors in order until one answers, and the door that last
+ *   answered is where the next request starts. A code that belongs to
+ *   the request rather than the door (a 404, a 400) fails immediately
+ *   without touring the ladder. (`old.reddit.com` is gone from the
+ *   ladder by v1.3.4: it now answers every visitor with a login wall,
+ *   so it is a door that never opens.)
  *
  * - **The whole-site fallback.** The wallpaper subs are searched first
  *   (`restrict_sr=1` — on-topic quality, curated wallpapers), but they
@@ -101,6 +139,12 @@ import java.util.concurrent.TimeUnit
 class RedditSearchEngine(
     baseClient: OkHttpClient,
     private val json: Json,
+    /**
+     * The browser-engine rung: production wires the WebView-backed
+     * quiet script lane, tests script it; null keeps the lane on the
+     * plain OkHttp ladder alone (the v1.3.3 contract).
+     */
+    private val engine: EngineScriptLane? = null,
     /** Tests point this at MockWebServer(s); production leaves it null. */
     private val overrideHosts: List<String>? = null,
     /**
@@ -144,6 +188,19 @@ class RedditSearchEngine(
      */
     @Volatile
     private var preferredHostIndex = 0
+
+    /**
+     * Whether the engine rung has ever DELIVERED on this device — the
+     * latch that stops re-paying the refused OkHttp theater on every
+     * later page. Rung one stays first for as long as it has a chance
+     * (the latch is per-process, so a network whose edge serves plain
+     * clients never even wakes the engine), but once the engine has
+     * answered where the plain client was refused, the plain client has
+     * proven what this network serves, and every later logical request
+     * starts straight at the door's engine rung.
+     */
+    @Volatile
+    private var engineDelivered = false
 
     /**
      * The walk state of each active query: the cursor its NEXT page
@@ -200,7 +257,7 @@ class RedditSearchEngine(
                 filters.sizeTier.queryToken()?.let { "$query $it" } ?: query
 
             pace(minRequestIntervalMs)
-            val first = ladderGet { host -> searchUrl(effectiveQuery, cursor, wide, host) }
+            val first = ladderGet { door -> askFor(door, effectiveQuery, cursor, wide) }
             if (first is LadderOutcome.Refused) {
                 return@withContext first.failure
             }
@@ -222,7 +279,7 @@ class RedditSearchEngine(
             // the subs cover the query, the tier is the user's own filter.
             if (page == 1 && !wide && listing.imagePosts.isEmpty()) {
                 pace(fallbackGapMs)
-                val siteWide = ladderGet { host -> searchUrl(effectiveQuery, null, true, host) }
+                val siteWide = ladderGet { door -> askFor(door, effectiveQuery, null, true) }
                 if (siteWide is LadderOutcome.Body) {
                     val parsed =
                         try {
@@ -308,14 +365,40 @@ class RedditSearchEngine(
     }
 
     /**
-     * Walks the front doors with one request each until one answers 2xx.
-     * Refusals that belong to a door (403, 429, 5xx, timeouts, resets)
-     * advance the walk; codes that belong to the request itself (404,
-     * 400 — the path, the grammar) end it immediately, because the next
-     * door would answer them identically. The door that answers becomes
-     * the sticky start of the next walk.
+     * One logical ask, split by rung: the plain-client URL rung one
+     * hits, and the engine rung's page + script path for the same door.
      */
-    private suspend fun ladderGet(buildUrl: (String) -> String): LadderOutcome {
+    private fun askFor(
+        host: String,
+        query: String,
+        cursor: String?,
+        wide: Boolean,
+    ): DoorAsk =
+        DoorAsk(
+            url = searchUrl(query, cursor, wide, host),
+            scriptPage = host.trimEnd('/') + SCRIPT_HOST_PATH,
+            scriptPath = searchPath(query, cursor, wide),
+        )
+
+    /** One door's two asks: rung one's URL, rung two's page and script path. */
+    private data class DoorAsk(
+        val url: String,
+        val scriptPage: String,
+        val scriptPath: String,
+    )
+
+    /**
+     * Walks the front doors with two rungs each until one answers 2xx.
+     * Rung one is the plain HTTP client's ask (skipped once the engine
+     * rung has delivered — the latch); rung two is the browser engine's:
+     * the same `.json` path fetched same-origin from inside a settled
+     * page on the door's origin. Refusals that belong to a door (403,
+     * 429, 5xx, timeouts, resets) advance the walk; codes that belong to
+     * the request itself (404, 400 — the path, the grammar) end it
+     * immediately, because the next door would answer them identically.
+     * The door that answers becomes the sticky start of the next walk.
+     */
+    private suspend fun ladderGet(askFor: (String) -> DoorAsk): LadderOutcome {
         val doors = hosts()
         var sawRateLimit = false
         var sawTimeout = false
@@ -332,42 +415,87 @@ class RedditSearchEngine(
             val index = (start + offset) % doors.size
             val door = doors[index]
             if (offset > 0) pace(ladderGapMs)
-            val request =
-                Request
-                    .Builder()
-                    .url(buildUrl(door))
-                    .header(HEADER_USER_AGENT, USER_AGENT)
-                    .header(HEADER_ACCEPT_LANGUAGE, ACCEPT_LANGUAGE)
-                    .build()
-            val attempt = attemptOnce(request)
-            when (attempt) {
-                is Attempt.Answered -> {
-                    val body = attempt.body
-                    if (body != null) {
+            val ask = askFor(door)
+
+            // RUNG ONE — the plain HTTP client's ask, a stock signed-out
+            // browser agent on an OkHttp stack. Skipped once the engine
+            // rung has delivered on this device: that network has already
+            // answered what it serves, and the plain ask is theater it
+            // pays for in gaps and refusals on every later page.
+            if (!engineDelivered) {
+                val request =
+                    Request
+                        .Builder()
+                        .url(ask.url)
+                        .header(HEADER_USER_AGENT, USER_AGENT)
+                        .header(HEADER_ACCEPT_LANGUAGE, ACCEPT_LANGUAGE)
+                        .build()
+                when (val attempt = attemptOnce(request)) {
+                    is Attempt.Answered -> {
+                        val body = attempt.body
+                        if (body != null) {
+                            preferredHostIndex = index
+                            return LadderOutcome.Body(body)
+                        }
+                        val code = attempt.code
+                        if (code == HTTP_TOO_MANY_REQUESTS) {
+                            sawRateLimit = true
+                            answeredCode = code
+                        } else if (code.isDoorLevelRefusal()) {
+                            answeredCode = code
+                        } else {
+                            // A request-level code: no door will answer it
+                            // differently.
+                            return LadderOutcome.Refused(
+                                ImageSearchResult.Failure(
+                                    error = ImageSearchError.SERVER,
+                                    detail = "HTTP $code",
+                                ),
+                            )
+                        }
+                    }
+
+                    Attempt.TimedOut -> sawTimeout = true
+
+                    Attempt.Unreached -> sawUnreached = true
+                }
+            }
+
+            // RUNG TWO — the browser engine's ask: the same door, the
+            // same .json path, issued as a same-origin fetch from inside
+            // a settled page on that door's origin. The wall that scored
+            // rung one's fingerprint sees the phone's real Chromium here,
+            // and what it serves the user's own browser it serves this.
+            if (engine != null) {
+                val answer = engine.run(ask.scriptPage, jsonFetchScript(ask.scriptPath))
+                val exchange = answer?.let(::parseExchange)
+                if (exchange != null) {
+                    val (status, body) = exchange
+                    if (status in 200..299) {
+                        engineDelivered = true
                         preferredHostIndex = index
                         return LadderOutcome.Body(body)
                     }
-                    val code = attempt.code
-                    if (code == HTTP_TOO_MANY_REQUESTS) {
+                    if (status == HTTP_TOO_MANY_REQUESTS) {
                         sawRateLimit = true
-                        answeredCode = code
-                    } else if (code.isDoorLevelRefusal()) {
-                        answeredCode = code
+                        answeredCode = status
+                    } else if (status == ENGINE_TRANSPORT_REFUSED) {
+                        sawUnreached = true
+                    } else if (status.isDoorLevelRefusal()) {
+                        answeredCode = status
                     } else {
                         // A request-level code: no door will answer it
                         // differently.
                         return LadderOutcome.Refused(
                             ImageSearchResult.Failure(
                                 error = ImageSearchError.SERVER,
-                                detail = "HTTP $code",
+                                detail = "HTTP $status",
                             ),
                         )
                     }
                 }
-
-                Attempt.TimedOut -> sawTimeout = true
-
-                Attempt.Unreached -> sawUnreached = true
+                // A null lane answer or an unparseable exchange is a
+                // door-local refusal: the next door gets its turn.
             }
         }
         val failure =
@@ -453,30 +581,79 @@ class RedditSearchEngine(
     }
 
     /**
-     * The URL of one search page. Built as a plain string on purpose:
-     * the multi-subreddit path segment (`a+b+c`) must stay literal, and
-     * query values are form-encoded — `URLEncoder` gives Reddit exactly
-     * the encoding its own web client sends. [wide] picks the scope:
-     * the subs' merged search, or the site-wide one.
+     * The URL of one search page — rung one's ask: the door's origin plus
+     * [searchPath]. Built as a plain string on purpose: the multi-subreddit
+     * path segment (`a+b+c`) must stay literal, and query values are
+     * form-encoded — `URLEncoder` gives Reddit exactly the encoding its
+     * own web client sends. [wide] picks the scope: the subs' merged
+     * search, or the site-wide one.
      */
     internal fun searchUrl(
         query: String,
         cursor: String?,
         wide: Boolean,
         host: String,
+    ): String = host.trimEnd('/') + searchPath(query, cursor, wide)
+
+    /**
+     * The path-and-query of one search page, door-agnostic — the piece
+     * rung one prefixes a host onto and rung two hands the in-page
+     * script, whose fetch is same-origin on the settled page's own door.
+     */
+    internal fun searchPath(
+        query: String,
+        cursor: String?,
+        wide: Boolean,
     ): String {
-        val base = host.trimEnd('/')
         val encoded = URLEncoder.encode(query, "UTF-8")
         val scope = if (wide) "/search.json" else "/r/$SUBREDDITS/search.json"
-        var url =
-            "$base$scope?q=$encoded" +
+        var path =
+            "$scope?q=$encoded" +
                 (if (wide) "" else "&restrict_sr=1") +
                 "&sort=relevance&t=all&include_over_18=off&limit=$LIMIT&raw_json=1"
         if (cursor != null) {
-            url += "&after=${URLEncoder.encode(cursor, "UTF-8")}"
+            path += "&after=${URLEncoder.encode(cursor, "UTF-8")}"
         }
-        return url
+        return path
     }
+
+    /**
+     * The engine rung's script: the same-origin GET of [pathAndQuery]
+     * from inside the settled page, parking the exchange on the page
+     * globals the engine lane polls — the POST lane's script contract
+     * verbatim (`__ciScriptDone` / `__ciScriptResult`). Every
+     * interpolation rides as a JSON-encoded string literal — JSON's
+     * escaping is a safe subset of JavaScript's — so a query carrying
+     * quotes, angle brackets or script breaks never escapes its literal.
+     */
+    internal fun jsonFetchScript(pathAndQuery: String): String {
+        val pathLiteral = json.encodeToString(String.serializer(), pathAndQuery)
+        return "(function(){" +
+            "window.__ciScriptDone=false;" +
+            "window.__ciScriptResult=null;" +
+            "fetch(" + pathLiteral + ",{method:'GET',credentials:'same-origin'})" +
+            ".then(function(r){return r.text().then(function(t){" +
+            "return JSON.stringify({status:r.status,body:t});});})" +
+            ".then(function(v){window.__ciScriptResult=v;window.__ciScriptDone=true;})" +
+            ".catch(function(e){window.__ciScriptResult=" +
+            "JSON.stringify({status:0,body:String(e)});window.__ciScriptDone=true;});" +
+            "return 'started';})()"
+    }
+
+    /**
+     * The engine rung's answer envelope: `{status, body}` as parked by
+     * [jsonFetchScript] — the same envelope the POST lane's in-page rung
+     * reports. Null when the answer is not the envelope the script
+     * promised (no page settled, or a script that answered something
+     * else).
+     */
+    private fun parseExchange(answer: String): Pair<Int, String>? =
+        runCatching {
+            val exchange = json.parseToJsonElement(answer).jsonObject
+            val status = exchange["status"]?.jsonPrimitive?.intOrNull ?: return null
+            val body = exchange["body"]?.jsonPrimitive?.contentOrNull ?: return null
+            status to body
+        }.getOrNull()
 
     /** The cursor-chain key: a query under one filter set is one walk. */
     private fun keyOf(
@@ -609,17 +786,30 @@ class RedditSearchEngine(
             "wallpapers+wallpaper+MinimalWallpaper+Amoledbackgrounds+EarthPorn+MobileWallpapers"
 
         /**
-         * Reddit's three public front doors — the same router behind
-         * each, the same `.json` grammar on all, no credential asked by
-         * any. A refusal that lives on one edge is often not shared by
-         * the next, so a search walks them until one answers.
+         * Reddit's two public front doors — the same router behind each,
+         * the same `.json` grammar on both, no credential asked by
+         * either. A refusal that lives on one edge is often not shared
+         * by the next, so a search walks them until one answers.
+         * (`old.reddit.com` served the same grammar once; it answers
+         * every visitor with a login wall now — v1.3.4 dropped it.)
          */
         private val REAL_HOSTS =
             listOf(
                 "https://www.reddit.com",
-                "https://old.reddit.com",
                 "https://api.reddit.com",
             )
+
+        /**
+         * The page the engine rung settles before its script fetches — a
+         * light, always-there document on the door's own origin. The
+         * page's CONTENT is irrelevant (it only hosts the same-origin
+         * fetch); what matters is that it is cheap to load and settles
+         * fast, which a subreddit's `about.json` is on every door.
+         */
+        internal const val SCRIPT_HOST_PATH = "/r/wallpapers/about.json"
+
+        /** The script envelope's transport-failure status (its catch parks 0). */
+        private const val ENGINE_TRANSPORT_REFUSED = 0
 
         /**
          * The stock signed-out Android Chrome identity — the exact

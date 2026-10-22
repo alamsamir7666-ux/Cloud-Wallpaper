@@ -286,6 +286,36 @@ internal class WebViewCloudflareSolver(
         }
 
     /**
+     * The quiet-only script trip (v1.3.4): [evaluateOnPage]'s sibling for
+     * hosts that are NOT Cloudflare zones — no clearance to check, no
+     * interstitial escalation, no visible dialog. The page either
+     * settles as content and the script answers, or the trip fails and
+     * the caller degrades to its typed refusal.
+     *
+     * The lane is [evaluateQuiet] verbatim: an invisibly-attached dialog
+     * when a live window exists (the v1.2.7 lane — a real viewport
+     * without real pixels), the detached trip otherwise. A content page
+     * has no challenge to settle, so the invisible lane's fail-fast
+     * interstitial rule never fires for the hosts this serves; the one
+     * interstitial-shaped document such a host can produce — its own
+     * block page — lacks every Cloudflare marker the settle heuristics
+     * read, settles as the content it is, and hands the script an
+     * origin whose fetch then answers the honest refusal status.
+     */
+    override suspend fun evaluateOnPageQuiet(
+        url: String,
+        js: String,
+    ): String? =
+        withContext(Dispatchers.Main) {
+            val host = url.toHttpUrlOrNull()?.host
+            if (host == null) {
+                null
+            } else {
+                evaluateQuiet(url, host, js)
+            }
+        }
+
+    /**
      * The script trip's quiet lane: invisibly attached when a live window
      * exists, detached otherwise — [fetchQuiet]'s exact shape, fail-fast
      * on the interstitial so a dead cookie escalates to the visible

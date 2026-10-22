@@ -263,6 +263,44 @@ class CloudflareBypasser(
     }
 
     /**
+     * The QUIET script rung (v1.3.4): [evaluateOnPage] without any of
+     * its challenge theater — no clearance consult, no visible-dialog
+     * escalation, always the invisible-or-detached lane. The rung for
+     * hosts that are not Cloudflare zones at all: hosts whose own edge
+     * answers every HTTP-client shape with a refusal while serving the
+     * real browser engine. The lane keeps the same zone discipline as
+     * every engine trip — one page at a time per zone, and a failed trip
+     * cools the zone for [FAILURE_COOLDOWN_MS] so a stampede of logical
+     * requests cannot spawn a WebView each.
+     *
+     * Deliberately does NOT touch the WebView-only marks or the earned
+     * clearances: those steer [CloudimageHttpClient]'s Cloudflare
+     * ladder, and a non-Cloudflare host has no business in them.
+     */
+    suspend fun evaluateOnPageQuiet(
+        url: String,
+        js: String,
+    ): String? {
+        val zone = url.toHttpUrlOrNull()?.host?.let(::cloudflareZoneOf) ?: return null
+        return zoneLocks.computeIfAbsent(zone) { Mutex() }.withLock {
+            if (fetchFailedAt[zone]?.let { clock() - it < FAILURE_COOLDOWN_MS } == true) {
+                return@withLock null
+            }
+            val answer =
+                runCatching {
+                    withTimeoutOrNull(SCRIPT_TIMEOUT_MS) { solver.evaluateOnPageQuiet(url, js) }
+                }.getOrNull()
+            if (answer == null) {
+                fetchFailedAt[zone] = clock()
+                null
+            } else {
+                fetchFailedAt.remove(zone)
+                answer
+            }
+        }
+    }
+
+    /**
      * The POST lane's engine rung (v1.3): load [url] through the same
      * WebView discipline as [fetchDocument], then run [js] inside the
      * settled page and hand back its answer. Serialized by the same

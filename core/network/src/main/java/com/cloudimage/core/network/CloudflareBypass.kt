@@ -465,6 +465,39 @@ interface CloudflareSolver {
     ): String? = null
 
     /**
+     * The QUIET sibling of [evaluateOnPage] (v1.3.4): loads [url] and
+     * evaluates [js] in it through the quiet lane ONLY — the invisible
+     * attached trip when a live window exists, the detached one otherwise
+     * — with NO clearance escalation and, above all, NO VISIBLE DIALOG,
+     * ever. The same script contract as [evaluateOnPage]: the script
+     * parks its answer on the page's polling globals, and this method
+     * returns that string or null.
+     *
+     * Who needs this: hosts that are NOT Cloudflare zones — hosts whose
+     * own edge answers every HTTP-client exchange with a refusal while
+     * serving the real browser engine. Reddit is the case in the wild:
+     * its "blocked by network security" wall 403s any OkHttp shape
+     * (browser agent included) from whole address ranges, while the very
+     * same origin serves the WebView — the phone's actual Chrome — the
+     * same pages a signed-out user browses. For such a host there is no
+     * challenge to settle and no clearance to ride, so the challenge
+     * discipline of [evaluateOnPage] is pure theater: it would flash a
+     * full-screen dialog on every search, showing the user a content
+     * page nobody needs to look at. This method runs the same engine
+     * trip the POST lane's rung runs — a page that settles as content
+     * and a script that answers — but invisibly, because invisibility
+     * costs that page nothing.
+     *
+     * Returns the script's result string, or null when no page settled
+     * or the script never answered. Default null for JVM test doubles
+     * and solvers with no machinery, exactly like [evaluateOnPage].
+     */
+    suspend fun evaluateOnPageQuiet(
+        url: String,
+        js: String,
+    ): String? = null
+
+    /**
      * Forgets the solver's own failure memory — the record of VISIBLE
      * trips that failed recently, which otherwise suppresses the next
      * visible one for the zone (v1.2.11's no-second-dialog rule). Called

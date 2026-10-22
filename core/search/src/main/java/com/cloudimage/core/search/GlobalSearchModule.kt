@@ -1,5 +1,6 @@
 package com.cloudimage.core.search
 
+import com.cloudimage.core.network.CloudflareBypasser
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -13,9 +14,19 @@ import javax.inject.Singleton
  * system's bridge as the primary lane, and Reddit's public JSON listings
  * — called directly from the device, riding NO credential of any kind
  * (the keyless lane, v1.3.3: no developer-registered client id, no OAuth
- * token, no API key; a stock signed-out browser identity, a three-front-
- * door ladder, and a whole-site fallback that answers any query) — as
- * the secondary.
+ * token, no API key) — as the secondary.
+ *
+ * v1.3.4: the Reddit lane grew its second rung — the browser-engine ask.
+ * Reddit's "blocked by network security" wall refuses every HTTP-client
+ * shape from whole address ranges (verified: even clean corporate egress
+ * gets the wall on every `.json` door, and `old.reddit.com` sits behind
+ * a full login wall), while the same origins serve the real WebView —
+ * the phone's actual Chromium — the pages a signed-out user browses. The
+ * lane therefore wires [CloudflareBypasser.evaluateOnPageQuiet] behind
+ * its [EngineScriptLane] seam: when the plain OkHttp ask is refused, the
+ * same `.json` path is fetched same-origin from inside a settled Reddit
+ * page loaded invisibly in the engine — the POST lane's proven in-page
+ * discipline, and still no credential anywhere.
  *
  * The engines and their [SearchBackendConfig] are constructed here (not
  * via @Inject) because their inputs are deployment wiring: which client
@@ -38,9 +49,15 @@ internal object GlobalSearchModule {
         config: SearchBackendConfig,
         okHttpClient: OkHttpClient,
         json: Json,
+        cloudflare: CloudflareBypasser,
     ): ImageSearchEngine =
         MergedSearchEngine(
             primary = BrowserSearchEngine(config = config, baseClient = okHttpClient, json = json),
-            secondary = RedditSearchEngine(baseClient = okHttpClient, json = json),
+            secondary =
+                RedditSearchEngine(
+                    baseClient = okHttpClient,
+                    json = json,
+                    engine = EngineScriptLane { pageUrl, js -> cloudflare.evaluateOnPageQuiet(pageUrl, js) },
+                ),
         )
 }

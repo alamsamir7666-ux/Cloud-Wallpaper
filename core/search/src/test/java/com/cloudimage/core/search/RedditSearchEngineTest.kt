@@ -4,6 +4,8 @@ import com.cloudimage.core.search.ImageSearchResult.Failure
 import com.cloudimage.core.search.ImageSearchResult.Success
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -23,7 +25,11 @@ import org.junit.Test
  * listing-to-Wallpaper mapping (escaped preview URLs, thumbnail
  * variants, provenance titles), cursor pagination in both scopes, the
  * whole-site fallback that makes the lane answer ANY query, the
- * front-door ladder with its sticky door, and the failure taxonomy.
+ * front-door ladder with its sticky door, and the failure taxonomy —
+ * plus the v1.3.4 engine rung: when the plain client is refused, the
+ * same `.json` path asked same-origin from inside a settled page by
+ * the phone's real browser engine, its delivery latching the lane off
+ * the refused plain rung.
  */
 class RedditSearchEngineTest {
     private lateinit var server: MockWebServer
@@ -165,13 +171,43 @@ class RedditSearchEngineTest {
 
     private fun host(): String = server.url("/").toString().trimEnd('/')
 
+    /**
+     * A scripted engine lane — the in-page script rung's test double.
+     * Records every (page, script) ask and answers from [respond].
+     */
+    private class ScriptedLane(
+        var respond: (ask: Pair<String, String>) -> String?,
+    ) : EngineScriptLane {
+        val asks = mutableListOf<Pair<String, String>>()
+
+        override suspend fun run(
+            pageUrl: String,
+            js: String,
+        ): String? {
+            asks += pageUrl to js
+            return respond(pageUrl to js)
+        }
+    }
+
+    /** The engine rung's answer envelope, as the in-page script parks it. */
+    private fun exchangeOf(
+        status: Int,
+        body: String? = null,
+    ): String =
+        buildJsonObject {
+            put("status", status)
+            put("body", body ?: "")
+        }.toString()
+
     private fun newEngine(
         hosts: List<String>? = null,
         interval: Long = 0L,
+        lane: EngineScriptLane? = null,
     ): RedditSearchEngine =
         RedditSearchEngine(
             baseClient = OkHttpClient(),
             json = json,
+            engine = lane,
             overrideHosts = hosts ?: listOf(host()),
             minRequestIntervalMs = interval,
             // The intra-page gaps are pacing, not logic — zeroed so the
@@ -498,5 +534,128 @@ class RedditSearchEngineTest {
             // Both requests fired — behind the pace mutex, with real
             // spacing, because OkHttp runs on a real dispatcher.
             assertEquals(2, server.requestCount)
+        }
+
+    @Test
+    fun `the engine rung delivers where the plain client is refused`() =
+        runTest {
+            val lane = ScriptedLane { exchangeOf(200, listing) }
+            engine = newEngine(lane = lane)
+            // Rung one is refused outright — the network-security wall.
+            server.enqueue(MockResponse().setResponseCode(403).setBody("<html>blocked</html>"))
+
+            val outcome = engine.search("mountain", 1, filters)
+
+            val page = (outcome as Success).page
+            assertEquals(2, page.results.size)
+            assertTrue(page.results.all { it.id.startsWith("gs:") })
+            // The plain client paid exactly one refused ask; the engine rung answered it.
+            assertEquals(1, server.requestCount)
+            assertEquals(1, lane.asks.size)
+        }
+
+    @Test
+    fun `an engine delivery latches - later pages skip the refused plain rung`() =
+        runTest {
+            val lane = ScriptedLane { exchangeOf(200, listing) }
+            engine = newEngine(lane = lane)
+            server.enqueue(MockResponse().setResponseCode(403).setBody("<html>blocked</html>"))
+            engine.search("mountain", 1, filters)
+
+            // A fresh query, later in the process: the plain rung is dead
+            // weight on a network that already answered through the engine.
+            val outcome = engine.search("valley", 1, filters)
+
+            assertTrue(outcome is Success)
+            // Exactly one plain ask ever; the engine served both searches.
+            assertEquals(1, server.requestCount)
+            assertEquals(2, lane.asks.size)
+            assertTrue(lane.asks[1].second.contains("q=valley"))
+        }
+
+    @Test
+    fun `the engine ask is the settled page plus the same-origin script contract`() =
+        runTest {
+            val lane = ScriptedLane { exchangeOf(200, listing) }
+            engine = newEngine(lane = lane)
+            server.enqueue(MockResponse().setResponseCode(403).setBody("<html>blocked</html>"))
+
+            engine.search("mountain", 1, filters)
+
+            val (pageUrl, js) = lane.asks.single()
+            // A light same-origin page on the door — NOT the search itself.
+            assertEquals(host() + RedditSearchEngine.SCRIPT_HOST_PATH, pageUrl)
+            // The script: the search path as a JSON literal, the polling
+            // globals the engine lane reads, a GET riding the page's own
+            // credentials — the POST lane's script contract verbatim.
+            assertTrue(js.contains("__ciScriptDone"))
+            assertTrue(js.contains("__ciScriptResult"))
+            assertTrue(js.contains("method:'GET'"))
+            assertTrue(js.contains("credentials:'same-origin'"))
+            assertTrue(js.contains("search.json?q=mountain"))
+            assertTrue(js.contains("restrict_sr=1"))
+            // Same-origin: the path only, never a full URL.
+            assertFalse(js.contains(host()))
+        }
+
+    @Test
+    fun `an engine 429 answers RATE_LIMITED like the plain rung's`() =
+        runTest {
+            val lane = ScriptedLane { exchangeOf(429) }
+            engine = newEngine(lane = lane)
+            server.enqueue(MockResponse().setResponseCode(403).setBody("<html>blocked</html>"))
+
+            val outcome = engine.search("mountain", 1, filters)
+
+            assertEquals(ImageSearchError.RATE_LIMITED, (outcome as Failure).error)
+        }
+
+    @Test
+    fun `an engine 404 fails without touring - no door answers a bad path differently`() =
+        runTest {
+            val second = MockWebServer()
+            second.start()
+            server2 = second
+            val lane = ScriptedLane { exchangeOf(404) }
+            engine = newEngine(hosts = listOf(host(), second.url("/").toString().trimEnd('/')), lane = lane)
+
+            server.enqueue(MockResponse().setResponseCode(403).setBody("<html>blocked</html>"))
+
+            val outcome = engine.search("mountain", 1, filters)
+
+            val failure = outcome as Failure
+            assertEquals(ImageSearchError.SERVER, failure.error)
+            assertEquals("HTTP 404", failure.detail)
+            // Door one's plain ask and its engine ask — and never a second door.
+            assertEquals(1, server.requestCount)
+            assertEquals(1, lane.asks.size)
+            assertEquals(0, second.requestCount)
+        }
+
+    @Test
+    fun `a null or unparseable engine answer is a door-level refusal - the walk continues`() =
+        runTest {
+            val second = MockWebServer()
+            second.start()
+            server2 = second
+            // Door one: the engine's page never settles. Door two: the
+            // script answers something that is not the envelope.
+            var calls = 0
+            val lane = ScriptedLane { if (calls++ == 0) null else "not the envelope" }
+            engine = newEngine(hosts = listOf(host(), second.url("/").toString().trimEnd('/')), lane = lane)
+
+            server.enqueue(MockResponse().setResponseCode(403).setBody("<html>blocked</html>"))
+            second.enqueue(MockResponse().setResponseCode(403).setBody("<html>blocked</html>"))
+
+            val outcome = engine.search("mountain", 1, filters)
+
+            // Both doors' engine rungs ran and refused their own way — the
+            // honest verdict is the plain rung's 403 taxonomy.
+            val failure = outcome as Failure
+            assertEquals(ImageSearchError.SERVER, failure.error)
+            assertEquals("HTTP 403", failure.detail)
+            assertEquals(2, lane.asks.size)
+            assertEquals(1, server.requestCount)
+            assertEquals(1, second.requestCount)
         }
 }

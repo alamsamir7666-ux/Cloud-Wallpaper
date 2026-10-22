@@ -49,9 +49,11 @@ class CloudflareBypasserTest {
         val solvedUrls = mutableListOf<String>()
         val fetchedUrls = mutableListOf<String>()
         val persistedHosts = mutableListOf<String>()
+        val quietAsks = mutableListOf<Pair<String, String>>()
         var persisted: CloudflareBypass? = null
         var next: CloudflareBypass? = CloudflareBypass(cookieHeader = "cf_clearance=fresh", userAgent = "SolverAgent/1")
         var nextPage: WebViewPage? = null
+        var nextQuietAnswer: String? = null
         var failureMemoryResets = 0
         var agent: String? = null
 
@@ -70,6 +72,14 @@ class CloudflareBypasserTest {
         override suspend fun fetch(url: String): WebViewPage? {
             fetchedUrls += url
             return nextPage
+        }
+
+        override suspend fun evaluateOnPageQuiet(
+            url: String,
+            js: String,
+        ): String? {
+            quietAsks += url to js
+            return nextQuietAnswer
         }
 
         override fun resetFailureMemory() {
@@ -587,5 +597,58 @@ class CloudflareBypasserTest {
             val bypasser = CloudflareBypasser(solver)
 
             assertEquals("ChromeCoherent/1 (the solver's pinned identity)", bypasser.challengeUserAgent())
+        }
+
+    @Test
+    fun theQuietScriptRungDelegatesToTheSolverAndReturnsItsAnswer() =
+        runTest {
+            // v1.3.4: the rung the Reddit lane's engine ask rides — the
+            // POST lane's script discipline with NO challenge theater.
+            val solver =
+                ScriptedSolver().apply {
+                    nextQuietAnswer = "the script's parked answer"
+                }
+            val bypasser = CloudflareBypasser(solver)
+
+            val answer = bypasser.evaluateOnPageQuiet("https://www.reddit.com/r/wallpapers/about.json", "(function(){…})()")
+
+            assertEquals("the script's parked answer", answer)
+            assertEquals(1, solver.quietAsks.size)
+            assertEquals("https://www.reddit.com/r/wallpapers/about.json", solver.quietAsks.single().first)
+
+            // A successful trip leaves no cooldown: the next ask runs
+            // straight through the solver again.
+            val again =
+                bypasser.evaluateOnPageQuiet(
+                    "https://www.reddit.com/r/wallpapers/about.json",
+                    "(function(){…})()",
+                )
+            assertEquals("the script's parked answer", again)
+            assertEquals(2, solver.quietAsks.size)
+        }
+
+    @Test
+    fun aFailedQuietTripCoolsTheZoneAndForgivenessReOpensIt() =
+        runTest {
+            var now = 0L
+            val solver =
+                ScriptedSolver().apply {
+                    nextQuietAnswer = null // the page never settles
+                }
+            val bypasser = CloudflareBypasser(solver) { now }
+
+            assertNull(bypasser.evaluateOnPageQuiet("https://www.reddit.com/r/wallpapers/about.json", "(function(){…})()"))
+            assertEquals(1, solver.quietAsks.size)
+
+            // Inside the cooldown the solver is not even asked — a
+            // stampede of logical requests cannot spawn a WebView each.
+            now = CloudflareBypasser.FAILURE_COOLDOWN_MS / 2
+            assertNull(bypasser.evaluateOnPageQuiet("https://www.reddit.com/r/wallpapers/about.json", "(function(){…})()"))
+            assertEquals(1, solver.quietAsks.size)
+
+            // Past the cooldown, a fresh trip is made.
+            now = CloudflareBypasser.FAILURE_COOLDOWN_MS + 1
+            assertNull(bypasser.evaluateOnPageQuiet("https://www.reddit.com/r/wallpapers/about.json", "(function(){…})()"))
+            assertEquals(2, solver.quietAsks.size)
         }
 }
