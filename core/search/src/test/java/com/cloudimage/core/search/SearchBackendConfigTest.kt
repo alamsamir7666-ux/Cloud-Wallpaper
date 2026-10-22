@@ -182,69 +182,13 @@ class SearchBackendConfigTest {
             assertEquals(fallback, config.baseUrl())
         }
 
-    // ---- redditClientId (v1.2.25) ----
-
     @Test
-    fun redditClientIdRidesTheSameFetchAsTheBaseUrl() =
+    fun unknownFieldsIncludingTheRetiredRedditClientIdAreIgnored() =
         runTest {
-            server.enqueue(
-                MockResponse().setBody(
-                    """{"baseUrl": "https://bridge.example.com", "redditClientId": "abc123"}""",
-                ),
-            )
-            config = newConfig()
-
-            assertEquals("abc123", config.redditClientId())
-            // Both fields came from the ONE fetch — no second request.
-            assertEquals("https://bridge.example.com", config.baseUrl())
-            assertEquals(1, server.requestCount)
-        }
-
-    @Test
-    fun missingRedditClientIdIsNullNotAnError() =
-        runTest {
-            server.enqueue(MockResponse().setBody("""{"baseUrl": "https://bridge.example.com"}"""))
-            config = newConfig()
-
-            assertEquals("https://bridge.example.com", config.baseUrl())
-            assertEquals(null, config.redditClientId())
-        }
-
-    @Test
-    fun blankRedditClientIdIsRejected() =
-        runTest {
-            server.enqueue(
-                MockResponse().setBody("""{"baseUrl": "https://bridge.example.com", "redditClientId": "   "}"""),
-            )
-            config = newConfig()
-
-            assertEquals(null, config.redditClientId())
-        }
-
-    @Test
-    fun redditClientIdSurvivesBaseUrlOnlyBodiesUnharmed() =
-        runTest {
-            // A config published by an OLDER tool (baseUrl only) must not
-            // crash a newer app — unknown-to-them fields are simply absent.
-            server.enqueue(MockResponse().setBody("""{"baseUrl": "https://bridge.example.com"}"""))
-            server.enqueue(
-                MockResponse().setBody(
-                    """{"baseUrl": "https://bridge.example.com", "redditClientId": "rotated-id"}""",
-                ),
-            )
-            config = newConfig()
-
-            assertEquals(null, config.redditClientId())
-            config.invalidate()
-            assertEquals("rotated-id", config.redditClientId())
-            assertEquals(2, server.requestCount)
-        }
-
-    @Test
-    fun unknownFieldsAreIgnoredAlongsideRedditClientId() =
-        runTest {
-            // A config published by a NEWER tool (extra fields) must not
-            // crash an older app either — the parser ignores unknowns.
+            // A config published by a NEWER tool (extra fields) — or an
+            // OLDER one still carrying the v1.2.25 `redditClientId` — must
+            // not break a keyless-era app either: the parser ignores
+            // unknowns, and no Reddit credential is ever read again.
             server.enqueue(
                 MockResponse().setBody(
                     """{"baseUrl": "https://bridge.example.com", "redditClientId": "abc", "futureField": true}""",
@@ -252,6 +196,7 @@ class SearchBackendConfigTest {
             )
             config = newConfig()
 
-            assertEquals("abc", config.redditClientId())
+            assertEquals("https://bridge.example.com", config.baseUrl())
+            assertEquals(1, server.requestCount)
         }
 }

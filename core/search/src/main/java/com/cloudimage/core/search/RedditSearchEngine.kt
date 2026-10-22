@@ -2,7 +2,9 @@ package com.cloudimage.core.search
 
 import com.cloudimage.core.model.Wallpaper
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -19,72 +21,99 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /**
- * The global image search engine backed by Reddit's public listing API —
- * the first IN-APP lane of the search (v1.2.14), riding the sanctioned
- * installed-app OAuth identity since v1.2.25.
+ * The global image search engine backed by Reddit's public JSON listings —
+ * the in-app lane of the search, riding NO credential of any kind (v1.3.3):
+ * no developer registration, no API key, no client id, no token endpoint,
+ * no OAuth host. The phone asks Reddit's own front doors exactly the way
+ * its browser does, and Reddit answers the way it answers any other
+ * signed-out visitor.
  *
- * Why Reddit, and why from the device: the wallpaper subreddits
+ * Why keyless, and why it works: the wallpaper subreddits
  * (`r/wallpapers`, `r/Amoledbackgrounds`, `r/EarthPorn` and friends) are
  * among the largest human-curated wallpaper repositories on the internet,
- * posted by enthusiasts who resize and tag their uploads, and Reddit
- * exposes them over a free, keyless, documented JSON interface. But that
- * anonymous interface budgets by IP (~10 requests/minute) — and on the
- * CGNAT mobile networks this app rides, one public IP is shared by
- * thousands of subscribers, so the budget is permanently drained by
- * strangers and the lane answered 403/429 far more often than images.
- * Reddit also 403s datacenter ranges outright (verified: both this
- * project's sandbox and the z-ai reader service are blocked), so the
- * Render bridge can never host this lane. The phone itself is the trusted
- * vantage point — and since v1.2.25 it presents the installed-app OAuth
- * identity ([RedditAppAuth]): a developer-registered client_id plus a
- * per-installation device_id, exchanged for a bearer token whose traffic
- * rides the ~100-requests-per-minute OAuth budget. No user login, no
- * account linkage — and the credential names the app, not the IP, so it
- * survives CGNAT by construction. When no client_id is configured (or the
- * token cannot be minted) the engine falls back to the anonymous request
- * exactly as v1.2.24 did, so a missing config degrades, never breaks.
+ * and every page of them is served as free JSON to anyone who asks — the
+ * same documents reddit.com ships to a signed-out browser. The v1.2.25
+ * installed-app OAuth identity bought its own request budget with a
+ * developer-registered client id, but that id was never registered — the
+ * lane has run anonymous since the day it shipped, which is exactly why
+ * it never surfaced a single result: it identified itself with a
+ * descriptive bot agent (`Cloudimage/1.2 …`) that Reddit's edge throttles
+ * hardest, from one front door, against a per-IP anonymous budget that
+ * shared carrier addresses drain by themselves. This engine keeps the
+ * anonymous lane and makes it SURVIVE instead of credentialing it:
  *
- * The contract rides on three Reddit facts:
+ * - **The browser identity.** The request carries a stock Android Chrome
+ *   user agent and an `Accept-Language`, because that is the identity
+ *   Reddit's own signed-out mobile web rides — the one its edge is
+ *   provisioned to serve at web scale without asking who is asking. A
+ *   made-up agent names a scraper; a stock one names every phone on the
+ *   train. (Verified from this project's sandbox: all Reddit front doors
+ *   403 datacenter ranges by IP alone, in 30 ms, before any header is
+ *   read — identity cannot rescue a blocked vantage, which is precisely
+ *   why the lane runs from the device and never from the bridge.)
+ *
+ * - **The front-door ladder.** `www.reddit.com`, `old.reddit.com` and
+ *   `api.reddit.com` serve the identical `.json` route grammar and none
+ *   of them asks for a credential. A refusal that belongs to one edge —
+ *   a 403, a throttle, a reset — is often not shared by the next, so one
+ *   logical request walks the doors in order until one answers, and the
+ *   door that last answered is where the next request starts. A code
+ *   that belongs to the request rather than the door (a 404, a 400)
+ *   fails immediately without touring the ladder.
+ *
+ * - **The whole-site fallback.** The wallpaper subs are searched first
+ *   (`restrict_sr=1` — on-topic quality, curated wallpapers), but they
+ *   only cover what their communities post. When their answer to a
+ *   fresh query holds not a single image post — the query the user
+ *   typed simply is not a wallpaper-subject there — the engine asks
+ *   Reddit's site-wide search the same query once. That is how this lane
+ *   answers ANY query, not just wallpaper-speak: the scope verdict is
+ *   taken from the subs' own answer (an empty-of-images listing), never
+ *   from a size filter (a tiered search whose every image is too small
+ *   keeps walking the subs' own chain — the query is covered, the tier
+ *   is the user's choice). A query that went site-wide remembers it, so
+ *   deeper pages continue the site-wide cursor chain directly.
+ *
+ * The contract rides on three Reddit facts, unchanged from the lane's
+ * first day:
  * - Search across subreddits is one request — `/r/a+b+c/search.json`
  *   with `restrict_sr=1` merges the subs into one relevance-ranked
- *   listing, so one call per page covers the whole scope. The OAuth host
- *   (`oauth.reddit.com`) serves the identical paths.
+ *   listing, so one call per page covers the whole scope.
  * - Pagination is CURSOR based (`after=t3_xxx` from the previous
- *   response), unlike the bridge's 1-based counter, so the engine keeps
- *   a short per-query cursor chain in memory; the sequential walks of
- *   infinite scroll are exactly the access pattern it serves.
+ *   response), so the engine keeps a short per-query cursor chain in
+ *   memory; the sequential walks of infinite scroll are exactly the
+ *   access pattern it serves.
  * - Every image post carries a `preview` block whose `source` states the
  *   ORIGINAL pixel dimensions — which makes [SearchSizeTier] an exact
- *   verification here too, the same guarantee the bridge's dimensions
- *   provide. The `resolutions` ladder gives the grid ready-made card
- *   width thumbnails, re-encoded server-side to JPEG/WebP and cropped
- *   smart — the phone never pays original bytes for a 640-px card.
+ *   verification here too. The `resolutions` ladder gives the grid
+ *   ready-made card-width thumbnails, re-encoded server-side — the
+ *   phone never pays original bytes for a 640-px card.
  *
  * The lane is polite by design: one request at a time behind a pacing
- * mutex (the OAuth budget is ~100/minute, but the anonymous fallback and
- * the token endpoint are not, and the merged engine's page cadence never
- * needs faster anyway), a descriptive User-Agent, `include_over_18=off`
- * on the request and an `over_18` skip in the parser, and a 429 answered
- * with the typed [ImageSearchError.RATE_LIMITED] the UI already knows how
- * to phrase. A blocked or throttled Reddit never surfaces directly — the
- * merged engine folds this lane's failures silently into the bridge's
- * results.
+ * mutex (the anonymous budget is ~10 requests/minute per address, and
+ * the merged engine's page cadence never needs faster), `raw_json=1` so
+ * preview URLs arrive unescaped, `include_over_18=off` on the request
+ * AND an `over_18` skip in the parser, and a 429 answered with the typed
+ * [ImageSearchError.RATE_LIMITED] the UI already knows how to phrase. A
+ * blocked or throttled Reddit never surfaces directly — the merged
+ * engine folds this lane's failures silently into the bridge's results.
  */
 class RedditSearchEngine(
     baseClient: OkHttpClient,
     private val json: Json,
-    /** The installed-app OAuth identity; null keeps the anonymous lane. */
-    private val oauth: RedditAppAuth? = null,
-    /** The client_id in force right now (remote-configurable); null = anonymous. */
-    private val clientIdProvider: suspend () -> String? = { null },
-    /** Tests point this at MockWebServer; production leaves it null. */
-    private val overrideBaseUrl: String? = null,
+    /** Tests point this at MockWebServer(s); production leaves it null. */
+    private val overrideHosts: List<String>? = null,
     /**
-     * The minimum spacing between Reddit requests — the pacing that keeps
-     * a barren-page walk inside Reddit's budget. Injectable
-     * so tests run with zero spacing instead of sleeping.
+     * The minimum spacing between one logical search request and the
+     * next — the pacing that keeps a barren-page walk inside Reddit's
+     * anonymous budget. Injectable so tests run with zero spacing
+     * instead of sleeping.
      */
     private val minRequestIntervalMs: Long = DEFAULT_MIN_INTERVAL_MS,
+    /** The gap before the ladder asks the next front door; tests zero it. */
+    private val ladderGapMs: Long = LADDER_GAP_MS,
+    /** The gap before the site-wide fallback's single ask; tests zero it. */
+    private val fallbackGapMs: Long = FALLBACK_GAP_MS,
 ) : ImageSearchEngine {
     override val name: String = "Reddit"
 
@@ -108,12 +137,33 @@ class RedditSearchEngine(
     private var lastRequestAtMs = 0L
 
     /**
-     * The cursor the NEXT page of each active query rides — the value of
-     * `after` in the last completed response for that query. Sequential
-     * infinite scroll is the only access pattern, so the latest stored
-     * cursor is always the right one for the page being asked.
+     * The front door the next request tries first — the index of the
+     * door that last answered, within whatever [hosts] returns. A door
+     * that just served is the door most likely to serve again; a door
+     * that just refused is only re-asked after every other door has.
      */
-    private val nextCursor = ConcurrentHashMap<String, String>()
+    @Volatile
+    private var preferredHostIndex = 0
+
+    /**
+     * The walk state of each active query: the cursor its NEXT page
+     * rides (`after` from the last completed response) and whether it
+     * runs site-wide (the subs held no image for this query). Sequential
+     * infinite scroll is the only access pattern, so the latest stored
+     * chain is always the right one for the page being asked.
+     */
+    private val chains = ConcurrentHashMap<String, QueryChain>()
+
+    private data class QueryChain(
+        val nextCursor: String,
+        val wide: Boolean,
+    )
+
+    /** One parsed listing: the raw image posts, pre-tier — the tier is the caller's choice. */
+    private data class ParsedListing(
+        val after: String?,
+        val imagePosts: List<Wallpaper>,
+    )
 
     override suspend fun search(
         query: String,
@@ -127,11 +177,13 @@ class RedditSearchEngine(
                     detail = "Query is required",
                 )
             }
+            val key = keyOf(query, filters)
+            val chain = chains[key]
             val cursor =
                 if (page <= 1) {
                     null
                 } else {
-                    nextCursor[keyOf(query, filters)]
+                    chain?.nextCursor
                 }
             // A page past the end of the feed (or a query whose chain is
             // forgotten) has no cursor to ride: re-querying would answer
@@ -143,142 +195,252 @@ class RedditSearchEngine(
                     page = ImageSearchPage(results = emptyList(), hasMore = false, page = page),
                 )
             }
+            val wide = chain?.wide ?: false
             val effectiveQuery =
                 filters.sizeTier.queryToken()?.let { "$query $it" } ?: query
 
-            // The installed-app identity: a configured client_id rides the
-            // OAuth host with a bearer token; anything else (no config, or
-            // the token could not be minted) falls back to the anonymous
-            // request exactly as v1.2.24 did — degraded, never broken.
-            val clientId =
-                try {
-                    clientIdProvider()?.takeIf { it.isNotBlank() }
-                } catch (_: Exception) {
-                    null
-                }
-            var token: String? = null
-            if (clientId != null && oauth != null) {
-                token = oauth.bearerToken(clientId)
+            pace(minRequestIntervalMs)
+            val first = ladderGet { host -> searchUrl(effectiveQuery, cursor, wide, host) }
+            if (first is LadderOutcome.Refused) {
+                return@withContext first.failure
             }
-
-            pace()
-            var request =
-                Request
-                    .Builder()
-                    .url(searchUrl(effectiveQuery, cursor, token != null))
-                    .header(HEADER_USER_AGENT, USER_AGENT)
-                    .apply {
-                        if (token != null) header("Authorization", "Bearer $token")
-                    }.build()
-
-            var response =
+            val listing =
                 try {
-                    client.newCall(request).execute()
-                } catch (e: SocketTimeoutException) {
+                    parseListing((first as LadderOutcome.Body).body)
+                } catch (e: SerializationException) {
                     return@withContext ImageSearchResult.Failure(
-                        error = ImageSearchError.TIMEOUT,
-                        detail = e.message,
-                    )
-                } catch (e: IOException) {
-                    return@withContext ImageSearchResult.Failure(
-                        error = ImageSearchError.NETWORK,
+                        error = ImageSearchError.BAD_RESPONSE,
                         detail = e.message,
                     )
                 }
 
-            // An OAuth request answered 401 means Reddit refused the token
-            // (expired early, revoked). Mint a fresh one, replay the search
-            // ONCE, and let a second refusal fall through to the failure
-            // taxonomy below — never a loop.
-            if (response.code == HTTP_UNAUTHORIZED && token != null) {
-                response.close()
-                oauth?.invalidate()
-                token = clientId?.let { id -> oauth?.bearerToken(id) }
-                if (token != null) {
-                    pace()
-                    request =
-                        Request
-                            .Builder()
-                            .url(searchUrl(effectiveQuery, cursor, token != null))
-                            .header(HEADER_USER_AGENT, USER_AGENT)
-                            .header("Authorization", "Bearer $token")
-                            .build()
-                    response =
+            // The scope verdict: a fresh query whose wallpaper-subs answer
+            // holds not one image post is not a wallpaper-subs subject —
+            // ask the whole site, once, on this page. Deeper pages ride
+            // whichever chain this page leaves behind. A listing whose
+            // images exist but fail the size tier does NOT trigger this:
+            // the subs cover the query, the tier is the user's own filter.
+            if (page == 1 && !wide && listing.imagePosts.isEmpty()) {
+                pace(fallbackGapMs)
+                val siteWide = ladderGet { host -> searchUrl(effectiveQuery, null, true, host) }
+                if (siteWide is LadderOutcome.Body) {
+                    val parsed =
                         try {
-                            client.newCall(request).execute()
-                        } catch (e: SocketTimeoutException) {
-                            return@withContext ImageSearchResult.Failure(
-                                error = ImageSearchError.TIMEOUT,
-                                detail = e.message,
-                            )
-                        } catch (e: IOException) {
-                            return@withContext ImageSearchResult.Failure(
-                                error = ImageSearchError.NETWORK,
-                                detail = e.message,
-                            )
+                            parseListing(siteWide.body)
+                        } catch (_: SerializationException) {
+                            null
                         }
-                }
-            }
-
-            response.use { answered ->
-                val body = answered.body?.string().orEmpty()
-                when {
-                    answered.code == HTTP_TOO_MANY_REQUESTS ->
-                        ImageSearchResult.Failure(error = ImageSearchError.RATE_LIMITED)
-
-                    !answered.isSuccessful ->
-                        // A datacenter-blocked network answers 403 here; the
-                        // merged engine folds it away, and a device on a
-                        // normal network never sees it at all.
-                        ImageSearchResult.Failure(
-                            error = ImageSearchError.SERVER,
-                            detail = "HTTP ${answered.code}",
+                    if (parsed != null) {
+                        storeChain(key, parsed.after, wide = true)
+                        val siteResults =
+                            parsed.imagePosts.filter {
+                                filters.sizeTier.matches(it.width, it.height)
+                            }
+                        return@withContext ImageSearchResult.Success(
+                            page =
+                                ImageSearchPage(
+                                    results = siteResults,
+                                    hasMore = !parsed.after.isNullOrEmpty(),
+                                    page = page,
+                                ),
                         )
-
-                    else -> parse(body, page, filters, query)
+                    }
                 }
+                // The whole-site ask failed its ladder or was unparseable:
+                // the subs' own honest page stands, exactly as parsed.
             }
+
+            storeChain(key, listing.after, wide)
+            ImageSearchResult.Success(
+                page =
+                    ImageSearchPage(
+                        results = listing.imagePosts.filter { filters.sizeTier.matches(it.width, it.height) },
+                        hasMore = !listing.after.isNullOrEmpty(),
+                        page = page,
+                    ),
+            )
         }
 
     /**
-     * Serializes Reddit calls with the pacing interval — the stampede of a
+     * Serializes Reddit calls with spacing — the stampede of a
      * barren-page walk (the view model's sequential fetch loop) must not
      * arrive as a burst, or Reddit answers it with a 429 the user reads
-     * as a dead lane.
+     * as a dead lane. The interval is the caller's: logical page
+     * requests pay the full pacing, the intra-page retries (the ladder's
+     * next door, the site-wide fallback's one ask) pay a short gap — two
+     * requests inside one page is still half the anonymous budget.
      */
-    private suspend fun pace() {
+    private suspend fun pace(intervalMs: Long) {
         paceMutex.withLock {
             val now = System.currentTimeMillis()
-            val wait = minRequestIntervalMs - (now - lastRequestAtMs)
+            val wait = intervalMs - (now - lastRequestAtMs)
             if (wait > 0) delay(wait)
             lastRequestAtMs = System.currentTimeMillis()
         }
     }
 
-    private fun parse(
-        body: String,
-        page: Int,
-        filters: GlobalSearchFilters,
-        query: String,
-    ): ImageSearchResult {
-        val dto =
-            try {
-                json.decodeFromString(ListingDto.serializer(), body)
-            } catch (e: SerializationException) {
-                return ImageSearchResult.Failure(
-                    error = ImageSearchError.BAD_RESPONSE,
-                    detail = e.message,
-                )
+    /** The outcome of one logical request after its walk down the ladder. */
+    private sealed interface LadderOutcome {
+        /** A door answered 2xx; [body] is the raw listing JSON. */
+        data class Body(
+            val body: String,
+        ) : LadderOutcome
+
+        /** Every door refused; [failure] is the typed taxonomy verdict. */
+        data class Refused(
+            val failure: ImageSearchResult.Failure,
+        ) : LadderOutcome
+    }
+
+    /** One door's answer to one attempt. */
+    private sealed interface Attempt {
+        data class Answered(
+            val code: Int,
+            /** The body when the door answered 2xx; null otherwise. */
+            val body: String?,
+        ) : Attempt
+
+        /** The door timed out — a transport refusal like any other. */
+        object TimedOut : Attempt
+
+        /** The door was never reached: reset, DNS, refused. */
+        object Unreached : Attempt
+    }
+
+    /**
+     * Walks the front doors with one request each until one answers 2xx.
+     * Refusals that belong to a door (403, 429, 5xx, timeouts, resets)
+     * advance the walk; codes that belong to the request itself (404,
+     * 400 — the path, the grammar) end it immediately, because the next
+     * door would answer them identically. The door that answers becomes
+     * the sticky start of the next walk.
+     */
+    private suspend fun ladderGet(buildUrl: (String) -> String): LadderOutcome {
+        val doors = hosts()
+        var sawRateLimit = false
+        var sawTimeout = false
+        var sawUnreached = false
+        var answeredCode: Int? = null
+        for (offset in doors.indices) {
+            // The merged engine bounds this lane; honour that bound
+            // between attempts instead of touring doors for a page that
+            // has already moved on.
+            currentCoroutineContext().ensureActive()
+            // The sticky door is where the walk STARTS — the rotation is
+            // this one index computation, nowhere else.
+            val start = preferredHostIndex.coerceIn(0, doors.size - 1)
+            val index = (start + offset) % doors.size
+            val door = doors[index]
+            if (offset > 0) pace(ladderGapMs)
+            val request =
+                Request
+                    .Builder()
+                    .url(buildUrl(door))
+                    .header(HEADER_USER_AGENT, USER_AGENT)
+                    .header(HEADER_ACCEPT_LANGUAGE, ACCEPT_LANGUAGE)
+                    .build()
+            val attempt = attemptOnce(request)
+            when (attempt) {
+                is Attempt.Answered -> {
+                    val body = attempt.body
+                    if (body != null) {
+                        preferredHostIndex = index
+                        return LadderOutcome.Body(body)
+                    }
+                    val code = attempt.code
+                    if (code == HTTP_TOO_MANY_REQUESTS) {
+                        sawRateLimit = true
+                        answeredCode = code
+                    } else if (code.isDoorLevelRefusal()) {
+                        answeredCode = code
+                    } else {
+                        // A request-level code: no door will answer it
+                        // differently.
+                        return LadderOutcome.Refused(
+                            ImageSearchResult.Failure(
+                                error = ImageSearchError.SERVER,
+                                detail = "HTTP $code",
+                            ),
+                        )
+                    }
+                }
+
+                Attempt.TimedOut -> sawTimeout = true
+
+                Attempt.Unreached -> sawUnreached = true
             }
-        val key = keyOf(query, filters)
-        val after = dto.data.after
-        if (after.isNullOrEmpty()) {
-            nextCursor.remove(key)
-        } else {
-            nextCursor[key] = after
-            trimCursorChain()
         }
-        val results =
+        val failure =
+            when {
+                sawRateLimit ->
+                    ImageSearchResult.Failure(error = ImageSearchError.RATE_LIMITED)
+
+                answeredCode != null ->
+                    ImageSearchResult.Failure(
+                        error = ImageSearchError.SERVER,
+                        detail = "HTTP $answeredCode",
+                    )
+
+                sawTimeout -> ImageSearchResult.Failure(error = ImageSearchError.TIMEOUT)
+
+                else ->
+                    ImageSearchResult.Failure(
+                        error = ImageSearchError.NETWORK,
+                        detail = if (sawUnreached) "no Reddit front door was reachable" else null,
+                    )
+            }
+        return LadderOutcome.Refused(failure)
+    }
+
+    /** One door, one attempt — typed, never throwing. */
+    private fun attemptOnce(request: Request): Attempt =
+        try {
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Attempt.Answered(code = response.code, body = response.body?.string().orEmpty())
+                } else {
+                    Attempt.Answered(code = response.code, body = null)
+                }
+            }
+        } catch (_: SocketTimeoutException) {
+            Attempt.TimedOut
+        } catch (_: IOException) {
+            Attempt.Unreached
+        }
+
+    /**
+     * Whether an HTTP refusal belongs to the DOOR (worth asking another
+     * one) rather than to the request (every door would repeat it): the
+     * block family and the server-error family are edge-local; the rest
+     * is grammar.
+     */
+    private fun Int.isDoorLevelRefusal(): Boolean = this == 401 || this == 403 || this in 500..504
+
+    /** The doors of the next walk: the test override, or Reddit's own front doors in their fixed order. */
+    private fun hosts(): List<String> = overrideHosts ?: REAL_HOSTS
+
+    /**
+     * Remembers the walk this page leaves behind: the cursor its next
+     * page rides, and the scope it runs in. A null cursor ends the chain
+     * outright — the feed is over, and a re-ask of the query starts a
+     * fresh verdict from the subs.
+     */
+    private fun storeChain(
+        key: String,
+        after: String?,
+        wide: Boolean,
+    ) {
+        if (after.isNullOrEmpty()) {
+            chains.remove(key)
+        } else {
+            chains[key] = QueryChain(nextCursor = after, wide = wide)
+            trimChains()
+        }
+    }
+
+    private fun parseListing(body: String): ParsedListing {
+        val dto = json.decodeFromString(ListingDto.serializer(), body)
+        val posts =
             dto.data.children
                 .asSequence()
                 .map { it.data }
@@ -286,41 +448,30 @@ class RedditSearchEngine(
                 .filter { !it.over18 }
                 .mapNotNull { it.toWallpaper() }
                 .distinctBy { it.id }
-                .filter { filters.sizeTier.matches(it.width, it.height) }
                 .toList()
-        return ImageSearchResult.Success(
-            page =
-                ImageSearchPage(
-                    results = results,
-                    hasMore = !after.isNullOrEmpty(),
-                    page = page,
-                ),
-        )
+        return ParsedListing(after = dto.data.after, imagePosts = posts)
     }
 
     /**
-     * The URL of one subreddit-scoped search page. Built as a plain string
-     * on purpose: the multi-subreddit path segment (`a+b+c`) must stay
-     * literal, and query values are form-encoded — `URLEncoder` gives
-     * Reddit exactly the encoding its own web client sends. The OAuth
-     * host serves the identical paths, so [authed] only picks the host.
+     * The URL of one search page. Built as a plain string on purpose:
+     * the multi-subreddit path segment (`a+b+c`) must stay literal, and
+     * query values are form-encoded — `URLEncoder` gives Reddit exactly
+     * the encoding its own web client sends. [wide] picks the scope:
+     * the subs' merged search, or the site-wide one.
      */
     internal fun searchUrl(
         query: String,
         cursor: String?,
-        authed: Boolean = false,
+        wide: Boolean,
+        host: String,
     ): String {
-        val base =
-            (
-                overrideBaseUrl ?: (
-                    if (authed) DEFAULT_OAUTH_BASE_URL else DEFAULT_BASE_URL
-                )
-            ).trimEnd('/')
+        val base = host.trimEnd('/')
         val encoded = URLEncoder.encode(query, "UTF-8")
+        val scope = if (wide) "/search.json" else "/r/$SUBREDDITS/search.json"
         var url =
-            "$base/r/$SUBREDDITS/search.json" +
-                "?q=$encoded&restrict_sr=1&sort=relevance&t=all" +
-                "&include_over_18=off&limit=$LIMIT"
+            "$base$scope?q=$encoded" +
+                (if (wide) "" else "&restrict_sr=1") +
+                "&sort=relevance&t=all&include_over_18=off&limit=$LIMIT&raw_json=1"
         if (cursor != null) {
             url += "&after=${URLEncoder.encode(cursor, "UTF-8")}"
         }
@@ -333,13 +484,13 @@ class RedditSearchEngine(
         filters: GlobalSearchFilters,
     ): String = "$query|${filters.sizeTier}|${filters.safeSearch}"
 
-    /** Keeps the cursor chain bounded — a stale query's cursor is noise. */
-    private fun trimCursorChain() {
+    /** Keeps the chain set bounded — a stale query's chain is noise. */
+    private fun trimChains() {
         // ConcurrentHashMap has no order to trim by; the bound is a guard
         // against pathological growth, not an LRU, and four active queries
         // is already more than one screen ever holds.
-        if (nextCursor.size > MAX_TRACKED_QUERIES) {
-            nextCursor.clear()
+        if (chains.size > MAX_TRACKED_QUERIES) {
+            chains.clear()
         }
     }
 
@@ -362,8 +513,8 @@ class RedditSearchEngine(
      * extension — crossposts from `i.imgur.com` arrive this way); the
      * preview's `source` URL otherwise — which Reddit serves at the
      * source's exact dimensions, so it is a faithful original, not a
-     * render. Preview URLs arrive HTML-escaped (`&amp;`) and must be
-     * unescaped before the app can fetch them.
+     * render. Preview URLs may arrive HTML-escaped (`&amp;`) when
+     * `raw_json` is not honored; the unescape is idempotent either way.
      */
     private fun PostDto.toWallpaper(): Wallpaper? {
         val source = preview?.images?.firstOrNull()?.source ?: return null
@@ -450,26 +601,44 @@ class RedditSearchEngine(
 
     companion object {
         /**
-         * The scope searched — the wallpaper communities, whose content is
-         * on-topic by construction. One merged request covers them all;
-         * extending the lane later is editing one constant.
+         * The scope searched first — the wallpaper communities, whose
+         * content is on-topic by construction. One merged request covers
+         * them all; extending the lane later is editing one constant.
          */
         internal const val SUBREDDITS =
             "wallpapers+wallpaper+MinimalWallpaper+Amoledbackgrounds+EarthPorn+MobileWallpapers"
 
-        private const val DEFAULT_BASE_URL = "https://www.reddit.com"
+        /**
+         * Reddit's three public front doors — the same router behind
+         * each, the same `.json` grammar on all, no credential asked by
+         * any. A refusal that lives on one edge is often not shared by
+         * the next, so a search walks them until one answers.
+         */
+        private val REAL_HOSTS =
+            listOf(
+                "https://www.reddit.com",
+                "https://old.reddit.com",
+                "https://api.reddit.com",
+            )
 
-        /** The OAuth host — identical paths, bearer-token budget. */
-        private const val DEFAULT_OAUTH_BASE_URL = "https://oauth.reddit.com"
-
-        /** The token-refused status that triggers the single replay. */
-        private const val HTTP_UNAUTHORIZED = 401
-
-        /** Reddit requires a descriptive agent; a generic one is throttled. */
+        /**
+         * The stock signed-out Android Chrome identity — the exact
+         * agent shape Reddit's own mobile web rides, which is the one
+         * its edge serves at web scale without asking who is asking.
+         * (The v1.2.x lane's descriptive `Cloudimage/1.2 …` agent named
+         * a script, and anonymous Reddit treats named scripts as
+         * second-class traffic on drained addresses.)
+         */
         internal const val USER_AGENT =
-            "Cloudimage/1.2 Android wallpaper search (+https://github.com/alamsamir7666-ux/Cloud-Wallpaper)"
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36"
 
+        /** Every browser speaks a language; so does this lane. */
         private const val HEADER_USER_AGENT = "User-Agent"
+
+        private const val HEADER_ACCEPT_LANGUAGE = "Accept-Language"
+
+        private const val ACCEPT_LANGUAGE = "en-US,en;q=0.9"
 
         /** Reddit's own marker for image posts. */
         private const val IMAGE_POST_HINT = "image"
@@ -489,13 +658,20 @@ class RedditSearchEngine(
         private const val HTTP_TOO_MANY_REQUESTS = 429
 
         /**
-         * The pacing interval — a request every six seconds is the
-         * unauthenticated budget's comfortable pace, and the merged
-         * engine's page cadence never needs faster.
+         * The pacing interval between logical page requests — one
+         * request every six seconds sits well inside the ~10/minute
+         * anonymous budget, and the merged engine's page cadence never
+         * needs faster.
          */
         internal const val DEFAULT_MIN_INTERVAL_MS = 6_000L
 
-        /** How many query chains the cursor map may remember. */
+        /** The gap before the ladder asks the next front door. */
+        private const val LADDER_GAP_MS = 750L
+
+        /** The gap before the site-wide fallback's single ask. */
+        private const val FALLBACK_GAP_MS = 1_500L
+
+        /** How many query chains the state map may remember. */
         private const val MAX_TRACKED_QUERIES = 4
 
         private const val CONNECT_TIMEOUT_S = 10L

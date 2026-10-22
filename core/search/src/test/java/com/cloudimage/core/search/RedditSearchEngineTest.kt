@@ -10,22 +10,29 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
 /**
- * The Reddit engine's contract, exercised against a scripted MockWebServer
- * standing in for reddit.com: the request shape (multi-subreddit scope,
- * safe-search, the pacing), the listing-to-Wallpaper mapping (escaped
- * preview URLs, thumbnail variants, provenance titles), cursor pagination,
- * the exact tier verification, and the failure taxonomy.
+ * The keyless Reddit engine's contract (v1.3.3), exercised against
+ * scripted MockWebServers standing in for reddit.com's front doors: the
+ * request shape (multi-subreddit scope first, the browser identity, NO
+ * authorization header of any kind, safe search, the pacing), the
+ * listing-to-Wallpaper mapping (escaped preview URLs, thumbnail
+ * variants, provenance titles), cursor pagination in both scopes, the
+ * whole-site fallback that makes the lane answer ANY query, the
+ * front-door ladder with its sticky door, and the failure taxonomy.
  */
 class RedditSearchEngineTest {
     private lateinit var server: MockWebServer
     private lateinit var engine: RedditSearchEngine
     private val json = Json { ignoreUnknownKeys = true }
     private val filters = GlobalSearchFilters(sizeTier = SearchSizeTier.ANY, safeSearch = true)
+
+    /** A second front door for the ladder tests; null when unused. */
+    private var server2: MockWebServer? = null
 
     /** A realistic subreddit search listing: two image posts, one link post, one over-18 post. */
     private val listing =
@@ -136,24 +143,42 @@ class RedditSearchEngineTest {
         }
         """.trimIndent()
 
+    /** The wallpaper subs' answer to a query they hold no image for. */
+    private val emptyListing = """{"kind": "Listing", "data": {"after": null, "dist": 0, "children": []}}"""
+
+    /** A site-wide answer: the same shape, its own cursor. */
+    private val wideListing = listing.replace("t3_cursor1", "t3_wide1")
+
     @Before
     fun setUp() {
         server = MockWebServer()
         server.start()
         // Zero pacing: the tests exercise the contract, not Reddit's budget.
-        engine =
-            RedditSearchEngine(
-                baseClient = OkHttpClient(),
-                json = json,
-                overrideBaseUrl = server.url("/").toString().trimEnd('/'),
-                minRequestIntervalMs = 0L,
-            )
+        engine = newEngine()
     }
 
     @After
     fun tearDown() {
         server.shutdown()
+        server2?.shutdown()
     }
+
+    private fun host(): String = server.url("/").toString().trimEnd('/')
+
+    private fun newEngine(
+        hosts: List<String>? = null,
+        interval: Long = 0L,
+    ): RedditSearchEngine =
+        RedditSearchEngine(
+            baseClient = OkHttpClient(),
+            json = json,
+            overrideHosts = hosts ?: listOf(host()),
+            minRequestIntervalMs = interval,
+            // The intra-page gaps are pacing, not logic — zeroed so the
+            // contract tests run at mock speed.
+            ladderGapMs = 0L,
+            fallbackGapMs = 0L,
+        )
 
     @Test
     fun `maps image posts with unescaped URLs, thumbnail variants and provenance`() =
@@ -199,7 +224,7 @@ class RedditSearchEngineTest {
         }
 
     @Test
-    fun `the request carries the subreddit scope, safe search and the user agent`() =
+    fun `the request carries the subreddit scope, safe search and the browser identity`() =
         runTest {
             server.enqueue(MockResponse().setBody(listing))
             engine.search("mountain", 1, filters)
@@ -211,7 +236,20 @@ class RedditSearchEngineTest {
             assertTrue(path.contains("restrict_sr=1"))
             assertTrue(path.contains("include_over_18=off"))
             assertTrue(path.contains("limit=100"))
+            assertTrue(path.contains("raw_json=1"))
+            // The stock signed-out browser agent — never a bot-styled one.
             assertEquals(RedditSearchEngine.USER_AGENT, recorded.getHeader("User-Agent"))
+        }
+
+    @Test
+    fun `no authorization header is ever sent - the lane is keyless`() =
+        runTest {
+            server.enqueue(MockResponse().setBody(listing))
+            engine.search("mountain", 1, filters)
+
+            // No bearer token, no basic auth, no api key, no client id —
+            // the signed-out browser's request is the whole identity.
+            assertNull(server.takeRequest().getHeader("Authorization"))
         }
 
     @Test
@@ -260,6 +298,134 @@ class RedditSearchEngineTest {
                 ),
                 page.results.map { it.id },
             )
+        }
+
+    @Test
+    fun `tier-filtered subs results keep the subs chain - the fallback is a scope verdict`() =
+        runTest {
+            server.enqueue(MockResponse().setBody(listing))
+            // UHD filters out every image the subs answered with — but the
+            // subs DO cover the query, so the whole-site ask never fires.
+            val uhd = filters.copy(sizeTier = SearchSizeTier.UHD)
+            val outcome = engine.search("mountain", 1, uhd)
+
+            val page = (outcome as Success).page
+            assertTrue(page.results.isEmpty())
+            // The subs' own cursor keeps the walk alive toward UHD posts.
+            assertTrue(page.hasMore)
+            assertEquals(1, server.requestCount)
+        }
+
+    @Test
+    fun `an empty subs page asks the whole site - the lane answers any query`() =
+        runTest {
+            server.enqueue(MockResponse().setBody(emptyListing))
+            server.enqueue(MockResponse().setBody(wideListing))
+
+            val outcome = engine.search("indian women", 1, filters)
+
+            val page = (outcome as Success).page
+            // The site-wide listing's two image posts surfaced.
+            assertEquals(2, page.results.size)
+            assertTrue(page.hasMore)
+
+            val subsAsk = server.takeRequest()
+            assertTrue(subsAsk.path.orEmpty().startsWith("/r/${RedditSearchEngine.SUBREDDITS}/search.json"))
+            val siteWideAsk = server.takeRequest()
+            val widePath = siteWideAsk.path.orEmpty()
+            assertTrue(widePath.startsWith("/search.json"))
+            assertTrue(widePath.contains("q=indian+women"))
+            assertFalse(widePath.contains("restrict_sr"))
+            assertTrue(widePath.contains("include_over_18=off"))
+        }
+
+    @Test
+    fun `a wide query's page two continues the site-wide chain`() =
+        runTest {
+            server.enqueue(MockResponse().setBody(emptyListing))
+            server.enqueue(MockResponse().setBody(wideListing))
+            server.enqueue(MockResponse().setBody(wideListing))
+            engine.search("indian women", 1, filters)
+            val outcome = engine.search("indian women", 2, filters)
+
+            assertEquals(2, (outcome as Success).page.results.size)
+            assertEquals(3, server.requestCount)
+
+            server.takeRequest() // the subs ask
+            server.takeRequest() // the site-wide page 1
+            val pageTwo = server.takeRequest()
+            val path = pageTwo.path.orEmpty()
+            assertTrue(path.startsWith("/search.json"))
+            assertTrue(path.contains("after=t3_wide1"))
+            assertFalse(path.contains("restrict_sr"))
+        }
+
+    @Test
+    fun `a failed site-wide ask degrades to the subs' own honest page`() =
+        runTest {
+            server.enqueue(MockResponse().setBody(emptyListing))
+            server.enqueue(MockResponse().setResponseCode(429))
+
+            val outcome = engine.search("indian women", 1, filters)
+
+            // The subs' page stands: empty, ended — never a failure the
+            // merged engine would have to fold away.
+            val page = (outcome as Success).page
+            assertTrue(page.results.isEmpty())
+            assertFalse(page.hasMore)
+            assertEquals(2, server.requestCount)
+        }
+
+    @Test
+    fun `the ladder advances past a refusing door and sticks to the door that answered`() =
+        runTest {
+            val second = MockWebServer()
+            second.start()
+            server2 = second
+            engine = newEngine(hosts = listOf(host(), second.url("/").toString().trimEnd('/')))
+
+            // Door one refuses; door two answers.
+            server.enqueue(MockResponse().setResponseCode(403).setBody("<html>blocked</html>"))
+            second.enqueue(MockResponse().setBody(listing))
+            val outcome = engine.search("mountain", 1, filters)
+            assertEquals(2, (outcome as Success).page.results.size)
+            assertEquals(1, server.requestCount)
+            assertEquals(1, second.requestCount)
+
+            // The next search starts at the door that last answered.
+            second.enqueue(MockResponse().setBody(listing))
+            engine.search("valley", 1, filters)
+            assertEquals(1, server.requestCount)
+            assertEquals(2, second.requestCount)
+        }
+
+    @Test
+    fun `a 404 fails without touring the ladder - no door answers a bad path differently`() =
+        runTest {
+            server.enqueue(MockResponse().setResponseCode(404))
+            val outcome = engine.search("mountain", 1, filters)
+
+            val failure = outcome as Failure
+            assertEquals(ImageSearchError.SERVER, failure.error)
+            assertEquals("HTTP 404", failure.detail)
+            assertEquals(1, server.requestCount)
+        }
+
+    @Test
+    fun `every door answering 429 surfaces RATE_LIMITED`() =
+        runTest {
+            val second = MockWebServer()
+            second.start()
+            server2 = second
+            engine = newEngine(hosts = listOf(host(), second.url("/").toString().trimEnd('/')))
+
+            server.enqueue(MockResponse().setResponseCode(429))
+            second.enqueue(MockResponse().setResponseCode(429))
+            val outcome = engine.search("mountain", 1, filters)
+
+            assertEquals(ImageSearchError.RATE_LIMITED, (outcome as Failure).error)
+            assertEquals(1, server.requestCount)
+            assertEquals(1, second.requestCount)
         }
 
     @Test
@@ -324,12 +490,7 @@ class RedditSearchEngineTest {
     fun `pacing spaces consecutive requests`() =
         runTest {
             val paced =
-                RedditSearchEngine(
-                    baseClient = OkHttpClient(),
-                    json = json,
-                    overrideBaseUrl = server.url("/").toString().trimEnd('/'),
-                    minRequestIntervalMs = 200L,
-                )
+                newEngine(interval = 200L)
             server.enqueue(MockResponse().setBody(listing))
             server.enqueue(MockResponse().setBody(listing))
             paced.search("one", 1, filters)
@@ -337,203 +498,5 @@ class RedditSearchEngineTest {
             // Both requests fired — behind the pace mutex, with real
             // spacing, because OkHttp runs on a real dispatcher.
             assertEquals(2, server.requestCount)
-        }
-
-    // ---- The installed-app OAuth lane (v1.2.25) ----
-
-    private val tokenBody =
-        """{"access_token": "tok-1", "token_type": "bearer", "expires_in": 3600, "scope": "*"}"""
-
-    private fun authedEngine(auth: RedditAppAuth): RedditSearchEngine =
-        RedditSearchEngine(
-            baseClient = OkHttpClient(),
-            json = json,
-            oauth = auth,
-            clientIdProvider = { "my-client-id" },
-            overrideBaseUrl = server.url("/").toString().trimEnd('/'),
-            minRequestIntervalMs = 0L,
-        )
-
-    @Test
-    fun `oauth mode mints a token then searches with a bearer header`() =
-        runTest {
-            val auth =
-                RedditAppAuth(
-                    baseClient = OkHttpClient(),
-                    json = json,
-                    deviceIdStore = { "device-id-00000000000000" },
-                    overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
-                )
-            engine = authedEngine(auth)
-
-            server.enqueue(MockResponse().setBody(tokenBody))
-            server.enqueue(MockResponse().setBody(listing))
-
-            val outcome = engine.search("mountain", 1, filters)
-
-            // Results parse exactly as the anonymous lane's do.
-            assertEquals(2, (outcome as Success).page.results.size)
-
-            // Request 1: the token mint.
-            val mint = server.takeRequest()
-            assertEquals("/api/v1/access_token", mint.path)
-            // Request 2: the search, authorized.
-            val search = server.takeRequest()
-            assertTrue(search.path!!.startsWith("/r/wallpapers"))
-            assertEquals("Bearer tok-1", search.getHeader("Authorization"))
-        }
-
-    @Test
-    fun `the token is minted once and reused across searches`() =
-        runTest {
-            val auth =
-                RedditAppAuth(
-                    baseClient = OkHttpClient(),
-                    json = json,
-                    deviceIdStore = { "device-id-00000000000000" },
-                    overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
-                )
-            engine = authedEngine(auth)
-
-            server.enqueue(MockResponse().setBody(tokenBody))
-            server.enqueue(MockResponse().setBody(listing))
-            server.enqueue(MockResponse().setBody(listing))
-
-            engine.search("mountain", 1, filters)
-            engine.search("mountain", 2, filters)
-
-            // One mint + two searches — never a second token request.
-            assertEquals(3, server.requestCount)
-            assertEquals("/api/v1/access_token", server.takeRequest().path)
-            assertEquals("Bearer tok-1", server.takeRequest().getHeader("Authorization"))
-            assertEquals("Bearer tok-1", server.takeRequest().getHeader("Authorization"))
-        }
-
-    @Test
-    fun `a 401 search mints a fresh token and replays once`() =
-        runTest {
-            val auth =
-                RedditAppAuth(
-                    baseClient = OkHttpClient(),
-                    json = json,
-                    deviceIdStore = { "device-id-00000000000000" },
-                    overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
-                )
-            engine = authedEngine(auth)
-
-            server.enqueue(MockResponse().setBody(tokenBody)) // first mint
-            server.enqueue(MockResponse().setResponseCode(401)) // token refused
-            server.enqueue(
-                MockResponse().setBody(tokenBody.replace("tok-1", "tok-2")),
-            ) // fresh mint
-            server.enqueue(MockResponse().setBody(listing)) // the replay
-
-            val outcome = engine.search("mountain", 1, filters)
-
-            assertEquals(2, (outcome as Success).page.results.size)
-            assertEquals(4, server.requestCount)
-            server.takeRequest() // mint 1
-            server.takeRequest() // refused search
-            server.takeRequest() // mint 2
-            val replay = server.takeRequest()
-            assertEquals("Bearer tok-2", replay.getHeader("Authorization"))
-        }
-
-    @Test
-    fun `a twice-refused token surfaces the server failure never a loop`() =
-        runTest {
-            val auth =
-                RedditAppAuth(
-                    baseClient = OkHttpClient(),
-                    json = json,
-                    deviceIdStore = { "device-id-00000000000000" },
-                    overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
-                )
-            engine = authedEngine(auth)
-
-            server.enqueue(MockResponse().setBody(tokenBody))
-            server.enqueue(MockResponse().setResponseCode(401))
-            server.enqueue(MockResponse().setBody(tokenBody.replace("tok-1", "tok-2")))
-            server.enqueue(MockResponse().setResponseCode(401))
-
-            val outcome = engine.search("mountain", 1, filters)
-
-            val failure = outcome as Failure
-            assertEquals(ImageSearchError.SERVER, failure.error)
-            assertEquals("HTTP 401", failure.detail)
-            // Mint, refuse, mint, refuse — and STOP.
-            assertEquals(4, server.requestCount)
-        }
-
-    @Test
-    fun `a failed mint falls back to the anonymous request`() =
-        runTest {
-            val auth =
-                RedditAppAuth(
-                    baseClient = OkHttpClient(),
-                    json = json,
-                    deviceIdStore = { "device-id-00000000000000" },
-                    overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
-                )
-            engine = authedEngine(auth)
-
-            server.enqueue(MockResponse().setResponseCode(401)) // mint refused
-            server.enqueue(MockResponse().setBody(listing)) // anonymous search succeeds
-
-            val outcome = engine.search("mountain", 1, filters)
-
-            assertEquals(2, (outcome as Success).page.results.size)
-            server.takeRequest() // the failed mint
-            val fallbackSearch = server.takeRequest()
-            assertEquals(null, fallbackSearch.getHeader("Authorization"))
-            assertTrue(fallbackSearch.path!!.startsWith("/r/wallpapers"))
-        }
-
-    @Test
-    fun `no client id keeps the anonymous request exactly as before`() =
-        runTest {
-            engine =
-                RedditSearchEngine(
-                    baseClient = OkHttpClient(),
-                    json = json,
-                    oauth =
-                        RedditAppAuth(
-                            baseClient = OkHttpClient(),
-                            json = json,
-                            deviceIdStore = { "device-id-00000000000000" },
-                            overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
-                        ),
-                    clientIdProvider = { null },
-                    overrideBaseUrl = server.url("/").toString().trimEnd('/'),
-                    minRequestIntervalMs = 0L,
-                )
-            server.enqueue(MockResponse().setBody(listing))
-
-            val outcome = engine.search("mountain", 1, filters)
-
-            assertEquals(2, (outcome as Success).page.results.size)
-            assertEquals(1, server.requestCount)
-            val only = server.takeRequest()
-            assertEquals(null, only.getHeader("Authorization"))
-        }
-
-    @Test
-    fun `oauth requests answer rate limiting with the typed failure`() =
-        runTest {
-            val auth =
-                RedditAppAuth(
-                    baseClient = OkHttpClient(),
-                    json = json,
-                    deviceIdStore = { "device-id-00000000000000" },
-                    overrideTokenBaseUrl = server.url("/").toString().trimEnd('/'),
-                )
-            engine = authedEngine(auth)
-
-            server.enqueue(MockResponse().setBody(tokenBody))
-            server.enqueue(MockResponse().setResponseCode(429))
-
-            val outcome = engine.search("mountain", 1, filters)
-
-            assertEquals(ImageSearchError.RATE_LIMITED, (outcome as Failure).error)
         }
 }
